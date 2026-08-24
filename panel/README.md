@@ -260,6 +260,14 @@ perfectly and stored what was already there, the edit vanished, and it looked fo
 all the world like a save that silently refused. Retargeting is its own operation
 now, and it touches nothing but the label.
 
+**A switch's sheet has no schedule button.** It used to, scoped to the bulbs
+that switch drove — the only reading of "schedule" on a switch that meant
+anything while the schedule was reached *through* the bindings. Once it stopped
+being reached that way, the button became an arbitrary subset of the house, and
+it quietly fell back to the whole house whenever the switch drove nothing. A
+switch has bindings; bulbs have a schedule. The editor lives in the header and on
+the sheet of each bulb it actually affects.
+
 **The schedule reaches every bulb, bound or not.** It used to walk the switches
 and then their binding tables, which quietly made *is on the schedule* mean *is
 wired to a wall switch*. Those are two different relationships and only one of

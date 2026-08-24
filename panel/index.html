@@ -3145,8 +3145,7 @@ function openSwitch(sw) {
     </div>`}
     <div class="links" id="links"></div>
     ${sheetActions(sw, `
-      <button class="edit" data-go="bind">bindings</button>
-      <button class="edit" data-go="sched">schedule</button>`)}`;
+      <button class="edit" data-go="bind">bindings</button>`)}`;
 
   sheet.querySelector('h2').textContent = sw.name;
   sheet.querySelector('.who').textContent =
@@ -3207,10 +3206,14 @@ function openSwitch(sw) {
   }
 
   sheet.querySelector('[data-go="bind"]').onclick = () => editLinks(sw.node);
-  // A switch has no schedule of its own; what it has is bulbs. Scoping to them
-  // is the only reading of "schedule" on a switch's sheet that means anything.
-  sheet.querySelector('[data-go="sched"]').onclick = () =>
-    editSchedule({ nodes: [...new Set(bound.map(e => e.node))] });
+  // No schedule button here. A switch has no schedule - the Pi writes the
+  // curve straight to each bulb over Thread, and which bulbs this particular
+  // switch happens to drive has nothing to do with it. The button used to scope
+  // the editor to those bulbs, which was the only reading that meant anything
+  // while the schedule was reached THROUGH the bindings; now it would just be
+  // an arbitrary subset, and it silently fell back to the whole house whenever
+  // the switch drove nothing. The schedule lives in the header, and on the
+  // sheet of each bulb it actually affects.
   wireActions(sheet, sw);
   $('#overlay').classList.add('on');
 }
