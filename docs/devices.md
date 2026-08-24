@@ -8,19 +8,21 @@ panel asks a device what it is rather than being told — but nobody has checked
 The identity fields come from each device's own Basic Information cluster
 (`0x0028`), not from the box.
 
-All of these are commissioned onto **python-matter-server**, which is the
-panel's Matter client. They were on `chip-tool` first, and moved without a
-single factory reset: Matter allows several fabrics at once, so each device was
-joined to the new one through a commissioning window opened on the old, and the
-old fabric was removed afterwards. Two things are worth knowing if you repeat it:
+All of these are commissioned onto **python-matter-server**, the panel's Matter
+client.
 
-- **Binding and ACL are fabric-scoped.** The switch's binding table read back as
-  *empty* from the new fabric while it was still perfectly bound on the old one.
-  Both have to be rewritten, and the old fabric has to go, or the switch sends
-  every command twice — which for a Toggle means nothing appears to happen.
-- **The binding table is one fixed pool shared by all fabrics.** With the old
-  fabric's six entries still present, only four of the new six would fit, and
-  the write reported success. Remove the old fabric first, then write.
+Moving a device between Matter clients needs no factory reset — Matter allows
+several fabrics at once, so you join the new one through a commissioning window
+opened on the old, then remove the old. Two things bite if you do:
+
+- **Binding and ACL are fabric-scoped.** A switch's binding table reads back as
+  *empty* from a fabric that did not write it, while it is still perfectly bound
+  on the one that did. Both have to be rewritten on the new fabric, and the old
+  fabric has to go, or the switch sends every command twice — which for a
+  `Toggle` means nothing appears to happen.
+- **The binding table is one fixed pool shared by all fabrics.** With an old
+  fabric's six entries still in place, only four of the new six fit — and the
+  write reports success. Remove the old fabric first, then write.
 
 ## Supported
 
@@ -80,37 +82,32 @@ without going to look.
 
 - **It is battery powered, so it sleeps.** A read does not wake it; the request
   waits at its Thread parent and is picked up on the poll the device was going
-  to make anyway. Answers came back in **0.4–6.5 s**, and sometimes not at all —
-  a read landing in the wrong moment simply fails. This is why polling is the
-  wrong shape for the device and no amount of tuning fixes it: our interval is a
-  floor we cannot get under, not a target.
-- **It is subscribed now, not polled.** matter-server holds the subscription and
-  the sensor transmits the moment the contact changes. Nothing is queued for it
-  and nothing waits. Measured against the real device while it was still polled,
-  six state changes were pushed while the polling panel noticed four, tens of
-  seconds late.
-- **This did not work through chip-tool, and the failure was silent.**
-  `subscribe-by-id` on its interactive server behaves like a one-shot read: the
-  command returns the current value as its result and the subscription goes with
-  it. That priming value is indistinguishable from a subscription working — and
-  nothing ever follows. Confirmed in chip-tool's own log, where the last traffic
-  with the node was an unrelated command and no `ReportData` arrived.
-
-  It was worse than polling, not merely no better: a node believed to be
-  subscribed is not polled, so its value froze at the priming report for ever. A
-  door sensor stuck on `closed` is precisely the reading somebody acts on
-  without going to look. `PANEL_SUB_SILENCE` is the guard that survived: a node
-  not heard from for too long goes back to the poller, so a link that dies
-  quietly costs latency and never a stale value presented as current.
-- **A missed read used to cost five minutes.** `BULB_COLD_SEC` exists so an
-  unplugged bulb does not burn a full timeout on every page load: one failed
-  read and the device is not tried again for 300 s. For a sleepy sensor, which
-  misses reads as a matter of course, that was ruinous — a magnet took two
-  minutes to register because the sensor kept falling into a cold shoulder
-  longer than anyone would stand there watching. Event devices are exempt.
-- **Battery.** Polling cost the device a transmission every ~11 s for ever. A
-  subscription costs one only when the door actually moves, which is what the
-  cluster is for.
+  to make anyway. Answers take **0.4–6.5 s**, and sometimes never come — a read
+  landing in the wrong moment simply fails. So polling is the wrong shape for the
+  device and no amount of tuning fixes it: our interval is a floor we cannot get
+  under, not a target.
+- **It is subscribed, not polled.** matter-server holds the subscription and the
+  sensor transmits the moment the contact changes. Nothing is queued for it and
+  nothing waits. Measured side by side against a poller: six state changes pushed
+  here against four noticed there, tens of seconds late.
+- **Whatever holds the subscription must actually stream reports.** A client
+  that answers a subscribe request with the current value and then quietly drops
+  the subscription is *worse* than polling, not merely no better: the priming
+  report is indistinguishable from it working, and a node believed to be
+  subscribed is not polled, so its value freezes for ever. A door sensor stuck on
+  `closed` is precisely the reading somebody acts on without going to look.
+  `PANEL_SUB_SILENCE` guards against it: a node not heard from for too long goes
+  back to the poller, so a link that dies quietly costs latency and never a stale
+  value presented as current.
+- **Event devices are exempt from the cold shoulder.** `BULB_COLD_SEC` stops an
+  unplugged bulb burning a full timeout on every page load: one failed read and
+  it is not tried again for 300 s. Applied to a sleepy sensor, which misses reads
+  as a matter of course, that is ruinous — a magnet takes minutes to register
+  because the sensor keeps falling into a shoulder longer than anyone would stand
+  there watching.
+- **Battery.** A subscription costs the device a transmission only when the door
+  actually moves. Polling costs one every ~11 s for ever, which is what the
+  cluster exists to avoid.
 - **Identify is accepted; the LED has not been seen here.** `Identify` lands —
   `IdentifyTime` counts down on the device afterwards — and the device reports
   `IdentifyType = 2`, VisibleIndicator. **`TriggerEffect` is not implemented at

@@ -47,11 +47,10 @@ Commands, writes, bindings, ACLs and commissioning go through the same socket.
 See `panel/matter_link.py` — the listener and the command socket are separate
 connections on purpose.
 
-**This used to be `chip-tool interactive server`.** Two sockets, a SIGSTOP
-freezer to stop it burning a core while idle, pairing codes scraped out of its
-stdout log, and no subscriptions at all. The migration took no factory resets —
-Matter allows several fabrics — but binding and ACL are fabric-scoped and had to
-be rewritten. See [`docs/devices.md`](../docs/devices.md).
+Binding and ACL are **fabric-scoped**, which is the thing to know if you ever
+move the panel to a different Matter client: a table written under one fabric is
+invisible from another, and the binding table is a single fixed pool shared
+between them. See [`docs/devices.md`](../docs/devices.md).
 
 ## Files
 
@@ -1026,10 +1025,8 @@ A few things worth knowing:
 - **The window has a floor of 180 s**, not 60. Ask for less and the device
   answers `INVALID_COMMAND` — which reads like a malformed request and sends you
   looking at the wrong thing entirely. The ceiling is 900 s.
-- The codes come back as the command's result. Under chip-tool they did not:
-  `CommissioningWindowOpener` writes them with `ChipLogProgress`, so they landed
-  on stdout, and the whole feature depended on scraping a log file that logrotate
-  could truncate at the wrong moment.
+- The codes come back as the command's result, so there is nothing to parse out
+  of a log.
 
 ## Identify on the switch
 
