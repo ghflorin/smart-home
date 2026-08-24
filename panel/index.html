@@ -2701,8 +2701,12 @@ function bulbOpts(b) {
   // Matter level here and only here, so the same bulb read 40% in its sheet and
   // 11% on its tile - the same light, two scales, and no way to tell which was
   // lying.
-  const pct = (st && typeof st.level === 'number')
-    ? Math.round(perceived(st.level) * 100) + '%' : null;
+  // Level 1 under an On is the bulb on its way up, not a brightness - see
+  // shownNorm. Showing it flashed "on - 4%" before the real value landed.
+  const lvlNow = (st && typeof st.level === 'number' && st.level > 1) ? st.level
+    : (st && typeof st.onlevel === 'number' ? st.onlevel : null);
+  const pct = lvlNow === null ? null
+    : Math.round(perceived(lvlNow) * 100) + '%';
 
   let text;
   if (known) { text = on ? (pct ? 'on · ' + pct : 'on') : 'off'; }
@@ -3302,11 +3306,20 @@ function openBulb(b) {
    * setting - so showing it made the control read 4% while off and 25% the
    * moment you switched it on, as though pressing ON had also changed the
    * brightness. While off, the honest number is OnLevel: what it will come up
-   * at, which is also what dragging the control is about to change. */
+   * at, which is also what dragging the control is about to change.
+   *
+   * The same 1 also arrives for a moment when the bulb is switching ON, and now
+   * that every attribute is subscribed we see it. OnOff flips to true in one
+   * report and CurrentLevel climbs in the ones after, so there is a beat where
+   * the bulb is honestly "on at level 1" - which drew 4% and then jumped to
+   * whatever it settled at. Level 1 under an On is a bulb on its way up, not a
+   * brightness anybody chose, so it reads as OnLevel like the dark case does. */
   const shownNorm = () => {
     if (dragLvl !== null) { return dragLvl; }
     const cur = state.bulbs[String(b.node)] || {};
-    if (cur.on === true && typeof cur.level === 'number') { return perceived(cur.level); }
+    if (cur.on === true && typeof cur.level === 'number' && cur.level > 1) {
+      return perceived(cur.level);
+    }
     if (typeof cur.onlevel === 'number') { return perceived(cur.onlevel); }
     return typeof cur.level === 'number' ? perceived(cur.level) : 0;
   };

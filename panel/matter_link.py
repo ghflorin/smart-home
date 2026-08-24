@@ -50,7 +50,8 @@ class MatterLink:
 
     def __init__(self, url, on_value, log):
         self._url = url
-        self._on_value = on_value      # (our_node, cluster, attribute, value)
+        # (our_node, cluster, attribute, value, pushed)
+        self._on_value = on_value
         self._log = log
         # matter-server assigns its own node ids on its own fabric, so 1004 here
         # is 1 there. devices.json carries the mapping.
@@ -130,16 +131,28 @@ class MatterLink:
             return
 
         # The initial dump, in reply to get_nodes.
+        #
+        # pushed=False, and that distinction is load-bearing. This is
+        # matter-server's CACHE, not the device speaking: it answers with the
+        # last value it holds whether or not the device is still there. Treating
+        # it as evidence of life is how a sensor that has been unplugged for an
+        # hour keeps reporting "closed", refreshed every sixty seconds by us.
+        # Liveness may only be fed by data a device actually sent.
         if msg.get("message_id") == "nodes":
             for node in msg.get("result") or []:
                 ours = self._ours(node.get("node_id"))
                 if ours is None:
                     continue
+                # matter-server's own verdict on whether it can still reach the
+                # node. Not worth copying a dead node's values over live ones.
+                if not node.get("available"):
+                    continue
                 for path, val in (node.get("attributes") or {}).items():
-                    self._feed(ours, path, val)
+                    self._feed(ours, path, val, pushed=False)
             return
 
-        # And every change after it. This is the part that is not polling.
+        # And every change after it. This is the part that is not polling, and
+        # the only thing here that proves a device is alive.
         if msg.get("event") == "attribute_updated":
             data = msg.get("data")
             if not isinstance(data, list) or len(data) < 3:
@@ -147,9 +160,9 @@ class MatterLink:
             theirs, path, val = data[0], data[1], data[2]
             ours = self._ours(theirs)
             if ours is not None:
-                self._feed(ours, path, val)
+                self._feed(ours, path, val, pushed=True)
 
-    def _feed(self, node, path, val):
+    def _feed(self, node, path, val, pushed):
         """path is "<endpoint>/<cluster>/<attribute>"."""
         bits = str(path).split("/")
         if len(bits) != 3:
@@ -158,7 +171,7 @@ class MatterLink:
             _ep, cluster, attr = (int(b) for b in bits)
         except ValueError:
             return
-        self._on_value(node, cluster, attr, val)
+        self._on_value(node, cluster, attr, val, pushed)
 
 class MatterError(Exception):
     """A command matter-server refused, or could not deliver."""
