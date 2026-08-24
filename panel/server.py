@@ -2123,15 +2123,30 @@ class Handler(BaseHTTPRequestHandler):
                 return [d["node"] for d in all_devices(devices)
                         if (d.get("where") or "").casefold() == room.casefold()]
 
-            def move(nodes: set, where: str):
-                """Set 'where' on the listed nodes, wherever they live in the file."""
-                for group in ("switches", "bulbs"):
+            def entries(nodes: set):
+                """Every entry for those nodes, wherever it lives in the file.
+
+                There are THREE lists a device can be in, and `all_devices`
+                knows it. The two writers below each knew about two, so anything
+                in the generic list - a sensor, a plug - could be FOUND by a room
+                operation and then not moved by it. Deleting its room left it
+                pointing at a room that no longer existed, known_rooms derived
+                the room straight back from it, and the room reappeared intact
+                after a delete that reported success. The same hole meant a
+                sensor could not be dragged between rooms at all.
+                """
+                for group in ("switches", "bulbs", "devices"):
                     for d in devices.get(group, []):
                         if d["node"] in nodes:
-                            d["where"] = where
-                one = devices.get("switch")
+                            yield d
+                one = devices.get("switch")           # the single-switch layout
                 if one and one.get("node") in nodes:
-                    one["where"] = where
+                    yield one
+
+            def move(nodes: set, where: str):
+                """Set 'where' on the listed nodes, wherever they live."""
+                for d in entries(nodes):
+                    d["where"] = where
 
             if op == "order":
                 # What a drop is: here is a room, and here is everything in it,
@@ -2154,15 +2169,9 @@ class Handler(BaseHTTPRequestHandler):
                     rooms.sort(key=str.casefold)
 
                 def put(node: int, pos: int):
-                    for group in ("switches", "bulbs"):
-                        for d in devices.get(group, []):
-                            if d["node"] == node:
-                                d["where"] = name
-                                d["pos"] = pos
-                    one = devices.get("switch")
-                    if one and one.get("node") == node:
-                        one["where"] = name
-                        one["pos"] = pos
+                    for d in entries({node}):
+                        d["where"] = name
+                        d["pos"] = pos
 
                 # Only the listed devices are touched. The room a device came
                 # FROM keeps its own positions, gaps and all - nothing reads the
