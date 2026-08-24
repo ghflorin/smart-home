@@ -42,7 +42,7 @@ except ImportError:
     )
 
 # Beside this file, so it shares the panel's dependencies and nothing else.
-from matter_link import MatterLink
+from matter_link import MatterCall, MatterError, MatterLink
 
 try:
     import segno
@@ -1410,6 +1410,73 @@ MATTER_WS = os.environ.get("MATTER_WS", "ws://127.0.0.1:5580/ws")
 MATTER_LINK = os.environ.get("PANEL_MATTER_LINK", "1").lower() not in ("0", "no", "off")
 
 
+# The command half. Same process, second socket - see MatterCall for why it is
+# not shared with the listener.
+MS = MatterCall(MATTER_WS, log)
+
+
+def ms_of(node) -> int | None:
+    """Our node id -> matter-server's, or None if it was never commissioned there."""
+    for dev in all_devices(load_devices()):
+        if int(dev.get("node", 0)) == int(node):
+            ms = dev.get("msNode")
+            return int(ms) if ms is not None else None
+    return None
+
+
+# chip-tool took the action as a word on the command line; the SDK wants the
+# command class by name.
+ONOFF_CMD = {"on": "On", "off": "Off", "toggle": "Toggle"}
+
+
+def m_cmd(node, endpoint, cluster, name, payload=None, timeout=60.0):
+    """Send one cluster command. Returns an error string, or None on success.
+
+    The return convention matches `chip_error(chip(...))` on purpose, so a call
+    site converts by swapping two lines rather than being restructured.
+    """
+    ms = ms_of(node)
+    if ms is None:
+        return f"node {node} is not on matter-server"
+    try:
+        MS.call("device_command", {"node_id": ms, "endpoint_id": int(endpoint),
+                                   "cluster_id": int(cluster),
+                                   "command_name": name,
+                                   "payload": payload or {}}, timeout=timeout)
+        return None
+    except MatterError as exc:
+        return str(exc)
+
+
+def m_write(node, endpoint, cluster, attr, value, timeout=45.0):
+    """Write one attribute. Same return convention as m_cmd."""
+    ms = ms_of(node)
+    if ms is None:
+        return f"node {node} is not on matter-server"
+    try:
+        MS.call("write_attribute",
+                {"node_id": ms,
+                 "attribute_path": f"{int(endpoint)}/{int(cluster)}/{int(attr)}",
+                 "value": value}, timeout=timeout)
+        return None
+    except MatterError as exc:
+        return str(exc)
+
+
+def m_read(node, endpoint, cluster, attr, timeout=45.0):
+    """Read one attribute. Returns (value, error) - value is None on failure."""
+    ms = ms_of(node)
+    if ms is None:
+        return None, f"node {node} is not on matter-server"
+    try:
+        return MS.call("read_attribute",
+                       {"node_id": ms,
+                        "attribute_path": f"{int(endpoint)}/{int(cluster)}/{int(attr)}"},
+                       timeout=timeout), None
+    except MatterError as exc:
+        return None, str(exc)
+
+
 def matter_map(devices: dict) -> dict:
     """matter-server's node id -> ours, from devices.json.
 
@@ -1424,8 +1491,41 @@ def matter_map(devices: dict) -> dict:
     return out
 
 
+# What a bulb pushes, and where it lands in state. Same fields the chip-tool
+# read-back fills, so nothing downstream can tell which path a value came by.
+#
+# This is what makes the WALL SWITCH visible. The switch commands the bulb
+# directly over Thread with the Pi nowhere in the path, so the panel never hears
+# about it - it could only find out by asking, on whatever interval it had
+# picked. Subscribed, the bulb reports the change itself, and the tile moves
+# while your finger is still on the button.
+BULB_ATTRS = {
+    (0x0006, 0x0000): ("on", bool),
+    (0x0008, 0x0000): ("level", int),
+    (0x0008, 0x0011): ("onlevel", int),
+    (0x0300, 0x0007): ("mireds", int),
+    (0x0300, 0x400B): ("ctMin", int),
+    (0x0300, 0x400C): ("ctMax", int),
+}
+
+
 def matter_value(node, cluster, attr, val):
     """One pushed reading, folded into state exactly as a poll would be."""
+    hit = BULB_ATTRS.get((cluster, attr))
+    if hit is not None:
+        key, cast = hit
+        if val is None:
+            return
+        try:
+            v = cast(val)
+        except (TypeError, ValueError):
+            return
+        sub_heard(node)
+        state_put(node, values={key: v},
+                  meta={"readAt": time.time(), "okAt": time.time(),
+                        "ok": True, "err": None})
+        return
+
     for c, a, key, _lab, _unit, scale in MEASURED:
         if c != cluster or a != attr:
             continue
@@ -2069,16 +2169,16 @@ def rearm(node) -> None:
 
     ep = int(bulb.get("endpoint", 1))
     sent = {}
-    r = chip(f"levelcontrol write on-level {level} {node} {ep}", timeout=20.0)
-    if chip_error(r):
-        log(f"bulb {node}: re-arming OnLevel failed: {chip_error(r)}", "warn")
+    e = m_write(node, ep, 0x0008, 0x0011, level, timeout=20.0)
+    if e:
+        log(f"bulb {node}: re-arming OnLevel failed: {e}", "warn")
     else:
         sent["onlevel"] = level
     if mireds:
         # ExecuteIfOff, so the colour lands on a dark bulb too.
-        r = chip(f"colorcontrol move-to-color-temperature {mireds} 4 1 1 "
-                 f"{node} {ep}", timeout=20.0)
-        if not chip_error(r):
+        if not m_cmd(node, ep, 0x0300, "MoveToColorTemperature",
+                     {"colorTemperatureMireds": mireds, "transitionTime": 4,
+                      "optionsMask": 1, "optionsOverride": 1}, timeout=20.0):
             sent["mireds"] = mireds
     if sent:
         with _state_lock:
@@ -2228,9 +2328,7 @@ def apply_light_schedule(force: bool = False, only=None) -> dict:
         # What it comes up at. Stepped, because this one is flash.
         last_on = sent.get("onlevel")
         if force or last_on is None or abs(last_on - level) >= ONLEVEL_STEP:
-            r = chip(f"levelcontrol write on-level {level} {b['node']} {ep}",
-                     timeout=45.0)
-            e = chip_error(r)
+            e = m_write(b["node"], ep, 0x0008, 0x0011, level)
             if e:
                 log(f"bulb {b['node']}: OnLevel failed: {e}", "err")
             else:
@@ -2239,9 +2337,9 @@ def apply_light_schedule(force: bool = False, only=None) -> dict:
 
         # What it should be doing right now, if it is lit at all.
         if force or sent.get("level") != level:
-            r = chip(f"levelcontrol move-to-level {level} {tenths} 0 0 "
-                     f"{b['node']} {ep}", timeout=45.0)
-            e = chip_error(r)
+            e = m_cmd(b["node"], ep, 0x0008, "MoveToLevel",
+                      {"level": level, "transitionTime": tenths,
+                       "optionsMask": 0, "optionsOverride": 0})
             if e:
                 log(f"bulb {b['node']}: live level failed: {e}", "warn")
             else:
@@ -2254,9 +2352,10 @@ def apply_light_schedule(force: bool = False, only=None) -> dict:
                 # optionsMask=1, optionsOverride=1 -> ExecuteIfOff, so the
                 # colour lands with the bulb off as well, which is exactly
                 # when we need it.
-                r = chip(f"colorcontrol move-to-color-temperature {mireds} "
-                         f"{tenths} 1 1 {b['node']} {ep}", timeout=45.0)
-                e = chip_error(r)
+                e = m_cmd(b["node"], ep, 0x0300, "MoveToColorTemperature",
+                          {"colorTemperatureMireds": mireds,
+                           "transitionTime": tenths,
+                           "optionsMask": 1, "optionsOverride": 1})
                 if e:
                     log(f"bulb {b['node']}: colour failed: {e}", "err")
                 else:
@@ -3199,8 +3298,7 @@ class Handler(BaseHTTPRequestHandler):
             log(f"--- bulb {node}: {what} ---", "step")
 
             if action:
-                r = chip(f"onoff {action} {node} {endpoint}", timeout=60.0)
-                err = chip_error(r)
+                err = m_cmd(node, endpoint, 0x0006, ONOFF_CMD[action])
                 if err:
                     log(f"bulb {node}: {action} failed: {err}", "err")
                     return self._send({"error": err}, status=502)
@@ -3209,9 +3307,9 @@ class Handler(BaseHTTPRequestHandler):
             # rather than silently arming a bulb that is switched off.
             if level is not None:
                 lvl = max(1, min(254, int(level)))
-                r = chip(f"levelcontrol move-to-level-with-on-off {lvl} 0 0 0 "
-                         f"{node} {endpoint}", timeout=60.0)
-                err = chip_error(r)
+                err = m_cmd(node, endpoint, 0x0008, "MoveToLevelWithOnOff",
+                            {"level": lvl, "transitionTime": 0,
+                             "optionsMask": 0, "optionsOverride": 0})
                 if err:
                     log(f"bulb {node}: level {lvl} failed: {err}", "err")
                     return self._send({"error": err}, status=502)
@@ -3229,9 +3327,7 @@ class Handler(BaseHTTPRequestHandler):
                 #
                 # One write per gesture: the slider sends on release, so this is
                 # not the flash-wear case the schedule's threshold exists for.
-                r = chip(f"levelcontrol write on-level {lvl} {node} {endpoint}",
-                         timeout=45.0)
-                e = chip_error(r)
+                e = m_write(node, endpoint, 0x0008, 0x0011, lvl)
                 if e:
                     log(f"bulb {node}: OnLevel {lvl} failed: {e}", "warn")
                 else:
@@ -3251,9 +3347,9 @@ class Handler(BaseHTTPRequestHandler):
             # lands even with the bulb off, which is when it matters most.
             if mireds is not None:
                 mir = max(100, min(700, int(mireds)))
-                r = chip(f"colorcontrol move-to-color-temperature {mir} 0 1 1 "
-                         f"{node} {endpoint}", timeout=60.0)
-                err = chip_error(r)
+                err = m_cmd(node, endpoint, 0x0300, "MoveToColorTemperature",
+                            {"colorTemperatureMireds": mir, "transitionTime": 0,
+                             "optionsMask": 1, "optionsOverride": 1})
                 if err:
                     log(f"bulb {node}: colour {mir} failed: {err}", "err")
                     return self._send({"error": err}, status=502)
@@ -3343,17 +3439,17 @@ class Handler(BaseHTTPRequestHandler):
             # implement TriggerEffect answers with an error and is otherwise
             # unaffected, which is why that error is logged and not returned -
             # the identify itself already succeeded.
-            r = chip(f"identify identify {seconds} {node} {endpoint}")
-            err = chip_error(r)
+            err = m_cmd(node, endpoint, 0x0003, "Identify",
+                        {"identifyTime": seconds})
             if err:
                 return self._send({"error": err}, status=502)
 
             # EffectIdentifier 0 = Blink, EffectVariant 0 = default.
-            eff = chip(f"identify trigger-effect 0 0 {node} {endpoint}", timeout=20.0)
-            e2 = chip_error(eff)
+            e2 = m_cmd(node, endpoint, 0x0003, "TriggerEffect",
+                       {"effectIdentifier": 0, "effectVariant": 0}, timeout=20.0)
             if e2:
                 log(f"node {node}: no TriggerEffect ({e2}) - Identify alone", "info")
-            return self._send({**r, "effect": not e2})
+            return self._send({"ok": True, "effect": not e2})
 
         self._send({"error": "not found"}, status=404)
 

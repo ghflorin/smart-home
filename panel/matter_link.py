@@ -159,3 +159,83 @@ class MatterLink:
         except ValueError:
             return
         self._on_value(node, cluster, attr, val)
+
+class MatterError(Exception):
+    """A command matter-server refused, or could not deliver."""
+
+
+class MatterCall:
+    """The command half of the link: ask matter-server to do something.
+
+    Deliberately a SEPARATE socket from MatterLink's. That one is a listener -
+    it calls start_listening and then reads for ever - and interleaving
+    request/response traffic on it would mean picking our replies out of a
+    stream of unrelated device reports, on a connection another thread is
+    already blocked reading. This one never listens, so the only thing that ever
+    arrives on it is the answer to the question just asked.
+
+    One command at a time, under a lock. Matter is not a fast bus and the panel
+    has no work that benefits from overlapping commands; serialising them
+    removes the entire class of bug where two replies are matched to the wrong
+    callers.
+    """
+
+    def __init__(self, url, log):
+        self._url = url
+        self._log = log
+        self._conn = None
+        self._seq = 0
+        self._lock = threading.Lock()
+
+    def _connect(self):
+        conn = ws_connect(self._url, open_timeout=10, ping_interval=20)
+        conn.recv(timeout=15)          # the server's hello, which we know already
+        return conn
+
+    def call(self, command, args=None, timeout=60.0):
+        """Run one command. Returns its result, or raises MatterError."""
+        with self._lock:
+            # One retry, because the failure we actually see is a socket that
+            # went away while idle - matter-server restarting, mostly. Retrying
+            # a command is safe here: every command the panel sends is either
+            # idempotent (write this level, set these bindings) or checked
+            # afterwards by a read-back.
+            for attempt in (1, 2):
+                try:
+                    if self._conn is None:
+                        self._conn = self._connect()
+                    return self._exchange(command, args or {}, timeout)
+                except MatterError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - socket trouble
+                    try:
+                        if self._conn is not None:
+                            self._conn.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._conn = None
+                    if attempt == 2:
+                        raise MatterError(f"matter-server unreachable: {exc}")
+            return None
+
+    def _exchange(self, command, args, timeout):
+        self._seq += 1
+        mid = f"p{self._seq}"
+        self._conn.send(json.dumps({"message_id": mid,
+                                    "command": command, "args": args}))
+        end = time.time() + timeout
+        while time.time() < end:
+            raw = self._conn.recv(timeout=max(1.0, end - time.time()))
+            if not isinstance(raw, str) or not raw.lstrip().startswith("{"):
+                continue
+            try:
+                msg = json.loads(raw)
+            except ValueError:
+                continue
+            if msg.get("message_id") != mid:
+                continue        # a stray from an earlier, timed-out command
+            if "error_code" in msg:
+                raise MatterError(str(msg.get("details")
+                                      or f"error {msg['error_code']}"))
+            return msg.get("result")
+        raise MatterError(f"{command}: no answer in {timeout:.0f}s")
