@@ -628,6 +628,12 @@ and 63%, which are the same light, and below a tenth is a lamp that is
 technically on. Colour is finer — 25 notches, about 14 mireds a step, roughly
 where a change stops being visible.
 
+**The snap has to be idempotent**, and this is not a nicety. It runs on the way
+*in* as well as on a drag — `columnsFrom` puts every stored point on the ladder
+when the sheet opens — so a snap that moves a value that is already on a notch
+edits the schedule merely by being looked at, and edits it again next time. A
+true snap-to-nearest is the only thing that makes opening the editor safe.
+
 ### Why the brightness axis is not linear
 
 Matter level 1..254 is proportional to the light emitted, and the eye is not: at
@@ -636,7 +642,8 @@ whole useful evening range is squashed into the bottom sixth of the chart.
 
 The axis is **L\* from CIE Lab**, which is literally "how bright it looks". Half
 the height really does look half as bright — and that lands at level 47, not 127.
-The reasoning is in the main README, under "Why level 127 is not half".
+The scale, the numbers it produces, and what it assumes about the bulb are in
+[docs/notes.md](../docs/notes.md#brightness-is-not-linear).
 
 ### What is stored but no longer used
 

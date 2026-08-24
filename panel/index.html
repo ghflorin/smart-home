@@ -4071,10 +4071,24 @@ const LADDER = {
   ct: { min: 0, notches: 25 },
 };
 
+/* Snap to the nearest notch, and land ON it.
+ *
+ * This has to be idempotent, because it runs on the way IN as well as on a
+ * drag: `columnsFrom` puts every stored point on the ladder when the sheet
+ * opens. Anything that is not a true snap therefore edits the schedule just by
+ * looking at it, and does so again on the next open.
+ *
+ * The first version remapped instead of snapping - it rounded onto ninths and
+ * then stretched 0..1 across min..1, so a value came back a notch HIGHER than
+ * it went in. Only 0.6 and above were fixed points, so every open-and-save
+ * walked the rest up one rung: a 4% night floor went 10, 20, 30, 40, 50 and
+ * parked at 60%. Nothing announced it, and the numbers on screen were simply
+ * not the numbers on disk.
+ */
 function snapNorm(n, series) {
   const l = LADDER[series] || LADDER.ct;
-  const q = Math.round(n * (l.notches - 1)) / (l.notches - 1);
-  return Math.max(l.min, Math.min(1, l.min + q * (1 - l.min)));
+  const step = (1 - l.min) / (l.notches - 1);
+  return Math.max(l.min, Math.min(1, Math.round(n / step) * step));
 }
 
 function seriesNorms(series) {
