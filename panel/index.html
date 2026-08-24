@@ -1638,7 +1638,43 @@
     letter-spacing: .24em;
     text-transform: uppercase;
     font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 26px;
   }
+  /* Out of the way until wanted, and never moving the title when it appears -
+     the space is reserved whether it is visible or not. */
+  .sheet h2 .pen {
+    width: 15px;
+    height: 15px;
+    flex: none;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-faint);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity .15s, color .15s;
+  }
+  .sheet h2 .pen svg { width: 100%; height: 100%; display: block; }
+  .sheet h2:hover .pen, .sheet h2 .pen:focus-visible { opacity: 1; }
+  .sheet h2 .pen:hover { color: var(--link); }
+  .sheet h2 .nmedit {
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    text-align: center;
+    color: var(--ink);
+    background: var(--sunken);
+    border: 1px solid var(--link);
+    border-radius: 8px;
+    padding: 3px 10px;
+    width: 100%;
+    max-width: 260px;
+  }
+  .sheet h2 .nmedit:focus { outline: none; }
   .sheet .who {
     color: var(--ink-dim);
     font-size: 11px;
@@ -2114,6 +2150,68 @@ async function load() {
  * not come here for. Making the name dead text meant reading it, closing the
  * sheet, finding the tile and opening that - four steps to follow a link the
  * page had already drawn for you. */
+/* The title is the name, so the title is where you rename it.
+ *
+ * Not a fifth button in a row of four: the name is already on screen, and the
+ * thing you want to change is the thing you are looking at. A pencil appears on
+ * hover, the heading becomes a field, Enter saves and Escape puts it back.
+ *
+ * The name is ours alone - Matter never sees it - so this is a write to
+ * devices.json and nothing else. */
+function nameable(sheet, dev, after) {
+  const h = sheet.querySelector('h2');
+  h.innerHTML = '<span class="nmtext"></span>'
+              + '<button type="button" class="pen" title="rename"'
+              + ' aria-label="rename">' + ICONS.pencil + '</button>';
+  h.querySelector('.nmtext').textContent = dev.name;
+
+  const edit = () => {
+    const input = document.createElement('input');
+    input.className = 'nmedit';
+    input.value = dev.name;
+    input.maxLength = 40;
+    h.replaceChildren(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const stop = keep => {
+      if (done) { return; }
+      done = true;
+      const want = input.value.trim();
+      if (!keep || !want || want === dev.name) { nameable(sheet, dev, after); return; }
+      save(want);
+    };
+    input.onkeydown = ev => {
+      if (ev.key === 'Enter') { ev.preventDefault(); stop(true); }
+      if (ev.key === 'Escape') { ev.preventDefault(); stop(false); }
+    };
+    input.onblur = () => stop(true);
+  };
+
+  const save = async want => {
+    let j;
+    try {
+      j = await (await api('/api/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ node: dev.node, name: want })
+      })).json();
+    } catch (err) { j = { error: String(err) }; }
+    if (j.error) {
+      nameable(sheet, dev, after);
+      return setStatus('not renamed: ' + j.error, 'err');
+    }
+    dev.name = j.name;
+    nameable(sheet, dev, after);
+    setStatus('renamed to ' + j.name, 'ok');
+    await load();
+    if (after) { after(); }
+  };
+
+  h.querySelector('.pen').onclick = edit;
+}
+
 function linkRow(name, open, tail, where) {
   const row = document.createElement('div');
   row.className = 'link-row go';
@@ -2184,6 +2282,11 @@ const ICONS = {
     <rect x="4.9" y="10.3" width="14.2" height="10.4" rx="2.6"/>
     <path d="M8.5 10.3V7.5a3.5 3.5 0 0 1 6.8-1.2"/>
     <circle cx="12" cy="15.5" r="1.25"/></svg>`,
+
+  pencil: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z"/>
+    <path d="M14.5 6.5l3 3"/></svg>`,
 
   // Anything that is neither a switch nor a bulb: a sensor, a plug, a blind.
   // A dial, because what these have in common is that they READ - the panel
@@ -3016,7 +3119,7 @@ function openBulb(b) {
     <div class="links" id="drivers"></div>
     <div class="links" id="sched-of"></div>`;
 
-  sheet.querySelector('h2').textContent = b.name;
+  nameable(sheet, b, () => openBulb(b));
   sheet.querySelector('.who').textContent =
     `bulb · node ${b.node}` + (b.where ? ` · ${b.where}` : '');
 
@@ -3307,7 +3410,7 @@ function openDevice(d) {
     <div class="reads" id="reads"></div>
     ${sheetActions(d)}`;
 
-  sheet.querySelector('h2').textContent = d.name;
+  nameable(sheet, d, () => openDevice(d));
   sheet.querySelector('.who').textContent =
     `${d.kind || 'device'} · node ${d.node}` + (d.where ? ` · ${d.where}` : '');
 
@@ -3374,7 +3477,7 @@ function openSwitch(sw) {
     ${sheetActions(sw, `
       <button class="edit" data-go="bind">bindings</button>`)}`;
 
-  sheet.querySelector('h2').textContent = sw.name;
+  nameable(sheet, sw, () => openSwitch(sw));
   sheet.querySelector('.who').textContent =
     `${isLock ? 'lock' : 'switch'} · node ${sw.node}` +
     (sw.where ? ` · ${sw.where}` : '');

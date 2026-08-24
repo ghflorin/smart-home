@@ -2589,6 +2589,43 @@ class Handler(BaseHTTPRequestHandler):
                                "unbound": True,
                                "switches": len(sws)})
 
+        if self.path == "/api/rename":
+            """Change a device's name. Ours alone - Matter never sees it.
+
+            The name is set once at commissioning and was never editable after,
+            which is fine right up until the second bulb of the same model
+            arrives and is also called "Light 1".
+            """
+            node = int(body.get("node") or 0)
+            name = str(body.get("name") or "").strip()
+            if not node:
+                return self._send({"error": "missing 'node'"}, status=400)
+            if not name:
+                return self._send({"error": "the name cannot be empty"}, status=400)
+            if len(name) > 40:
+                return self._send({"error": "at most 40 characters"}, status=400)
+
+            devices = load_devices()
+            found = False
+            # All three lists plus the single-switch layout - the same lesson the
+            # room operations had to learn: a sensor lives in neither of the two
+            # you first think of.
+            for group in ("switches", "bulbs", "devices"):
+                for d in devices.get(group, []):
+                    if d.get("node") == node:
+                        d["name"] = name
+                        found = True
+            one = devices.get("switch")
+            if one and one.get("node") == node:
+                one["name"] = name
+                found = True
+            if not found:
+                return self._send({"error": f"unknown device: {node}"}, status=404)
+
+            save_devices(devices)
+            log(f"node {node} is now called {name!r}", "ok")
+            return self._send({"node": node, "name": name})
+
         if self.path == "/api/forget":
             """Take a device off the network and out of the house.
 
