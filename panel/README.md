@@ -260,6 +260,18 @@ perfectly and stored what was already there, the edit vanished, and it looked fo
 all the world like a save that silently refused. Retargeting is its own operation
 now, and it touches nothing but the label.
 
+**The schedule reaches every bulb, bound or not.** It used to walk the switches
+and then their binding tables, which quietly made *is on the schedule* mean *is
+wired to a wall switch*. Those are two different relationships and only one of
+them involves a switch: a binding is how the **wall switch** commands the bulb
+with the Pi asleep, and the schedule is the **Pi** commanding the bulb directly
+over Thread. The Pi never needed a switch in order to do that.
+
+It went unnoticed while every new bulb bound itself to whatever switch happened
+to be listed first. The moment that stopped, a newly added lamp sat outside the
+schedule entirely — you pressed *save globally*, it said it had saved, and that
+one bulb never moved.
+
 **A save touches only the bulbs the saved schedule governs.** Writing the house
 curve into a bulb that has its own would undo the override for a minute, which is
 the sort of thing you see once and never trust again.
@@ -798,17 +810,24 @@ They send on **release**. A control that fires while you drag puts a hundred
 commands on the radio for one gesture, and the bulb only ever shows the last of
 them.
 
-**The drag is relative** — it starts from where the control already is and
-follows the hand from there, rather than jumping to wherever the pointer landed.
-Absolute is the same gesture on paper and a trap in practice, because the two
-meanings share a threshold. Click low in the panel to toggle a lamp, twitch six
-pixels on the way up, and it stopped being a tap and became *set 2%*: the lamp
-came on almost invisibly, and being a brightness change it wrote `OnLevel` and
-took a hold as well, so it stayed that way. Measured on the real control, a
-6-pixel tremor on a click near the icon sent `level: 5`. Relative, that same
-twitch is worth two percent, which is what a twitch should be worth. The slop is
-8px rather than 5 for the same reason: a mouse click is not perfectly still, and
-this control's tap has a job of its own.
+**The drag is absolute** — the level follows the pointer, so letting go
+four-fifths of the way up the panel means four-fifths. That is the whole point of
+a control shaped like a column, and anything else fights what it looks like.
+
+It was **relative** for a while, and that is worth recording as a mistake. The
+problem it solved was real: a click low in the panel meant to toggle a lamp, with
+a six-pixel tremor on the way up, stopped being a tap and became *set 2%* —
+measured, `level: 5` — and being a brightness change it wrote `OnLevel` and took
+a hold, so it stayed that way. Making the drag relative fixed the tremor and
+broke the gesture. A short deliberate drag now moved the value only by the
+distance travelled, so it landed roughly where it already was: the value picked
+*last* time. Aim for 80, get the old value; aim for 20, get 80; aim for 50, get
+20. **A control one step behind is worse than one that occasionally overshoots.**
+
+So it is absolute again and the tremor is handled where it belonged all along —
+at the threshold. Twelve pixels is far more than a click carries and far less
+than a drag, so a press meaning "toggle" stays a toggle. Verified both ways: a
+6px twitch sends `toggle`, and aiming at 50/35/95 lands on 50/35/95.
 
 Dragging past either end still reaches both ends — the value clamps, so a long
 sweep up lands on 254 and a long sweep down on the 1% floor.

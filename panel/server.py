@@ -1821,93 +1821,101 @@ def apply_light_schedule(force: bool = False, only=None) -> dict:
     # from nothing happening, which is precisely the conclusion they will draw.
     tenths = 4 if force else 20
 
-    seen = set()
-    for sw in switches(devices):
-        for b in bulbs_of(sw, devices):
-            key = str(b["node"])
-            if key in seen:      # a bulb driven by two switches is still one bulb
-                continue
-            seen.add(key)
-            if only is not None and b["node"] not in only:
-                continue
-            # Nothing here overrides a hold - not even a save. A save is
-            # somebody asking for the schedule out loud, so it RELEASES the
-            # holds first and then applies; force means "write even if the memo
-            # says the bulb is already there", and nothing more. Conflating the
-            # two meant a restart stamped the curve onto a lamp somebody was
-            # using, because startup applies with force.
-            if overridden(b["node"]):
-                out["held"] = out.get("held", 0) + 1
-                continue
+    # Every bulb in the house, whether a switch drives it or not.
+    #
+    # This used to walk the switches and then their binding tables, which
+    # quietly made "is on the schedule" mean "is wired to a wall switch". Those
+    # are two different relationships and only one of them involves a switch: a
+    # binding is how the WALL SWITCH commands the bulb with the Pi asleep, and
+    # the schedule is the PI commanding the bulb directly over Thread. The Pi
+    # never needed a switch in order to do that.
+    #
+    # It went unnoticed while every new bulb bound itself to whatever switch
+    # happened to be listed first. The moment that stopped, a newly added lamp
+    # sat outside the schedule entirely - you pressed save globally, it said it
+    # had saved, and that one bulb never moved.
+    for b in devices.get("bulbs", []):
+        key = str(b["node"])
+        if only is not None and b["node"] not in only:
+            continue
+        # Nothing here overrides a hold - not even a save. A save is
+        # somebody asking for the schedule out loud, so it RELEASES the
+        # holds first and then applies; force means "write even if the memo
+        # says the bulb is already there", and nothing more. Conflating the
+        # two meant a restart stamped the curve onto a lamp somebody was
+        # using, because startup applies with force.
+        if overridden(b["node"]):
+            out["held"] = out.get("held", 0) + 1
+            continue
 
-            # Its own schedule if it has one, otherwise the house's.
-            level, mireds = curve_at(schedule_for(b["node"], sched), minute)
-            if level is None:
-                continue
-            out["level"] = level
-            out["mireds"] = mireds
+        # Its own schedule if it has one, otherwise the house's.
+        level, mireds = curve_at(schedule_for(b["node"], sched), minute)
+        if level is None:
+            continue
+        out["level"] = level
+        out["mireds"] = mireds
+        with _state_lock:
+            sent = dict(_state.setdefault("bulbs", {}).get(key, {}))
+        ep = b.get("endpoint", 1)
+        did = False
+
+        # What it comes up at. Stepped, because this one is flash.
+        last_on = sent.get("onlevel")
+        if force or last_on is None or abs(last_on - level) >= ONLEVEL_STEP:
+            r = chip(f"levelcontrol write on-level {level} {b['node']} {ep}",
+                     timeout=45.0)
+            e = chip_error(r)
+            if e:
+                log(f"bulb {b['node']}: OnLevel failed: {e}", "err")
+            else:
+                sent["onlevel"] = level
+                did = True
+
+        # What it should be doing right now, if it is lit at all.
+        if force or sent.get("level") != level:
+            r = chip(f"levelcontrol move-to-level {level} {tenths} 0 0 "
+                     f"{b['node']} {ep}", timeout=45.0)
+            e = chip_error(r)
+            if e:
+                log(f"bulb {b['node']}: live level failed: {e}", "warn")
+            else:
+                sent["level"] = level
+                did = True
+
+        if mireds:
+            last_ct = sent.get("mireds")
+            if force or last_ct is None or abs(last_ct - mireds) >= MIRED_STEP:
+                # optionsMask=1, optionsOverride=1 -> ExecuteIfOff, so the
+                # colour lands with the bulb off as well, which is exactly
+                # when we need it.
+                r = chip(f"colorcontrol move-to-color-temperature {mireds} "
+                         f"{tenths} 1 1 {b['node']} {ep}", timeout=45.0)
+                e = chip_error(r)
+                if e:
+                    log(f"bulb {b['node']}: colour failed: {e}", "err")
+                else:
+                    sent["mireds"] = mireds
+                    did = True
+
+        if did:
+            log(f"bulb {b['node']}: {minute // 60:02d}:{minute % 60:02d} "
+                f"-> level {level}" + (f", {mireds} mireds" if mireds else ""),
+                "step")
+            sent["at"] = time.time()
             with _state_lock:
-                sent = dict(_state.setdefault("bulbs", {}).get(key, {}))
-            ep = b.get("endpoint", 1)
-            did = False
+                _state.setdefault("bulbs", {})[key] = sent
+            state_save()
+            out["written"] += 1
 
-            # What it comes up at. Stepped, because this one is flash.
-            last_on = sent.get("onlevel")
-            if force or last_on is None or abs(last_on - level) >= ONLEVEL_STEP:
-                r = chip(f"levelcontrol write on-level {level} {b['node']} {ep}",
-                         timeout=45.0)
-                e = chip_error(r)
-                if e:
-                    log(f"bulb {b['node']}: OnLevel failed: {e}", "err")
-                else:
-                    sent["onlevel"] = level
-                    did = True
-
-            # What it should be doing right now, if it is lit at all.
-            if force or sent.get("level") != level:
-                r = chip(f"levelcontrol move-to-level {level} {tenths} 0 0 "
-                         f"{b['node']} {ep}", timeout=45.0)
-                e = chip_error(r)
-                if e:
-                    log(f"bulb {b['node']}: live level failed: {e}", "warn")
-                else:
-                    sent["level"] = level
-                    did = True
-
-            if mireds:
-                last_ct = sent.get("mireds")
-                if force or last_ct is None or abs(last_ct - mireds) >= MIRED_STEP:
-                    # optionsMask=1, optionsOverride=1 -> ExecuteIfOff, so the
-                    # colour lands with the bulb off as well, which is exactly
-                    # when we need it.
-                    r = chip(f"colorcontrol move-to-color-temperature {mireds} "
-                             f"{tenths} 1 1 {b['node']} {ep}", timeout=45.0)
-                    e = chip_error(r)
-                    if e:
-                        log(f"bulb {b['node']}: colour failed: {e}", "err")
-                    else:
-                        sent["mireds"] = mireds
-                        did = True
-
-            if did:
-                log(f"bulb {b['node']}: {minute // 60:02d}:{minute % 60:02d} "
-                    f"-> level {level}" + (f", {mireds} mireds" if mireds else ""),
-                    "step")
-                sent["at"] = time.time()
-                with _state_lock:
-                    _state.setdefault("bulbs", {})[key] = sent
-                state_save()
-                out["written"] += 1
-
-            # Whether any of that was visible. Only worth a read on a manual
-            # save, when somebody is watching and about to draw a conclusion.
-            if force:
-                try:
-                    refresh_bulb(b)
-                except Exception:  # noqa: BLE001 - a dead bulb is not an error here
-                    pass
-            on = state_of(b["node"]).get("on")
-            out["lit" if on is True else "dark" if on is False else "unknown"] += 1
+        # Whether any of that was visible. Only worth a read on a manual
+        # save, when somebody is watching and about to draw a conclusion.
+        if force:
+            try:
+                refresh_bulb(b)
+            except Exception:  # noqa: BLE001 - a dead bulb is not an error here
+                pass
+        on = state_of(b["node"]).get("on")
+        out["lit" if on is True else "dark" if on is False else "unknown"] += 1
 
     return out
 
@@ -2033,19 +2041,13 @@ class Handler(BaseHTTPRequestHandler):
 
             # Which bulbs a schedule governs, and which schedule governs each -
             # the two questions the editor exists to answer before it lets you
-            # change anything. Only bulbs a switch actually drives: a bulb bound
-            # to nothing is never written to, and saying it follows the house
-            # schedule would be a promise nobody keeps.
-            governed = []
-            seen = set()
-            for sw in switches(devices):
-                for b in bulbs_of(sw, devices):
-                    if b["node"] in seen:
-                        continue
-                    seen.add(b["node"])
-                    governed.append({"node": b["node"], "name": b.get("name", ""),
-                                     "where": b.get("where", ""),
-                                     "own": str(b["node"]) in sched["bulbs"]})
+            # change anything. Every bulb, whether a switch drives it or not -
+            # the Pi writes the schedule straight to the bulb over Thread, so a
+            # binding has nothing to do with which lamps it reaches.
+            governed = [{"node": b["node"], "name": b.get("name", ""),
+                         "where": b.get("where", ""),
+                         "own": str(b["node"]) in sched["bulbs"]}
+                        for b in devices.get("bulbs", [])]
             # The clock comes from the Pi, not from the browser. The Pi is what
             # runs the schedule, and the two do not have to agree - a phone
             # roaming abroad would put the "now" marker hours off the slot that

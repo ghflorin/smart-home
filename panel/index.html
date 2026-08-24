@@ -2956,27 +2956,29 @@ function openBulb(b) {
    * Sends on RELEASE. A control that fires while you drag puts a hundred
    * commands on the radio for one gesture and the bulb only shows the last.
    *
-   * The drag is RELATIVE: it starts from where the control already is and
-   * follows the hand from there. Absolute - jumping to wherever the pointer
-   * happens to be - is the same gesture on paper and a trap in practice, because
-   * the two meanings share a threshold. Click low in the panel to toggle a lamp,
-   * twitch six pixels on the way up, and it stopped being a tap and became "set
-   * 2%": the lamp came on almost invisibly, and being a brightness change it
-   * wrote OnLevel and took a hold as well. Relative, the same twitch is worth
-   * two percent, which is what a twitch should be worth.
+   * The drag is ABSOLUTE: the level follows the pointer, so letting go at
+   * four-fifths up the panel means four-fifths. That is the whole point of a
+   * control shaped like a column, and anything else fights what it looks like.
    *
-   * The slop is 8px rather than 5 for the same reason - a mouse click is not
-   * perfectly still, and this control's tap has a job of its own. */
-  const SLOP = 8;
+   * It was relative for a while, to stop a click that twitched six pixels from
+   * becoming "set 2%". That fixed the twitch and broke the gesture: a short,
+   * deliberate drag moved the value by only the distance travelled, so it
+   * landed roughly where it already was - which is the value you picked LAST
+   * time. Aim for 80, get the old value; aim for 20, get 80; aim for 50, get
+   * 20. A control one step behind is worse than one that occasionally
+   * overshoots.
+   *
+   * So it is absolute again, and the twitch is handled where it belongs: at
+   * the threshold. Twelve pixels is far more than a click carries and far less
+   * than a drag, so a press that means "toggle" stays a toggle. */
+  const SLOP = 12;
   const grab = (el, opts) => {
     let moved = false;
     let startY = 0;
-    let base = 0;
     el.onpointerdown = ev => {
       ev.preventDefault();
       moved = false;
       startY = ev.clientY;
-      base = opts.base();
       el.setPointerCapture(ev.pointerId);
       el.classList.add('grabbed');
     };
@@ -2985,7 +2987,7 @@ function openBulb(b) {
       if (!moved && Math.abs(ev.clientY - startY) < SLOP) { return; }
       moved = true;
       const r = el.getBoundingClientRect();
-      opts.set(Math.max(0, Math.min(1, base + (startY - ev.clientY) / r.height)));
+      opts.set(Math.max(0, Math.min(1, (r.bottom - ev.clientY) / r.height)));
       paintCtl();
     };
     const up = ev => {
@@ -3007,7 +3009,6 @@ function openBulb(b) {
   };
 
   grab(lvlBox, {
-    base: () => shownNorm(),
     // A floor of 1%: dragging to the very bottom of a brightness control means
     // "as low as it goes", not "off". Off is the tap.
     set: v => { dragLvl = Math.max(0.01, v); },
@@ -3016,7 +3017,6 @@ function openBulb(b) {
   });
 
   grab(ctBox, {
-    base: () => (ctHi() - shownMireds()) / (ctHi() - ctLo()),
     set: v => { dragCt = Math.round(ctHi() - v * (ctHi() - ctLo())); },
     commit: () => send({ mireds: dragCt }),
   });
@@ -3038,9 +3038,10 @@ function openBulb(b) {
     const gov = (d.governed || []).find(g => g.node === b.node);
     schedBox.innerHTML = '<div class="hdr">affected by schedule</div>';
     if (!gov) {
-      // Driven by no switch, so nothing writes to it on a timer.
+      // Only reachable now if the bulb has just been removed from under us -
+      // every bulb the panel knows about is on the schedule, bound or not.
       schedBox.insertAdjacentHTML('beforeend',
-        '<div class="empty">no schedule reaches this bulb &mdash; it is not bound to a switch</div>');
+        '<div class="empty">no schedule reaches this bulb</div>');
       return;
     }
     schedBox.append(linkRow(gov.own ? 'its own schedule' : 'the house schedule',
@@ -4028,7 +4029,7 @@ function openTargetPicker() {
 
   const list = sheet.querySelector('#tpick');
   if (!gov.length) {
-    list.innerHTML = '<div class="empty" style="padding:14px">no bulb is bound to a switch, so no schedule reaches anything</div>';
+    list.innerHTML = '<div class="empty" style="padding:14px">no bulbs yet</div>';
   }
   rooms.forEach(room => {
     const head = document.createElement('div');
