@@ -53,26 +53,48 @@ first press after a long pause costs a few hundred ms while it is rebuilt.
 
 ## Brightness is not linear
 
-The Matter LevelControl level is 1..254 and is proportional to **emitted light**.
-The eye is not linear: double the light and you see a much smaller increase. On a
-perceptual scale (L\* from CIE Lab):
+**The range is 1..254, not 0..255.** The bulb says so itself — its LevelControl
+cluster reports `MinLevel = 1`, `MaxLevel = 254`. In Matter 255 is the reserved
+null and 0 is not a brightness a dimmable light uses.
 
-| Matter level | How bright it looks |
-|---|---|
-| 254 | 100% |
-| 127 | **76%** |
-| 60 | 55% |
-| 47 | 50% |
-| 10 | 23% |
+Every percentage on screen is **perceived** brightness, not `level / 254`. The
+level is proportional to *emitted light*, and the eye is not: double the light
+and you see a much smaller increase. The conversion is L\* from CIE Lab —
+`perceived()` in `panel/index.html`, `perceived()` in `panel/server.py`:
+
+```
+y = level / 254
+shown = (116 · ∛y − 16) / 100
+```
+
+| level | of the bulb's light | shown |
+|---|---|---|
+| 1 | 0.4% | 4% |
+| 5 | 2.0% | 15% |
+| 8 | 3.1% | 21% |
+| 47 | 18.5% | **50%** |
+| 120 | 47.2% | 74% |
+| 127 | 50.0% | 76% |
+| 254 | 100% | 100% |
 
 So the whole useful evening range is crammed between 1 and 40, while the top half
-of the scale is nearly indistinguishable. The schedule editor in the panel uses a
-**perceptual vertical axis** for this reason: half the height really does look
-like half the light, and it lands around level 47.
+of the scale is nearly indistinguishable. The schedule editor uses a perceptual
+vertical axis for that reason: half the height really does look like half the
+light, and it lands at level 47, not 127. The server interpolates the curve in
+the same perceptual space, so the editor's reading for "now" and the level the
+bulb is actually given agree.
 
-This assumes the bulb maps level linearly to light. Some bulbs apply a curve of
-their own and there is no way to read it, so treat the table as a starting point
-and finish by eye.
+**What this rests on, and what it does not.** L\* is a model of the eye and the
+round trip is exact — level → % → level returns the same level. What is *assumed*
+is that the bulb turns level into light linearly. A bulb that already applies its
+own perceptual curve internally is corrected twice, and every number shown is
+then too high. Nothing in Matter exposes a bulb's transfer curve, so this cannot
+be settled in software.
+
+To settle it by eye: set the bulb to 20/40/60/80/100% shown — levels 8, 29, 71,
+144, 254 — and look. Evenly spaced steps mean the bulb is linear and the scale is
+right. Steps that bunch up at the bright end mean the bulb is already perceptual
+and the extra curve should come out.
 
 ## The status LED
 

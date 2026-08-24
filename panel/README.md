@@ -412,11 +412,33 @@ nowhere in the command path. No request, no release. A lamp set by hand and then
 switched off at the wall stayed held for good: skipped by every tick, coming up
 at the manual value for ever, and nothing on screen said why.
 
-`note_power` now sits at the bottom of `refresh_bulb`, so every observation of a
-bulb's on/off runs through it whoever caused it. And because nothing polls a
-bulb unless a browser is open — `refresh_all` only touches switches —
-`watch_held` reads the held bulbs on each tick. That is a read or two per minute,
-since a held bulb is rare and is exactly the one whose off we are waiting for.
+`note_power` sits at the bottom of `refresh_bulb` and also on the subscription's
+own path, so every observation of a bulb's on/off runs through it whoever caused
+it. The pushed report is the one that matters — a wall-switch press is heard in
+about 0.2 s — and it is handed to a separate thread rather than acted on inline,
+because releasing a hold ends in Matter commands and the listener thread must
+never block on those: everything else in the house is waiting behind it.
+
+**An observed off re-arms the bulb whether or not a hold was set.** The panel
+only knows about a manual change *it* made, and the wall switch is not that: a
+long press writes brightness and colour straight into the bulb. Brightness
+recovers by itself, because `OnLevel` decides what the bulb comes back to and the
+long press does not touch it — but **colour has no `OnLevel`**. The bulb keeps
+whatever it was last given, so a long press left it at 4000 K under a curve
+asking for 2400 K.
+
+The schedule tick will not catch that, and this is the interesting part: the tick
+compares the curve against its **memo of what it last sent**, not against what
+the bulb actually is. Somebody else changing the bulb underneath is invisible to
+that comparison. It corrected itself only when the curve drifted past
+`MIRED_STEP` — four and a half minutes at dusk, and on the midday plateau, where
+the curve does not move at all, not for hours.
+
+Comparing the curve against the *observed* value every tick looks like the fix
+and is not: it would drag a lamp somebody had just set by hand back to the curve
+within the minute, and it thrashes for ever against a bulb that clamps colour to
+its own range. Re-arming on the off is both correct and the rule the house
+already runs on — a value set by hand lasts until you switch the light off.
 
 **A hold set on a dark lamp waits for its turn.** Releasing on the next observed
 off would be wrong for a colour chosen while the lamp is off: that is not
