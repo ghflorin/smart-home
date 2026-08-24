@@ -280,6 +280,19 @@ to be listed first. The moment that stopped, a newly added lamp sat outside the
 schedule entirely — you pressed *save globally*, it said it had saved, and that
 one bulb never moved.
 
+**Idle polls slowly; it does not stop.** Three minutes without touching the page
+used to mean the panel stopped asking for anything at all. That is right for a
+lamp you are not using and wrong for a sensor, whose whole job is to change while
+nobody is touching anything — you stand in front of a door sensor and the panel
+has quietly stopped listening. Idle is 60 s now instead of 15. Hidden still stops
+entirely: nobody can see it, and coming back refreshes at once.
+
+**One missed read is not a missing device.** A battery sensor is asleep most of
+the time, so a read landing in the wrong moment simply fails — routinely, with
+nothing wrong. That used to flip the tile to "not answering" seconds after a
+perfectly good reading. A device has to have been quiet for `PANEL_SLEEPY_GRACE`
+before the panel says so.
+
 **Adding a kind of device is a line, not a branch.** Nothing is hardcoded per
 product: the panel reads a device's Descriptor on commissioning and decides from
 the device type. A new measurement is one row in `MEASURED`; a reading that is a

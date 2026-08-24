@@ -5511,6 +5511,8 @@ function setLockAll(locked, btn) {
 // memory), so several browsers do not multiply the radio traffic.
 const BULBS = { timer: null, lastTouch: Date.now(), idle: false };
 const BULB_POLL_MS = 15000;
+// Idle is slower, never silent. See pollBulbs.
+const BULB_IDLE_POLL_MS = 60000;
 const BULB_IDLE_MS = 3 * 60 * 1000;
 
 async function loadBulbs(fresh) {
@@ -5541,12 +5543,20 @@ async function loadBulbs(fresh) {
 
 function pollBulbs() {
   clearTimeout(BULBS.timer);
+  const idle = document.hidden || (Date.now() - BULBS.lastTouch) > BULB_IDLE_MS;
+  BULBS.idle = idle;
   BULBS.timer = setTimeout(() => {
-    const idle = document.hidden || (Date.now() - BULBS.lastTouch) > BULB_IDLE_MS;
-    BULBS.idle = idle;
-    if (!idle) { loadBulbs(); }
+    // Idle used to mean SILENT: three minutes without touching the page and it
+    // stopped asking for anything at all. That is right for a lamp you are not
+    // using and wrong for a sensor, whose entire job is to change while nobody
+    // is touching anything - you stand there watching a door sensor and the
+    // panel has quietly stopped listening.
+    //
+    // Hidden is the one case where stopping is still correct: nobody can see
+    // it, and coming back fires touched(), which refreshes at once.
+    if (!document.hidden) { loadBulbs(); }
     pollBulbs();
-  }, BULB_POLL_MS);
+  }, idle ? BULB_IDLE_POLL_MS : BULB_POLL_MS);
 }
 
 function touched() {

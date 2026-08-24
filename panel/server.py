@@ -906,7 +906,8 @@ def set_lock(node: int, locked: bool) -> dict:
 
     log(f"node {node}: {'locked' if locked else 'unlocked'}", "ok")
     state_put(node, values={"locked": locked},
-              meta={"readAt": time.time(), "ok": True, "err": None})
+              meta={"readAt": time.time(), "okAt": time.time(),
+                                     "ok": True, "err": None})
     return {"node": node, "ok": True, "locked": locked}
 
 
@@ -918,7 +919,8 @@ def set_role(node: int, role: int) -> dict:
     if e:
         return {"node": node, "ok": False, "error": e}
     state_put(node, values={"role": role},
-              meta={"readAt": time.time(), "ok": True, "err": None})
+              meta={"readAt": time.time(), "okAt": time.time(),
+                                     "ok": True, "err": None})
     return {"node": node, "ok": True, "role": role}
 
 
@@ -1164,6 +1166,10 @@ def refresh_switch(sw: dict) -> list:
 # This is cheap in a way the switch reads are not: bulbs are mains-powered Thread
 # routers, always listening, and answer in about 40 ms.
 BULB_TTL_SEC = int(os.environ.get("PANEL_BULB_TTL_SEC", "12"))
+# How long a device may fail to answer before the panel says so. Long enough to
+# ride out the ordinary misses of a sleepy device, short enough that a device
+# genuinely gone is reported while you still care.
+SLEEPY_GRACE = int(os.environ.get("PANEL_SLEEPY_GRACE", "150"))
 BULB_COLD_SEC = int(os.environ.get("PANEL_BULB_COLD_SEC", "300"))
 BULB_READ_TIMEOUT = float(os.environ.get("PANEL_BULB_TIMEOUT", "15"))
 
@@ -1239,7 +1245,8 @@ def refresh_bulb(bulb: dict) -> list:
     note_power(node, bool(on))
 
     return state_put(node, values=values,
-                     meta={"readAt": time.time(), "ok": True, "err": None})
+                     meta={"readAt": time.time(), "okAt": time.time(),
+                                     "ok": True, "err": None})
 
 
 # ---------------------------------------------------------------- subscriptions
@@ -1416,13 +1423,15 @@ def _absorb_report(raw, by_path: dict):
         cur = dict(state_of(node).get("measured") or {})
         if cur.get(name) == val:
             sub_heard(node)
-            state_put(node, meta={"readAt": time.time(), "ok": True, "err": None})
+            state_put(node, meta={"readAt": time.time(), "okAt": time.time(),
+                                     "ok": True, "err": None})
             continue
         cur[name] = val
         sub_heard(node)
         log(f"node {node}: {name} -> {val}", "step")
         state_put(node, values={"measured": cur},
-                  meta={"readAt": time.time(), "ok": True, "err": None})
+                  meta={"readAt": time.time(), "okAt": time.time(),
+                                     "ok": True, "err": None})
 
 
 def refresh_device(dev: dict) -> list:
@@ -1441,7 +1450,8 @@ def refresh_device(dev: dict) -> list:
                          meta={"readAt": time.time(), "ok": not knows,
                                "err": "no response" if knows else None})
     return state_put(dev["node"], values={"measured": vals},
-                     meta={"readAt": time.time(), "ok": True, "err": None})
+                     meta={"readAt": time.time(), "okAt": time.time(),
+                                     "ok": True, "err": None})
 
 
 def refresh_bulbs(force: bool = False) -> dict:
@@ -1481,7 +1491,17 @@ def refresh_bulbs(force: bool = False) -> dict:
     out = {}
     for kind, dev in watched:
         st = state_of(dev["node"])
-        row = {"ok": st.get("ok"), "readAt": st.get("readAt")}
+        # One missed read is not a missing device.
+        #
+        # A battery sensor is asleep most of the time, so a read that arrives in
+        # the wrong moment simply fails - routinely, and with nothing wrong. Left
+        # as-is that flipped the tile to "not answering" seconds after a perfectly
+        # good reading, which is the panel crying wolf about its own timing.
+        # It has to have been quiet for a while before we say so.
+        ok = st.get("ok")
+        if ok is False and time.time() - float(st.get("okAt") or 0) < SLEEPY_GRACE:
+            ok = True
+        row = {"ok": ok, "readAt": st.get("readAt")}
         if kind == "bulb":
             row.update({"on": st.get("on"), "level": st.get("level"),
                         "mireds": st.get("mireds"), "onlevel": st.get("onlevel"),
@@ -2637,7 +2657,8 @@ class Handler(BaseHTTPRequestHandler):
                     f"{'' if len(want) == 1 else 's'}", "ok")
                 state_put(sw_node,
                           values={"binding": binding_entries(sw, bulbs)},
-                          meta={"readAt": time.time(), "ok": True, "err": None})
+                          meta={"readAt": time.time(), "okAt": time.time(),
+                                     "ok": True, "err": None})
 
             return self._send({"switch": sw_node, "bulbs": want,
                                "errors": errors or None})
