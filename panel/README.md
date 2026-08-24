@@ -24,24 +24,42 @@ practical jobs:
 ## How it is wired
 
 ```
-browser ──HTTP──> panel/server.py ──WebSocket──> chip-tool ──Thread──> bulbs
-                                   (port 9002)   (interactive server)
+browser <──long poll──> panel/server.py <──WebSocket──> matter-server <──Thread──> devices
+                                          (port 5580)
 ```
 
-`chip-tool interactive server` rather than separate invocations: it keeps CASE
-sessions warm. That matters most for the switch, which is a sleepy device —
-otherwise every click would renegotiate the session.
+Every arrow is a **push**, not a poll, and that is the point of the shape:
 
-It uses the **same** `ota/state/` as the rest of the scripts, so the same fabric
-and the same devices. It does not create a second fabric, which would waste a
-slot in every bulb.
+- a device reports an attribute the moment it changes; matter-server holds a
+  subscription to all of them and keeps a live cache
+- the panel folds each report into its state and bumps a revision
+- the browser is parked on a long poll and is answered the instant that happens
+
+So a wall-switch press — which never touches the Pi, the switch commands the
+bulb directly — reaches the screen in about 0.2 s. Nothing anywhere chose an
+interval and hoped.
+
+Reads run the other way for free: they come out of matter-server's cache rather
+than waking a sleeping device, which for a battery sensor is the difference
+between an answer and a coin flip.
+
+Commands, writes, bindings, ACLs and commissioning go through the same socket.
+See `panel/matter_link.py` — the listener and the command socket are separate
+connections on purpose.
+
+**This used to be `chip-tool interactive server`.** Two sockets, a SIGSTOP
+freezer to stop it burning a core while idle, pairing codes scraped out of its
+stdout log, and no subscriptions at all. The migration took no factory resets —
+Matter allows several fabrics — but binding and ACL are fabric-scoped and had to
+be rewritten. See [`docs/devices.md`](../docs/devices.md).
 
 ## Files
 
 | | |
 |---|---|
-| `run.sh` | starts chip-tool + the panel |
-| `server.py` | HTTP + the bridge to chip-tool |
+| `run.sh` | starts the panel |
+| `server.py` | HTTP, state, the schedule |
+| `matter_link.py` | the two sockets to matter-server: reports in, commands out |
 | `index.html` | the interface |
 | `devices.json` | node IDs, names and rooms |
 
@@ -649,9 +667,9 @@ to the bulb over Thread and the Pi never sees it, so our copy is wrong within a
 second of anybody pressing a switch. The tiles show that state, so it has to be
 polled — `/api/bulbs`.
 
-Polling it forever would undo the work that got the Pi's idle load down: it keeps
-chip-tool thawed for as long as a tab is open anywhere. So the poll is tied to
-somebody actually **looking**, not to the page existing:
+Bulbs are subscribed now, so their state arrives on its own and this polling is
+a backstop rather than the mechanism. It is still tied to somebody actually
+**looking**, not to the page existing:
 
 - the tab has to be visible;
 - and touched within three minutes. A panel left open on a wall tablet goes quiet
@@ -668,8 +686,8 @@ light colour and its settings sheet says the Kelvin in words.
 The server coalesces: a read newer than `PANEL_BULB_TTL_SEC` (12 s) is served
 from memory, so several browsers do not multiply the radio traffic. A bulb that
 did not answer is not asked again for `PANEL_BULB_COLD_SEC` (300 s) — otherwise
-one unplugged bulb would hold the chip-tool lock for its whole timeout on every
-poll, and the panel would feel broken for every other device.
+one unplugged bulb would hold up every other device on every poll, and the panel
+would feel broken across the board.
 
 This is cheap in a way the switch reads are not: bulbs are mains-powered Thread
 routers, always listening, and answer in about 40 ms.
@@ -719,21 +737,25 @@ means the tile snaps back to where it came from for a moment, which reads as
 ### How the interface learns something changed
 
 A revision counter, which increments **only when a value actually differs** from
-what we had — not on every read. It rides along on the reply to `/api/log`, which
-is polled anyway for the console, so there is no extra request.
+what we had — not on every read.
 
-When the counter changes, the interface reloads the state and redraws. While it
-does not change, nothing visible happens: you do not care that the Pi did a read,
-you care only whether it came back different.
+The browser holds a **long poll**: it sends the revision it already has and the
+server does not answer until that number moves, up to 25 s. So the page is
+neither asking repeatedly nor waiting on an interval — it is answered the moment
+a device reports something new, and costs one parked request in between.
+
+The chain end to end is a push at every hop: device → matter-server → panel →
+browser. Measured at about 0.2 s from a bulb changing to the tile moving, which
+is what makes a wall-switch press look live rather than remembered.
 
 ## What the header status means
 
 | Text | When |
 |---|---|
 | `panel offline` | the browser cannot reach `server.py` |
-| `chip-tool is not answering` | the server is alive, but no connection to chip-tool can be opened: either it is not running, or it is busy with an earlier command |
+| `matter-server is not answering` | the server is alive, but the last exchange with matter-server failed: either it is not running, or the socket dropped |
 | `no devices configured` | `devices.json` has no switches |
-| `no device is answering` | chip-tool works, but no switch answers — no RCP radio, no Thread network, or unpowered devices |
+| `no device is answering` | matter-server works, but no switch answers — no RCP radio, no Thread network, or unpowered devices |
 | `connected 1/2` | some answer, not all |
 | `connected` | every switch in `devices.json` answered |
 
@@ -745,8 +767,8 @@ The distinction is made by **which phase** failed, not by exception type: failin
 to open the connection = a problem on the Pi; failing while waiting for the reply
 = the command went out and nothing came back, so the problem is on the radio side.
 Both look identical as exceptions, and if you conflate them the panel says
-`chip-tool is not answering` when what is actually missing is the RCP radio — and
-you spend hours looking in the wrong place.
+`matter-server is not answering` when what is actually missing is the RCP radio —
+and you spend hours looking in the wrong place.
 
 With no RCP radio and no Thread network, every read waits out the full 30 s
 timeout. That cannot be shortened much: the switch is a sleepy device, and a
@@ -764,10 +786,10 @@ After every write the panel **reads the value back**. A confirmed write does not
 guarantee the value landed, and the mistake is expensive here: you would believe
 you had locked when you had not.
 
-The attribute is a BOOLEAN in the firmware, so the write sends `true`/`false`,
-not `1`/`0`. chip-tool encodes `1` as an integer, which the device rejects with
-`CONSTRAINT_ERROR`. Verified on hardware: with `1` it fails every time; with
-`true` it lands and reads back as True.
+The attribute is a BOOLEAN in the firmware, so the write sends a real `bool`,
+not `1`/`0`. An integer is rejected with `CONSTRAINT_ERROR`. It cost an
+afternoon on the old path, where the value went over the wire as whatever
+chip-tool made of the word on its command line.
 
 A lock-role switch has no lock toggle — it cannot lock itself, or you would have
 no way left to unlock the rest from the wall. Its quick action is `identify`
@@ -950,8 +972,8 @@ over shows the container's own ground, so the letterboxing is invisible.
 ## Console
 
 The bar at the bottom, collapsed by default. Press it and it opens a log of what
-the Pi sent to the devices and what they answered: the exact chip-tool command,
-how long it took, and the result.
+the Pi sent to the devices and what they answered, how long it took, and the
+result.
 
 It is the only place any of this is visible. **The switch has no console** in the
 production build — `CONFIG_SERIAL` is off so that two image slots fit for OTA. On
@@ -1001,12 +1023,13 @@ A few things worth knowing:
 - **Each ecosystem occupies a fabric slot** in the device. The spec requires at
   least 5. Check with `./scripts/commission.sh check <node>` before sharing
   widely.
-- The codes do not come back in the JSON reply on the WebSocket —
-  `CommissioningWindowOpener` writes them with `ChipLogProgress`, so they land on
-  stdout. That is why `run.sh` redirects chip-tool's log into a file that
-  `server.py` reads them out of. The alternative would have been a second
-  chip-tool process, but then two processes would be writing the same fabric
-  storage.
+- **The window has a floor of 180 s**, not 60. Ask for less and the device
+  answers `INVALID_COMMAND` — which reads like a malformed request and sends you
+  looking at the wrong thing entirely. The ceiling is 900 s.
+- The codes come back as the command's result. Under chip-tool they did not:
+  `CommissioningWindowOpener` writes them with `ChipLogProgress`, so they landed
+  on stdout, and the whole feature depended on scraping a log file that logrotate
+  could truncate at the wrong moment.
 
 ## Identify on the switch
 
@@ -1022,19 +1045,16 @@ few seconds before it blinks. That is not a fault.
 ## What has not been tested
 
 The interface and the API **have run** locally: the device list, the error path
-when chip-tool is missing, and command construction. The generated command is
-exactly the one from the Matter sources
-(`identify identify <seconds> <node> <endpoint>`).
+when matter-server is missing, and command construction.
 
-The sharing path was tested against a mocked chip-tool reply: parsing the codes
-out of the real log format (`Manual pairing code: [...]` /
-`SetupQRCode: [MT:...]`), generating the QR and rendering it. That turned up a
+The sharing path was tested against a mocked reply: parsing the codes,
+generating the QR and rendering it. That turned up a
 real bug — segno emits `<svg width="29" height="29">` with no `viewBox`, so the
 CSS scaling did not scale the drawing; `qr_svg()` now replaces the fixed
 dimensions with a viewBox.
 
-What could not be tested: chip-tool's real reply. The shape of the JSON varies
-between versions, so the binding-table extraction searches recursively for the
-first list of entries keyed by `node`. If it misses, the panel shows the raw
-reply under "raw chip-tool reply" — that is where you adjust
-`extract_bindings()` in `server.py` from.
+The binding table no longer has to be dug out of a variably-shaped reply:
+matter-server returns it as a typed list, and `translate_binding()` only has to
+map node ids from its fabric's numbering back into ours. That translation is the
+part to watch — an untranslated table compares against `devices.json`, matches
+nothing, and reports a correctly bound switch as controlling no bulbs at all.

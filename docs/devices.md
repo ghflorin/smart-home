@@ -8,6 +8,20 @@ panel asks a device what it is rather than being told — but nobody has checked
 The identity fields come from each device's own Basic Information cluster
 (`0x0028`), not from the box.
 
+All of these are commissioned onto **python-matter-server**, which is the
+panel's Matter client. They were on `chip-tool` first, and moved without a
+single factory reset: Matter allows several fabrics at once, so each device was
+joined to the new one through a commissioning window opened on the old, and the
+old fabric was removed afterwards. Two things are worth knowing if you repeat it:
+
+- **Binding and ACL are fabric-scoped.** The switch's binding table read back as
+  *empty* from the new fabric while it was still perfectly bound on the old one.
+  Both have to be rewritten, and the old fabric has to go, or the switch sends
+  every command twice — which for a Toggle means nothing appears to happen.
+- **The binding table is one fixed pool shared by all fabrics.** With the old
+  fabric's six entries still present, only four of the new six would fit, and
+  the write reported success. Remove the old fabric first, then write.
+
 ## Supported
 
 ### IKEA KAJPLATS E27 CWS globe 1055lm — bulb
@@ -66,43 +80,37 @@ without going to look.
 
 - **It is battery powered, so it sleeps.** A read does not wake it; the request
   waits at its Thread parent and is picked up on the poll the device was going
-  to make anyway. Answers come back in **0.4–6.5 s**, and sometimes not at all —
-  a read landing in the wrong moment simply fails.
+  to make anyway. Answers came back in **0.4–6.5 s**, and sometimes not at all —
+  a read landing in the wrong moment simply fails. This is why polling is the
+  wrong shape for the device and no amount of tuning fixes it: our interval is a
+  floor we cannot get under, not a target.
+- **It is subscribed now, not polled.** matter-server holds the subscription and
+  the sensor transmits the moment the contact changes. Nothing is queued for it
+  and nothing waits. Measured against the real device while it was still polled,
+  six state changes were pushed while the polling panel noticed four, tens of
+  seconds late.
+- **This did not work through chip-tool, and the failure was silent.**
+  `subscribe-by-id` on its interactive server behaves like a one-shot read: the
+  command returns the current value as its result and the subscription goes with
+  it. That priming value is indistinguishable from a subscription working — and
+  nothing ever follows. Confirmed in chip-tool's own log, where the last traffic
+  with the node was an unrelated command and no `ReportData` arrived.
+
+  It was worse than polling, not merely no better: a node believed to be
+  subscribed is not polled, so its value froze at the priming report for ever. A
+  door sensor stuck on `closed` is precisely the reading somebody acts on
+  without going to look. `PANEL_SUB_SILENCE` is the guard that survived: a node
+  not heard from for too long goes back to the poller, so a link that dies
+  quietly costs latency and never a stale value presented as current.
 - **A missed read used to cost five minutes.** `BULB_COLD_SEC` exists so an
   unplugged bulb does not burn a full timeout on every page load: one failed
   read and the device is not tried again for 300 s. For a sleepy sensor, which
   misses reads as a matter of course, that was ruinous — a magnet took two
   minutes to register because the sensor kept falling into a cold shoulder
-  longer than anyone would stand there watching. Event devices are exempt now.
-- **They are polled on their own loop, server side.** `event_watch` asks every
-  `PANEL_EVENT_POLL_SEC` (5 s) regardless of whether any browser is open, so the
-  Pi is always current and the page only decides how fast it draws what the Pi
-  already knows. Measured end to end: a read every **~11 s** on average, which
-  is 5 s of loop plus the device's own 4–7 s to answer. That last part is the
-  floor; polling faster does not get answers faster.
-- **The trade-off is battery.** The read costs the device a transmission each
-  time. It does not add wakeups — it rides the poll it was making anyway — but
-  answering every 11 s for ever is not free. `PANEL_EVENT_POLL_SEC` is the dial.
-- **Subscribing to it does not work through chip-tool, and the failure is
-  silent.** `subscribe-by-id` on chip-tool's interactive server behaves like a
-  one-shot read: the command returns the current value as its result and the
-  subscription goes with it. That priming value is indistinguishable from a
-  subscription working — and nothing ever follows. Confirmed in chip-tool's own
-  log, where the last traffic with the node is an unrelated command and no
-  `ReportData` arrives.
-
-  It is worse than polling, not merely no better: a node believed to be
-  subscribed is not polled, so its value freezes at the priming report for ever.
-  A door sensor stuck on `closed` is precisely the reading somebody acts on
-  without looking. The code is kept and **off** (`PANEL_SUBSCRIBE`), because the
-  approach is right and only the transport is wrong — a chip-tool build that
-  streams reports, or a different Matter client, makes it work. If it is ever
-  turned on, `PANEL_SUB_SILENCE` hands a node back to the poller once its
-  subscription has been quiet for too long, so a silent failure cannot strand a
-  value again.
-- **A subscription owns the device's session.** While one is held, a direct read
-  of that same node comes back empty — which is why the poller has to skip it,
-  or the device would flap between "reporting" and "not answering".
+  longer than anyone would stand there watching. Event devices are exempt.
+- **Battery.** Polling cost the device a transmission every ~11 s for ever. A
+  subscription costs one only when the door actually moves, which is what the
+  cluster is for.
 - **Identify is accepted; the LED has not been seen here.** `Identify` lands —
   `IdentifyTime` counts down on the device afterwards — and the device reports
   `IdentifyType = 2`, VisibleIndicator. **`TriggerEffect` is not implemented at
@@ -150,6 +158,10 @@ Readings that are a state rather than a quantity — a contact, an occupancy —
 a second line in `MEASURE_WORDS` so they render as words instead of `true`, and
 a third in `SUB_KEYS` if the reading is an *event* that should arrive the moment
 it happens rather than on the next poll.
+
+A bulb needs nothing added: `BULB_ATTRS` already maps OnOff, LevelControl and
+ColorControl from a pushed report into the same fields a read fills, so a light
+the panel has never seen behaves correctly the moment it is commissioned.
 
 Identify sends `Identify` and then `TriggerEffect` (Blink). Devices differ about
 which one lights the lamp: the KAJPLATS bulb takes both, the MYGGBETT sensor

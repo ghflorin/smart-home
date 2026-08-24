@@ -1,6 +1,18 @@
 [Unit]
-# chip-tool in "interactive server" mode: exposes a WebSocket on 9002 that the
-# panel and the scripts talk to. Keeps CASE sessions warm between commands.
+# chip-tool in "interactive server" mode: a WebSocket on 9002.
+#
+# NOT PART OF THE RUNNING SYSTEM ANY MORE, and not enabled. The panel speaks
+# Matter through matter-server (smarthome-matter.service); chip-tool remains
+# only for firmware OTA in ota/, which is a manual, occasional job.
+#
+# Leave it disabled. It burns a full CPU core while completely idle
+# (connectedhomeip#29971), which on a Pi 3B+ is enough to hold the board at its
+# 60 C soft-throttle point and clock it down from 1400 to 1200 MHz.
+#
+# Its fabric was removed from every device during the migration, so before an
+# OTA it has to be let back on: open a commissioning window from the panel
+# (Share), commission chip-tool with the code, do the update, and remove the
+# fabric again. See ota/README.md.
 #
 # Starts after the border router. If OTBR is slow, this does not fail - it just
 # finds no devices until the Thread network comes up.

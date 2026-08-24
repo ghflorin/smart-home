@@ -1,8 +1,10 @@
 [Unit]
 # The admin panel: identify, binding table, sharing a device to another ecosystem.
 Description=smarthome - admin panel
-After=smarthome-chiptool.service
-Wants=smarthome-chiptool.service
+# matter-server, not chip-tool. The panel speaks Matter through it for
+# everything now: commands, reads, bindings, ACLs and commissioning.
+After=smarthome-matter.service
+Wants=smarthome-matter.service
 
 [Service]
 Type=simple
@@ -10,8 +12,7 @@ User=pi
 Group=pi
 WorkingDirectory=/opt/smarthome/panel
 Environment=PANEL_PORT=8080
-Environment=CHIP_TOOL_WS=ws://127.0.0.1:9002
-Environment=CHIP_TOOL_LOG=/opt/smarthome/ota/state/chip-tool.log
+Environment=MATTER_WS=ws://127.0.0.1:5580/ws
 # Skips attestation certificate verification during commissioning.
 #
 # Required for the IKEA bulbs: the PAA root set shipped with the Matter SDK has

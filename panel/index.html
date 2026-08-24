@@ -2187,8 +2187,8 @@ async function load() {
     // "connected" even with no dongle and no Thread network, which only proved
     // that the browser had reached the server.
     const h = b.health || {};
-    if (!h.chipTool) {
-      setStatus('chip-tool is not answering', 'err');
+    if (!h.matter) {
+      setStatus('matter-server is not answering', 'err');
     } else if (!h.total) {
       setStatus('no devices configured', '');
     } else if (h.reachable === 0) {

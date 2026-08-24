@@ -8,15 +8,20 @@
 # subscription is, because the device transmits the moment the value changes
 # instead of waiting to be asked.
 #
-# It is also five times cheaper. Measured on this Pi 3B+, both idle:
+# It is also vastly cheaper. Measured on this Pi 3B+ from systemd's own CPU
+# accounting, both idle and doing nothing at all:
 #
-#     chip-tool       83.2% CPU    45 MB
-#     matter-server   15.4% CPU   128 MB
+#     chip-tool       116.5 s CPU in 116 s wall  =  100%  of a core,  45 MB
+#     matter-server    34.4 s CPU in 3644 s wall =    0.9% of a core, 153 MB
 #
-# chip-tool's 83% is connectedhomeip#29971 - libwebsockets inverts the POSIX
-# convention for a negative timeout, so its event loop spins. The whole
-# SIGSTOP/SIGCONT freezer in panel/server.py exists only to work around that,
-# and goes away with it.
+# chip-tool's full core is connectedhomeip#29971 - libwebsockets inverts the
+# POSIX convention for a negative timeout, so its event loop spins. The
+# SIGSTOP/SIGCONT freezer in panel/server.py existed only to work around that,
+# and went away with it.
+#
+# The memory goes the other way: matter-server holds a subscription to every
+# attribute on every node, which is what makes reads free and pushes prompt.
+# On a 955 MB Pi that is a good trade; on something smaller it might not be.
 #
 # Standalone. Nothing here involves Home Assistant, whatever the package names
 # suggest: it is a daemon with a WebSocket API and no HA dependency.

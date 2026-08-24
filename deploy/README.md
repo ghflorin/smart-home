@@ -8,7 +8,8 @@ laptop out of the house and the system keeps running.
 | | Where | Why |
 |---|---|---|
 | Border router (otbr-agent + dongle) | **Pi** | has to be up permanently; it is the bridge to Thread |
-| chip-tool interactive server | **Pi** | administering the network |
+| matter-server | **Pi** | the Matter client: commands, reads, subscriptions, commissioning |
+| chip-tool | **Pi**, but **not running** | only for firmware OTA. Leave it disabled — it burns a full CPU core while idle |
 | The panel | **Pi** | you reach it from a browser, on any device in the house |
 | The schedule | **Pi** | the panel service keeps local time and writes `OnLevel` + color temperature into the bulbs on every slot change |
 | The OTA server | **Pi** | started only when you push an update |
@@ -45,14 +46,14 @@ there and bring patience.
 | | Minimum | Why |
 |---|---|---|
 | Architecture | ARMv8 (Pi 3 or newer) | the Matter tools require 64-bit |
-| RAM | **1 GB** | below that, `chip-tool` + the panel + otbr do not fit at once |
+| RAM | **1 GB** | below that, matter-server + the panel + otbr do not fit at once. matter-server holds ~150 MB: it keeps every attribute of every node subscribed, which is what makes reads free |
 | Ethernet | recommended | the border router is more stable on a cable |
 | USB | 2 ports | one is permanently taken by the radio |
 
 Checked in practice:
 
-- **Pi 3 A+** — 512 MB, a single USB port, no Ethernet. Only workable if you start
-  `chip-tool` and the panel on demand rather than permanently. Tight.
+- **Pi 3 A+** — 512 MB, a single USB port, no Ethernet. Very tight: matter-server
+  alone is about 150 MB.
 - **Pi 3 B+** — 1 GB, Ethernet, 4× USB. Enough, with the binaries built on the Mac.
 - **Pi 4 / 5, 2 GB+** — comfortable, and you can build on it directly.
 
@@ -100,32 +101,53 @@ Python environment.
 sudo mkdir -p /opt/smarthome && sudo chown pi:pi /opt/smarthome
 rsync -a --exclude build-'*' --exclude .git ./ pi@smarthome.local:/opt/smarthome/
 
-# the Python environment
+# the Python environment for the panel
 python3 -m venv /opt/smarthome/.venv
 /opt/smarthome/.venv/bin/pip install websockets segno
 
-# the Matter tools (chip-tool, ota-provider)
-# Clones the Matter sources (~2-3 GB) and builds them. On a Pi 4 this takes hours.
-# Run it under tmux/screen so you do not lose it if the SSH session drops.
-cd /opt/smarthome && ./ota/setup.sh
+# the Matter client. A separate venv on purpose: it pulls in the whole CHIP
+# stack as a wheel, and you do not want that in the panel's environment.
+python3 -m venv /opt/smarthome/.venv-matter
+/opt/smarthome/.venv-matter/bin/pip install python-matter-server
 
 # the attestation root certificates, so commercial bulbs can be commissioned
 ./deploy/paa-certs.sh
 
 # the services
 sudo cp deploy/smarthome-*.service /etc/systemd/system/
-sudo cp deploy/smarthome-chiptool.logrotate /etc/logrotate.d/smarthome
 sudo systemctl daemon-reload
-sudo systemctl enable --now smarthome-chiptool smarthome-panel
+sudo systemctl enable --now smarthome-matter smarthome-panel
 ```
 
-If your user is not `pi`, change `User=` / `Group=` in both `.service` files.
-systemd fails with `status=217/USER` when the account does not exist, and the
-message does not say which unit is at fault.
+**`/data` has to exist and be writable.** The CHIP stack hardcodes
+`/data/chip_factory.ini` — it is built to run in a container, where `/data` is a
+mount. On bare metal it dies at startup with `CHIP Error 0x000000AD: Open file
+failed` and a traceback naming neither the path nor the reason.
+`smarthome-matter.service` creates it in `ExecStartPre`.
+
+**Only for firmware OTA**, build chip-tool as well — it is not needed to run the
+house, and should stay disabled:
+
+```bash
+# Clones the Matter sources (~2-3 GB) and builds them. On a Pi 4 this takes hours.
+# Run it under tmux/screen so you do not lose it if the SSH session drops.
+cd /opt/smarthome && ./ota/setup.sh
+sudo cp deploy/smarthome-chiptool.logrotate /etc/logrotate.d/smarthome
+```
+
+If your user is not `pi`, change `User=` / `Group=` in **every** `.service` file,
+including the `ExecStartPre` in `smarthome-matter.service`. systemd fails with
+`status=217/USER` when the account does not exist, and the message does not say
+which unit is at fault — it just restart-loops.
 
 The panel is then at `http://smarthome.local:8080`.
 
 ### Attestation certificates
+
+Only needed for **chip-tool**, so only if you build it for OTA. matter-server
+fetches the production attestation roots itself at startup — which is the reason
+it takes about thirteen seconds to come up on a Pi 3 B+, and why commissioning an
+IKEA bulb through it needs no certificate work at all.
 
 `./deploy/paa-certs.sh` copies the production Product Attestation Authority (PAA)
 root certificates out of the Matter SDK
@@ -148,9 +170,16 @@ have no business in the fabric backup.
 
 ## If the Pi is short on RAM (Pi 3, Zero 2)
 
-A Pi 3 B+ **runs** all of this without trouble — otbr-agent, chip-tool and the
-panel together stay under 200 MB. What it cannot do with 1 GB is **build** the
-Matter tools: linking alone needs over 1 GB.
+A Pi 3 B+ **runs** all of this without trouble. Measured idle, everything up:
+
+| | CPU | RSS |
+|---|---|---|
+| matter-server | 0.2% | 153 MB |
+| the panel | 0.4% | 34 MB |
+| otbr-agent | 0.2% | small |
+
+leaving about 640 MB free. What it cannot do with 1 GB is **build** the Matter
+tools: linking alone needs over 1 GB.
 
 The way out: build on the Mac, inside a Debian arm64 container.
 
@@ -247,12 +276,12 @@ sudo ot-ctl dataset active -x
 ## Verification
 
 ```bash
-systemctl status smarthome-chiptool smarthome-panel
+systemctl status smarthome-matter smarthome-panel
 journalctl -u smarthome-panel -f
 ```
 
 A good health check: from the browser, `Identify` a bulb. If it blinks, the whole
-chain works — panel, chip-tool, border router, Thread.
+chain works — panel, matter-server, border router, Thread.
 
 ## Worth knowing
 

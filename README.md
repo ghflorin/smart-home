@@ -42,9 +42,38 @@ on, and that assumption went stale the moment you turned the light on from
 somewhere else. See "Who decides brightness" below.
 
 **Important limitation:** Apple Home, Google Home and DIRIGERA do **not** expose
-binding-table or ACL editing. Steps 2–3 are done with `chip-tool` (see
-`scripts/commission.sh`), so you administer the primary fabric yourself. You can
-add Apple/Google later as secondary admins through multi-admin.
+binding-table or ACL editing. Steps 2–3 are done from the panel, so you
+administer the primary fabric yourself. You can add Apple/Google later as
+secondary admins through multi-admin.
+
+### The Matter client
+
+The panel speaks Matter through
+[python-matter-server](https://github.com/home-assistant-libs/python-matter-server),
+running as a plain daemon on the Pi. Despite the package name nothing here
+involves Home Assistant: it is a WebSocket API and no more.
+
+It replaced `chip-tool`, and the reason was not taste.
+
+- **Subscriptions.** chip-tool's interactive server cannot hold one —
+  `subscribe-by-id` there behaves as a one-shot read — so every device had to be
+  polled. A battery sensor only reads its mailbox every 15 s, which makes
+  polling *structurally* late: our interval is a floor, not a target. Subscribed,
+  the device transmits the moment a value changes. The same applies to the wall
+  switch, which commands the bulb directly with the Pi nowhere in the path: the
+  panel used to find out on the next poll, and now hears it in ~0.2 s.
+- **Reads cost nothing.** matter-server keeps a live cache of every attribute on
+  every node — 265 on a bulb here — so the panel reads from memory instead of
+  waking a sleeping device and hoping the request lands in its wake-up window.
+- **CPU.** chip-tool burns a full core while completely idle
+  ([connectedhomeip#29971](https://github.com/project-chip/connectedhomeip/issues/29971):
+  libwebsockets inverts the POSIX convention for a negative timeout, so its
+  event loop spins). Measured on this Pi 3B+: 100% of one core, held at the 60 °C
+  soft-throttle point, clocked down from 1400 to 1200 MHz. matter-server idles at
+  **0.2%**. A SIGSTOP/SIGCONT freezer used to work around this and is gone with it.
+
+**Firmware OTA still uses `chip-tool`** — see [`ota/`](ota/). It is a manual,
+occasional operation with its own fabric, and it is the one thing not moved.
 
 ## What the firmware does
 
@@ -61,7 +90,7 @@ add Apple/Google later as secondary admins through multi-admin.
 | what was sent and what answered | `panel/server.py` | the panel console; the switch has no console of its own |
 | locking the switches | `src/lock_cluster.cpp` | our own cluster on dynamic endpoint 2 |
 | the status LED says what is going on | `src/status_led.cpp` | blinks only while waiting to be commissioned; dark otherwise |
-| everything on the Raspberry Pi, no laptop | [`deploy/`](deploy/) | systemd units for the panel and chip-tool |
+| everything on the Raspberry Pi, no laptop | [`deploy/`](deploy/) | systemd units for the panel and matter-server |
 | which devices are known to work | [`docs/devices.md`](docs/devices.md) | every device actually commissioned here, with what worked and what did not |
 
 ### Details that matter

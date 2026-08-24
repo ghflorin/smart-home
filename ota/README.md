@@ -7,6 +7,22 @@ nothing is left running.
 ./ota/update.sh
 ```
 
+> **chip-tool is no longer on the devices' fabric.** The panel moved to
+> python-matter-server and chip-tool's fabric was removed from every device, so
+> `update.sh` cannot reach the switch until you let it back on:
+>
+> 1. in the panel, open **Share** on the switch and copy the pairing code
+> 2. `sudo systemctl start smarthome-chiptool`
+> 3. commission chip-tool with that code, so it holds a fabric again
+> 4. run `./ota/update.sh`
+> 5. `sudo systemctl stop smarthome-chiptool`, and remove its fabric from the
+>    device when you are done — it burns a full CPU core while merely idle
+>    ([connectedhomeip#29971](https://github.com/project-chip/connectedhomeip/issues/29971))
+>
+> Each fabric takes a slot in the device, and the spec only requires five, so do
+> not leave it holding one it is not using. Moving OTA onto matter-server is the
+> obvious next step and is not done.
+
 That is all. The script bumps the version, builds, signs, starts the provider,
 tells the module to look at it, and shuts it down at the end.
 

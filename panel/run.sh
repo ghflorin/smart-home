@@ -4,23 +4,22 @@
 #
 #   ./panel/run.sh
 #
-# Starts two processes:
-#   1. chip-tool in "interactive server" mode -> WebSocket on 9002
-#   2. the panel server                       -> HTTP on 8080
+# The panel needs matter-server on the other end - that is where it does all its
+# Matter work. On the Pi that is a systemd unit
+# (deploy/smarthome-matter.service) and this script only starts the panel; set
+# MATTER_WS if it lives somewhere else.
 #
-# chip-tool uses the SAME ota/state/ as the rest of the scripts, so it sees the
-# same devices and the same fabric. It does not create another one.
+# It used to start chip-tool as well, on a second port, and redirect its stdout
+# to a log because the pairing codes were only ever printed there. None of that
+# is needed now.
 
 set -euo pipefail
 
 PANEL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck disable=SC1091
-source "$PANEL_DIR/../ota/config.sh"
 
 PANEL_PORT=${PANEL_PORT:-8080}
-WS_PORT=${WS_PORT:-9002}
+MATTER_WS=${MATTER_WS:-ws://127.0.0.1:5580/ws}
 
-[ -x "$CHIP_TOOL" ] || { echo "chip-tool is missing - run ./ota/setup.sh"; exit 1; }
 for mod in websockets segno; do
 	python3 -c "import $mod" 2>/dev/null || {
 		echo "the python package '$mod' is missing:"
@@ -29,23 +28,26 @@ for mod in websockets segno; do
 	}
 done
 
-# We redirect chip-tool's stdout into a log: the pairing codes (manual + QR)
-# are written there, not into the JSON response on the WebSocket.
-CHIP_LOG="$CHIP_TOOL_STORAGE/chip-tool.log"
-: > "$CHIP_LOG"
-
-echo "=== chip-tool interactive server, port $WS_PORT ==="
-echo "    log: $CHIP_LOG"
-"$CHIP_TOOL" interactive server --port "$WS_PORT" \
-	--storage-directory "$CHIP_TOOL_STORAGE" > "$CHIP_LOG" 2>&1 &
-CHIP_PID=$!
-trap 'echo; echo "stopping chip-tool ($CHIP_PID)"; kill $CHIP_PID 2>/dev/null || true' EXIT
-sleep 2
-kill -0 $CHIP_PID 2>/dev/null || { echo "chip-tool died on startup"; exit 1; }
+# A clear message beats a page full of failed reads. The panel survives
+# matter-server being down - it retries with backoff - but if it is not there at
+# all you want to know now.
+python3 - "$MATTER_WS" <<'PY' || {
+import sys
+from websockets.sync.client import connect
+try:
+    with connect(sys.argv[1], open_timeout=5) as ws:
+        ws.recv(timeout=10)
+except Exception as exc:
+    print(f"cannot reach matter-server at {sys.argv[1]}: {exc}")
+    raise SystemExit(1)
+PY
+	echo
+	echo "Start it first:  sudo systemctl start smarthome-matter"
+	echo "or point the panel elsewhere with MATTER_WS=..."
+	exit 1
+}
 
 echo
 echo "=== Panel: http://$(hostname -s).local:$PANEL_PORT ==="
 echo
-CHIP_TOOL_WS="ws://127.0.0.1:$WS_PORT" PANEL_PORT="$PANEL_PORT" \
-	CHIP_TOOL_LOG="$CHIP_LOG" \
-	python3 "$PANEL_DIR/server.py"
+MATTER_WS="$MATTER_WS" PANEL_PORT="$PANEL_PORT" python3 "$PANEL_DIR/server.py"

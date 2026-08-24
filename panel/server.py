@@ -18,16 +18,12 @@ The protocol is simple: you send the command as text ("identify identify 10 1001
 Start with: ./run.sh  (starts both chip-tool and this server)
 """
 
-import atexit
 import collections
 import json
 import math
 import os
 import pathlib
-import random
 import re
-import signal
-import subprocess
 import threading
 import time
 import urllib.parse
@@ -57,27 +53,13 @@ DEVICES_FILE = HERE / "devices.json"
 THREAD_DATASET = pathlib.Path(
     os.environ.get("THREAD_DATASET",
                    str(HERE.parent / "ota" / "state" / "thread-dataset.hex")))
-CHIP_TOOL_WS = os.environ.get("CHIP_TOOL_WS", "ws://127.0.0.1:9002")
 PANEL_PORT = int(os.environ.get("PANEL_PORT", "8080"))
-
-# chip-tool's log, redirected there by run.sh.
-#
-# Why we need it: the pairing codes (manual + QR) do NOT come back in the JSON
-# response on the WebSocket - CommissioningWindowOpener.cpp prints them with
-# ChipLogProgress, so they land on the process's stdout. We read them from there.
-#
-# The alternative would have been to run a second chip-tool as a subprocess, but
-# then two processes would write to the same storage - exactly what you do not
-# want with the fabric credentials.
-CHIP_TOOL_LOG = pathlib.Path(
-    os.environ.get("CHIP_TOOL_LOG", str(HERE.parent / "ota" / "state" / "chip-tool.log")))
 
 # Skips attestation certificate verification during commissioning.
 #
-# WHY THIS EXISTS. chip-tool checks the device's signature against the
-# attestation roots (PAA) in --paa-trust-store-path. The set shipped with the
-# SDK holds 40 authorities and does NOT include IKEA (vendor 0x117C), so every
-# IKEA bulb fails with
+# WHY THIS EXISTS. The controller checks the device's signature against the
+# attestation roots (PAA) it ships with. That set holds 40 authorities and does
+# NOT include IKEA (vendor 0x117C), so every IKEA bulb fails with
 #
 #   Failed in verifying 'Attestation Information': err 101   (kPaaNotFound)
 #
@@ -91,102 +73,25 @@ CHIP_TOOL_LOG = pathlib.Path(
 # (see deploy/paa-certs.sh).
 BYPASS_ATTESTATION = os.environ.get("PANEL_BYPASS_ATTESTATION", "") not in ("", "0", "false")
 
-# ------------------------------------------------ keeping chip-tool asleep
+# ------------------------------------------- what used to be here, and why not
 #
-# chip-tool burns a whole CPU core while completely idle. It is not doing work:
-# examples/common/websocket-server/WebSocketServer.cpp runs lws_service(ctx, -1)
-# in a while loop, and libwebsockets inverts the POSIX convention - a negative
-# timeout means "do not block" rather than "block forever", so the loop spins.
-# Reported upstream as connectedhomeip#29971 (October 2023), still open.
+# A freezer: a thread that SIGSTOPped chip-tool when nothing had used it for two
+# minutes, and SIGCONTed it just before each command.
 #
-# Measured on this installation: 100% of one core for eight days straight, which
-# also held the Pi 3B+ at its 60 C soft-throttle point, running at 1200 MHz
-# instead of 1400. So the busy loop costs roughly 1.5 W and 14% of the clock.
+# chip-tool burns a whole CPU core while completely idle, and it is not doing
+# work: examples/common/websocket-server/WebSocketServer.cpp runs
+# lws_service(ctx, -1) in a loop, and libwebsockets inverts the POSIX convention
+# - a negative timeout means "do not block" rather than "block forever", so the
+# loop spins. Reported upstream as connectedhomeip#29971 in October 2023, still
+# open. Measured here: 100% of one core for eight days straight, which also held
+# this Pi 3B+ at its 60 C soft-throttle point, running at 1200 MHz instead of
+# 1400 - roughly 1.5 W and 14% of the clock, to do nothing.
 #
-# Until the upstream loop is fixed we SIGSTOP the process when nothing has used
-# it for a while, and SIGCONT it just before we do. Frozen, it uses no CPU at
-# all while keeping its memory, its sockets and its CASE sessions - which is why
-# this is better than stopping the service: no restart latency, and the fabric
-# storage is never touched, so it cannot be corrupted by a badly timed shutdown.
+# Freezing a process to work around its event loop is not a fix, and it brought
+# its own hazard: a frozen chip-tool is indistinguishable from a dead one, so
+# every path had to thaw first and never freeze mid-command.
 #
-# The safety property that matters: a frozen chip-tool looks exactly like a dead
-# one from outside. So we thaw unconditionally when the panel starts and when it
-# stops, and we never freeze while a command is in flight.
-CHIP_IDLE_SEC = int(os.environ.get("PANEL_CHIP_IDLE_SEC", "120"))
-CHIP_PROC_MATCH = os.environ.get("PANEL_CHIP_PROC", "chip-tool interactive")
-
-_freeze_lock = threading.Lock()
-_frozen = False
-_last_use = time.monotonic()
-
-
-def _chip_pid():
-    """PID of the running chip-tool, or None. Re-read every time: the service
-    can restart under us, and signalling a recycled PID would be worse than
-    doing nothing."""
-    try:
-        out = subprocess.run(["pgrep", "-f", CHIP_PROC_MATCH],
-                             capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    pids = [int(x) for x in out.stdout.split() if x.isdigit()]
-    return pids[0] if pids else None
-
-
-def _signal_chip(sig: int) -> bool:
-    pid = _chip_pid()
-    if pid is None:
-        return False
-    try:
-        os.kill(pid, sig)
-        return True
-    except OSError as exc:
-        log(f"cannot signal chip-tool (pid {pid}): {exc}", "warn")
-        return False
-
-
-def chip_thaw(force: bool = False):
-    """Make sure chip-tool is runnable, and reset the idle timer.
-
-    force=True signals unconditionally. That matters at startup and at
-    shutdown: a chip-tool left frozen by a PREVIOUS run of the panel is not
-    tracked by our _frozen flag, which starts False in a fresh process - so the
-    guarded path would do nothing and leave a Matter admin that accepts
-    connections and answers none of them. SIGCONT to an already-running process
-    is a no-op, so forcing costs nothing.
-    """
-    global _frozen, _last_use
-    with _freeze_lock:
-        _last_use = time.monotonic()
-        if _frozen or force:
-            _signal_chip(signal.SIGCONT)
-            _frozen = False
-
-
-def chip_freeze_if_idle():
-    global _frozen
-    with _freeze_lock:
-        if _frozen or time.monotonic() - _last_use < CHIP_IDLE_SEC:
-            return
-        # Never freeze mid-command. _ws_lock is held for the whole exchange.
-        if _ws_lock.locked():
-            return
-        if _signal_chip(signal.SIGSTOP):
-            _frozen = True
-
-
-def freezer():
-    """Background thread. Cheap: a clock comparison every few seconds."""
-    while True:
-        time.sleep(5)
-        try:
-            chip_freeze_if_idle()
-        except Exception as exc:  # noqa: BLE001 - must never kill the thread
-            log(f"freezer: {exc}", "warn")
-
-
-# chip-tool does not support concurrent commands on the same socket.
-_ws_lock = threading.Lock()
+# All of it is gone with chip-tool itself. matter-server idles at 0.2%.
 
 
 
@@ -220,105 +125,10 @@ def log_since(since: int) -> dict:
         return {"lines": lines, "next": _log_seq}
 
 
-def chip_error(resp: dict):
-    """The error from a chip-tool response, or None.
-
-    chip-tool reports a failure in TWO different places, and it cost us dearly:
-
-      at the top level  {"error": "..."}       - we never reached the device
-      nested inside     {"results": [{"error": "FAILURE"}]}  - it answered "no"
-
-    A failed commissioning has the second shape. Checking only the first, the
-    panel reported "bulb added" for a bulb that had been rejected at attestation
-    verification, wrote it into the registry, and went on to write its ACL and
-    binding. We then went looking for that bulb on the Thread network, where it
-    could not possibly be.
-    """
-    if resp.get("error"):
-        return resp["error"]
-    for res in resp.get("results", []):
-        if isinstance(res, dict) and res.get("error"):
-            return res["error"]
-    return None
 
 
-def _short(resp: dict, limit: int = 220) -> str:
-    """chip-tool's full response is unreadable in a console a few lines tall.
-    We keep only the part that says whether it worked."""
-    err = chip_error(resp)
-    if err:
-        return str(err)[:limit]
-    txt = json.dumps(resp, separators=(",", ":"))
-    return txt[:limit] + ("..." if len(txt) > limit else "")
 
 
-def chip(command: str, timeout: float = 30.0) -> dict:
-    """Send a command to chip-tool and return the JSON response.
-
-    chip-tool gets a SHORTER deadline than we do, and that is not a refinement -
-    it is what keeps the whole panel from wedging.
-    Without --timeout, chip-tool uses its own deadline, longer than ours. When we
-    give up and close the socket, it KEEPS working on the command. Its WebSocket
-    server is single-threaded, so while it is busy it cannot complete new
-    connections - hence "timed out while waiting for handshake response" on
-    anything else you try meanwhile, and the impression that it died. And when it
-    does finish, the late response goes out on the CURRENT connection, so it can
-    land on a different request than the one that produced it.
-
-    With the deadline handed to it, it always answers first, with a clean error,
-    and nothing is left in flight.
-    """
-    if "--timeout" not in command:
-        command = f"{command} --timeout {max(5, int(timeout) - 8)}"
-
-    chip_thaw()
-    log(f"$ {command}", "cmd")
-    t0 = time.monotonic()
-
-    # Connecting and waiting for the response are handled SEPARATELY, on
-    # purpose.
-    #
-    # "cannot connect to chip-tool" and "chip-tool took the command but nobody
-    # answered" look the same as exceptions, yet they mean completely different
-    # things: the first is a problem on the Pi, the second is on the radio. Mix
-    # them up and the panel says "chip-tool is down" when the RCP radio is the
-    # thing that is missing - and you spend hours looking in the wrong place.
-    with _ws_lock:
-        try:
-            # ping_interval=None: chip-tool does not answer pings while it is
-            # executing a command, and the library's keepalive was closing the
-            # connection from our side after ~50 s - that is exactly the orphan
-            # the --timeout above avoids. The recv deadline has to be the only
-            # one in charge.
-            conn = ws_connect(CHIP_TOOL_WS, open_timeout=5, ping_interval=None)
-            ws = conn.__enter__()
-        except Exception as exc:  # noqa: BLE001 - we want the raw message in the UI
-            out = {"error": f"{type(exc).__name__}: {exc}", "command": command,
-                   "transport": True}
-            log(f"chip-tool unreachable after {time.monotonic() - t0:.1f}s: "
-                f"{out['error']}", "err")
-            return out
-
-        try:
-            ws.send(command)
-            raw = ws.recv(timeout=timeout)
-        except Exception as exc:  # noqa: BLE001
-            out = {"error": f"{type(exc).__name__}: {exc}", "command": command}
-            log(f"no response after {time.monotonic() - t0:.1f}s: "
-                f"{out['error']}", "err")
-            return out
-        finally:
-            conn.__exit__(None, None, None)
-
-    try:
-        resp = json.loads(raw)
-    except json.JSONDecodeError:
-        resp = {"error": "response was not JSON", "raw": str(raw)[:2000]}
-
-    dt = time.monotonic() - t0
-    log(f"{dt:.1f}s  {_short(resp)}", "err" if chip_error(resp) else "ok")
-    chip_thaw()   # refresh the idle timer; the command just finished
-    return resp
 
 
 def load_devices() -> dict:
@@ -511,18 +321,6 @@ def read_measurements(dev: dict) -> dict:
     return out
 
 
-def acl_for(node: int, switch_nodes: list) -> str:
-    """A bulb's ACL: the admin plus the switches allowed to control it.
-
-    Manage, not Operate: on/off would work with Operate too, but writing
-    StartUpOnOff requires Manage."""
-    subjects = ",".join(str(n) for n in switch_nodes)
-    return (f'accesscontrol write acl \'['
-            f'{{"fabricIndex":1,"privilege":5,"authMode":2,'
-            f'"subjects":[{ADMIN_NODE}],"targets":null}}'
-            + (f',{{"fabricIndex":1,"privilege":4,"authMode":2,'
-               f'"subjects":[{subjects}],"targets":null}}' if subjects else "")
-            + f']\' {node} 0')
 
 
 # ColorControl (0x0300) feature bits, checked against cluster-enums.h.
@@ -575,9 +373,6 @@ def binding_entries(switch: dict, bulbs: list) -> list:
     return entries
 
 
-def binding_for(switch: dict, bulbs: list) -> str:
-    return (f"binding write binding '{json.dumps(binding_entries(switch, bulbs))}' "
-            f"{switch['node']} {switch.get('endpoint', 1)}")
 
 
 def verhoeff(number: str) -> int:
@@ -696,116 +491,10 @@ STEP_EXPLANATIONS = {
 }
 
 
-def commissioning_reason(from_pos: int, timeout: float = 4.0) -> str:
-    """The failure reason, from chip-tool's log, starting at from_pos."""
-    deadline = time.monotonic() + timeout
-    chunk = ""
-    while time.monotonic() < deadline:
-        try:
-            with CHIP_TOOL_LOG.open("r", errors="replace") as fh:
-                fh.seek(from_pos)
-                chunk = fh.read()
-        except OSError:
-            chunk = ""
-        if "Cleanup" in chunk or "commissioning Failure" in chunk:
-            break
-        time.sleep(0.3)
-
-    steps = RE_FAILED_STEP.findall(chunk)
-    if steps:
-        # The first step that failed, not the last: the rest are consequences.
-        step, error = steps[0]
-        explanation = STEP_EXPLANATIONS.get(step)
-        return (f"failed at step '{step}'"
-                + (f" - {explanation}" if explanation else f" ({error.strip()})"))
-
-    general = RE_GENERAL_FAILURE.search(chunk)
-    if general:
-        return general.group(1).strip()
-
-    # No commissioning step started at all = we never reached the device.
-    if "Discovered device" not in chunk and "BLE" not in chunk:
-        return ("could not find the device. Usually that means it is not in "
-                "pairing mode (factory reset it again) or that it is too far "
-                "from the Raspberry Pi")
-    return ""
 
 
-def read_pairing_codes(from_pos: int, timeout: float = 5.0) -> dict:
-    """Read the codes from the tail of chip-tool's log, starting at from_pos.
-
-    The log lines can arrive slightly after the WebSocket response, so we retry
-    briefly instead of reading once.
-    """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            with CHIP_TOOL_LOG.open("r", errors="replace") as fh:
-                fh.seek(from_pos)
-                chunk = fh.read()
-        except OSError:
-            chunk = ""
-
-        manual = RE_MANUAL.search(chunk)
-        qr = RE_QR.search(chunk)
-        if manual and qr:
-            return {"manual": manual.group(1), "qr": qr.group(1)}
-        time.sleep(0.3)
-
-    return {"manual": manual.group(1) if manual else None,
-            "qr": qr.group(1) if qr else None}
 
 
-def extract_bindings(response: dict) -> list:
-    """
-    Pull the binding table out of a chip-tool response.
-
-    The exact JSON shape varies between chip-tool versions, so we search
-    recursively for the first list of dicts that looks like a binding table. If
-    we find nothing, the UI shows the raw response so you can adjust.
-
-    Two shapes, and we have seen both from the same version:
-
-      named:   {"fabricIndex": 1, "node": 1001, "endpoint": 1, "cluster": 6}
-      by ID:   {"254": 1, "1": 1001, "3": 1, "4": 6}
-
-    The second is what chip-tool returns when it reads the attribute by ID and
-    does not have the cluster description at hand. Looking only for the 'node'
-    key means reporting "0 bindings" for a switch that really does control the
-    bulb - which is the expensive mistake: you believe it is not bound and bind
-    it again, or go digging through the firmware for nothing.
-    """
-    # Field IDs from the Binding cluster's (0x001E) TargetStruct.
-    FIELDS = {"1": "node", "2": "group", "3": "endpoint", "4": "cluster",
-              "254": "fabricIndex"}
-
-    def normalize(entry: dict) -> dict:
-        if "node" in entry or "group" in entry:
-            return entry
-        return {name: entry[field_id] for field_id, name in FIELDS.items()
-                if field_id in entry}
-
-    def is_table(obj) -> bool:
-        """A binding entry has either a node or a group - in both shapes."""
-        return bool(obj) and all(
-            isinstance(i, dict) and ({"node", "group", "1", "2"} & i.keys())
-            for i in obj)
-
-    found = []
-
-    def walk(obj):
-        if isinstance(obj, list):
-            if is_table(obj):
-                found.extend(normalize(i) for i in obj)
-                return
-            for item in obj:
-                walk(item)
-        elif isinstance(obj, dict):
-            for value in obj.values():
-                walk(value)
-
-    walk(response)
-    return found
 
 
 # ------------------------------------------------------------------- schedule
@@ -940,30 +629,8 @@ def set_role(node: int, role: int) -> dict:
     return {"node": node, "ok": True, "role": role}
 
 
-def acl_for_switch(node: int, lock_nodes: list) -> str:
-    """The ACL of a switch controlled by a lock.
-
-    Switches had no ACL at all until now - nobody wrote anything to them. A
-    switch in the lock role does write an attribute on them, so it needs the
-    right. Manage, as for bulbs: it is an attribute write, not a command."""
-    subjects = ",".join(str(n) for n in lock_nodes)
-    return (f'accesscontrol write acl \'['
-            f'{{"fabricIndex":1,"privilege":5,"authMode":2,'
-            f'"subjects":[{ADMIN_NODE}],"targets":null}}'
-            + (f',{{"fabricIndex":1,"privilege":4,"authMode":2,'
-               f'"subjects":[{subjects}],"targets":null}}' if subjects else "")
-            + f']\' {node} 0')
 
 
-def lock_binding_for(lock_sw: dict, targets: list) -> str:
-    """A lock's binding table: the switches it locks.
-
-    It targets endpoint 2 and the custom cluster, not endpoint 1 and OnOff - a
-    lock does not turn anything on, it writes a state."""
-    entries = [{"fabricIndex": 1, "node": t["node"], "endpoint": SCHED_ENDPOINT,
-                "cluster": int(SCHED_CLUSTER, 16)} for t in targets]
-    return (f"binding write binding '{json.dumps(entries)}' "
-            f"{lock_sw['node']} {lock_sw.get('endpoint', 1)}")
 
 
 # ------------------------------------------------------- state kept on the Pi
@@ -996,7 +663,7 @@ _ATTRS = {name: int(val, 16) for name, val in (
 _state_lock = threading.Lock()
 _state = {"rev": 0, "nodes": {}}
 _state_wake = threading.Event()
-_chip_ok = True   # did the last attempt to talk to chip-tool succeed?
+_matter_ok = True   # did the last attempt to talk to matter-server succeed?
 
 
 def state_load():
@@ -1090,34 +757,8 @@ def state_put(node, values: dict = None, meta: dict = None) -> list:
     return changed
 
 
-def attr_index(resp: dict) -> dict:
-    """(cluster, endpoint, attribute) -> the entry from 'results'.
-
-    With a single path read, "take the first value in results" worked too. With
-    several paths in the same response, that could return the binding table as
-    "locked" - the expensive error, produced by an optimization. An element with
-    no clusterId is the error aggregate and must not be allowed to throw away
-    the paths that succeeded.
-    """
-    out = {}
-    for res in resp.get("results", []):
-        if "clusterId" not in res:
-            continue
-        try:
-            key = (int(res["clusterId"]), int(res["endpointId"]),
-                   int(res["attributeId"]))
-        except (KeyError, TypeError, ValueError):
-            continue
-        out[key] = res
-    return out
 
 
-def _first_attr(resp: dict):
-    """The first attribute value in a response that read a single path."""
-    for entry in attr_index(resp).values():
-        if "value" in entry:
-            return entry["value"]
-    return None
 
 
 def read_switch_state(node: int, endpoint: int = 1) -> dict:
@@ -1138,16 +779,16 @@ def read_switch_state(node: int, endpoint: int = 1) -> dict:
 
 def refresh_switch(sw: dict) -> list:
     """Read a switch and update the state. Returns which facets changed."""
-    global _chip_ok
+    global _matter_ok
     node = sw["node"]
     endpoint = sw.get("endpoint", 1)
     attrs, err = read_switch_state(node, endpoint)
 
     if attrs is None:
-        _chip_ok = False
+        _matter_ok = False
         state_put(node, meta={"readAt": time.time(), "ok": False, "err": err})
         return []
-    _chip_ok = True
+    _matter_ok = True
 
     # None = we did not find out. Different from [] or false, which are answers.
     binding_raw = m_get(attrs, endpoint, BINDING_CLUSTER_ID, 0x0000)
@@ -1282,34 +923,27 @@ def refresh_bulb(bulb: dict) -> list:
 # on its own schedule, and stays quiet otherwise. It is both faster and kinder to
 # the battery than any polling.
 #
-# Held on a connection of its own. `chip()` opens a socket per command and closes
-# it; a subscription has to stay open to receive reports, so it cannot share
-# that path. Verified against the real device that the panel's ordinary traffic
-# continues normally while this connection is held.
-# OFF by default, because it does not work through chip-tool's interactive
-# server and the failure is silent and dangerous.
+# matter-server holds those subscriptions - to every attribute on every node -
+# and the panel receives what they report over one socket. See matter_link.py.
+# What is left here is the bookkeeping that decides whether a node is being
+# heard from, and therefore whether the ordinary poller should leave it alone.
 #
-# `subscribe-by-id` there behaves like a one-shot read: the command returns the
-# current value as its result and the subscription is torn down with it. The
-# priming report looks exactly like a subscription working. Nothing follows it -
-# confirmed in chip-tool's own log, where the last traffic with the node is the
-# identify command and no ReportData ever arrives.
+# This used to be attempted through chip-tool and it did not work, in a way
+# worth remembering: `subscribe-by-id` on its interactive server behaves like a
+# one-shot read - the command returns the current value as its result and the
+# subscription is torn down with it. The priming report looks exactly like a
+# subscription working, and nothing ever follows. Worse than polling rather than
+# merely no better, because a node believed to be subscribed is not polled, so
+# its value freezes at the priming report for ever. A door sensor stuck on
+# "closed" is exactly the reading somebody acts on without going to look.
 #
-# That is worse than polling rather than merely no better: a node believed to be
-# subscribed is not polled, so its value freezes at whatever the priming report
-# said and never moves again. A door sensor stuck on "closed" is exactly the
-# reading somebody would act on.
-#
-# Kept, off, because the approach is right and only the transport is wrong -
-# a chip-tool that streams reports, or another Matter client, makes this work.
-SUBSCRIBE = os.environ.get("PANEL_SUBSCRIBE", "0").lower() not in ("0", "no", "off")
-# min 0: report the moment it changes. max: the keep-alive ceiling, the longest
-# the device may stay silent before saying it is still there.
-SUB_MIN = int(os.environ.get("PANEL_SUB_MIN", "0"))
-SUB_MAX = int(os.environ.get("PANEL_SUB_MAX", "600"))
+# Hence SUB_SILENCE below: liveness is fed only by data ACTUALLY ARRIVING. If
+# matter-server dies or a subscription lapses, the node goes quiet, falls out of
+# `subscribed()`, and the poller picks it up again. A broken link costs latency,
+# never a stale value presented as current.
 
-# Which readings are worth subscribing to rather than polling: the ones that are
-# an EVENT. A temperature that drifts is fine on a poll; a door is not.
+# Which readings are an EVENT rather than a quantity. A temperature that drifts
+# is fine on a poll; a door is not.
 SUB_KEYS = {"contact"}
 
 # node -> when it last told us something. Not a flag: a subscription that has
@@ -1335,17 +969,6 @@ def sub_heard(node):
         _subscribed[int(node)] = time.time()
 
 
-def sub_paths(devices: dict) -> list:
-    """(node, cluster, attr, endpoint, key, scale) for everything worth watching."""
-    out = []
-    for dev in devices.get("devices", []):
-        desc = dev.get("desc") or {}
-        for ep, info in (desc.get("endpoints") or {}).items():
-            have = set(info.get("clusters") or [])
-            for cluster, attr, key, _lab, _unit, scale in MEASURED:
-                if key in SUB_KEYS and cluster in have:
-                    out.append((dev["node"], cluster, attr, int(ep), key, scale))
-    return out
 
 
 # How often to ask a device whose reading is an EVENT. Not the same question as
@@ -1693,65 +1316,8 @@ def matter_watch():
     link.run()
 
 
-def watcher():
-    """Keep a subscription open for every device that deserves one.
-
-    One connection, reconnecting with backoff. Everything it learns goes through
-    state_put, exactly as a poll would, so nothing downstream has to know where a
-    value came from.
-    """
-    if not SUBSCRIBE:
-        log("subscriptions are off (PANEL_SUBSCRIBE=0); sensors are polled", "info")
-        return
-
-    backoff = 5
-    while True:
-        paths = []
-        try:
-            paths = sub_paths(load_devices())
-        except (OSError, ValueError):
-            pass
-        if not paths:
-            time.sleep(30)
-            continue
-
-        try:
-            _run_subscriptions(paths)
-            backoff = 5          # it worked for a while; start over cheaply
-        except Exception as exc:  # noqa: BLE001
-            log(f"subscription dropped: {exc}", "warn")
-        finally:
-            with _sub_lock:
-                _subscribed.clear()
-        time.sleep(backoff)
-        backoff = min(120, backoff * 2)
 
 
-def _run_subscriptions(paths: list):
-    """Open one socket, subscribe every path on it, then read reports for ever."""
-    chip_thaw()
-    conn = ws_connect(CHIP_TOOL_WS, open_timeout=10, ping_interval=None)
-    try:
-        by_path = {}
-        for node, cluster, attr, ep, key, scale in paths:
-            cmd = (f"any subscribe-by-id 0x{cluster:X} 0x{attr:X} "
-                   f"{SUB_MIN} {SUB_MAX} {node} {ep}")
-            log(f"$ {cmd}", "cmd")
-            conn.send(cmd)
-            by_path[(int(node), cluster, ep, attr)] = (key, scale)
-            sub_heard(node)
-
-        log(f"watching {len(paths)} attribute(s) by subscription", "ok")
-        while True:
-            # No timeout: a subscription is allowed to be silent for as long as
-            # SUB_MAX, and a silent door is the normal case.
-            raw = conn.recv()
-            _absorb_report(raw, by_path)
-    finally:
-        try:
-            conn.close()
-        except Exception:  # noqa: BLE001
-            pass
 
 
 def _absorb_report(raw, by_path: dict):
@@ -2596,7 +2162,7 @@ class Handler(BaseHTTPRequestHandler):
             # about. A switch unplugged an hour ago is "not answering", even
             # though we still know its table.
             health = {"total": len(sw_list), "reachable": 0,
-                      "chipTool": _chip_ok}
+                      "matter": _matter_ok}
             for sw in sw_list:
                 st = state_of(sw["node"])
                 out[str(sw["node"])] = st.get("binding") or []
@@ -3609,21 +3175,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"Panel:     http://0.0.0.0:{PANEL_PORT}")
-    print(f"chip-tool: {CHIP_TOOL_WS}")
-    print(f"state:     {STATE_FILE} (refresh every {REFRESH_SEC} s)")
+    print(f"Panel:         http://0.0.0.0:{PANEL_PORT}")
+    print(f"matter-server: {MATTER_WS}")
+    print(f"state:         {STATE_FILE} (refresh every {REFRESH_SEC} s)")
     state_load()
 
-    # A frozen chip-tool left over from a previous run would look dead, and our
-    # _frozen flag knows nothing about it - hence force.
-    chip_thaw(force=True)
-    atexit.register(chip_thaw, True)
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda *_: (chip_thaw(True), os._exit(0)))
-
     threading.Thread(target=refresher, name="refresher", daemon=True).start()
-    threading.Thread(target=watcher, name="watcher", daemon=True).start()
     threading.Thread(target=event_watch, name="events", daemon=True).start()
     threading.Thread(target=matter_watch, name="matter", daemon=True).start()
-    threading.Thread(target=freezer, name="freezer", daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PANEL_PORT), Handler).serve_forever()
