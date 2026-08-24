@@ -1051,12 +1051,22 @@
     font-variant-numeric: tabular-nums;
   }
   .hk-lvl.off .hk-ico, .hk-lvl.off .hk-pct { opacity: .4; }
-  /* Off is a state worth seeing from across the room, so the whole pair drains
-     of colour rather than merely dimming. The gradient keeps its shape - you can
-     still see where the knob sits and drag it - it just stops claiming the lamp
-     is doing anything. */
-  .hk-lvl.off, .hk-ct.off { filter: grayscale(1); }
-  .hk-ct.off { opacity: .45; }
+  /* Off does not merely lose its colour - it sinks into the sheet. Grey on its
+     own was still a solid object sitting there being grey; what should be left
+     is the outline of a control and nothing that looks live.
+     Everything tints toward --panel-hi, the sheet's own background, so this
+     holds in both themes instead of being a light-mode guess. The brightness
+     panel keeps its number readable: with the lamp dark that number is OnLevel,
+     which is the one thing worth knowing about a light that is off. */
+  .hk-lvl.off, .hk-ct.off {
+    filter: grayscale(1);
+    border-color: color-mix(in srgb, var(--line-hi) 40%, var(--panel-hi));
+  }
+  .hk-lvl.off {
+    background: color-mix(in srgb, var(--sunken) 28%, var(--panel-hi));
+  }
+  .hk-lvl.off .hk-fill { opacity: .12; }
+  .hk-ct.off { opacity: .3; }
   .hk-lvl, .hk-ct { transition: filter .3s ease, opacity .3s ease; }
   .hk.off .hk-cap { opacity: .55; }
   @media (prefers-reduced-motion: reduce) {
