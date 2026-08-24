@@ -1,0 +1,12 @@
+# The chip-tool log grows without bound. Unrotated it fills the card in a few
+# months. Copy this to /etc/logrotate.d/smarthome
+/opt/smarthome/ota/state/chip-tool.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+    # copytruncate, not create: chip-tool holds the file open and ignores
+    # SIGHUP, so a rename would leave its descriptor on the old file.
+    copytruncate
+}

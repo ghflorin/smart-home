@@ -1,0 +1,40 @@
+/*
+ * We reclaim the memory reserved by default for the FLPR coprocessor.
+ *
+ * nrf54l15.dtsi splits the SoC: 188KB SRAM + 1428KB RRAM for cpuapp, the rest
+ * (68KB SRAM + 96KB RRAM) for cpuflpr. We run nothing on the FLPR, so we take
+ * all of it. The sample's own overlay for nrf54l15dk does the same ("restore
+ * full RRAM and SRAM space").
+ *
+ * Gain: RAM 188 -> 256KB, RRAM 1428 -> 1524KB.
+ *
+ * NOTE: if you ever put code on the FLPR (cpuflpr / cpuflpr_xip), delete this
+ * file - otherwise the two cores will trample each other's memory.
+ */
+&cpuapp_sram {
+	reg = <0x20000000 DT_SIZE_K(256)>;
+	ranges = <0x0 0x20000000 0x40000>;
+};
+
+&cpuapp_rram {
+	reg = <0x0 DT_SIZE_K(1524)>;
+};
+
+/*
+ * The accelerometer stays ENABLED in devicetree, deliberately, so that it can be
+ * powered down EXPLICITLY.
+ *
+ * The first version disabled it in devicetree: the driver was not built, nobody
+ * talked to the chip, and we relied on the LIS2DH powering up in power-down
+ * mode. That is what the datasheet says, but we had never read a register off
+ * this board - so it was an assumption, not a measurement.
+ *
+ * With the driver built, lis2dh_init() really does WRITE the ODR at
+ * initialization (zephyr/drivers/sensor/st/lis2dh/lis2dh.c:431), i.e. it starts
+ * the sensor. We power it down immediately afterwards, from src/automation.cpp.
+ * The cost is a few milliseconds of the sensor being on at every boot; the gain
+ * is certainty that it stays off, no matter which chip is actually fitted and
+ * what its power-on defaults are.
+ *
+ * The gestures remain compiled out - see CONFIG_SMARTHOME_ACCEL_GESTURES.
+ */

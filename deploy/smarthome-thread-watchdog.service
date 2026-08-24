@@ -1,0 +1,17 @@
+[Unit]
+# Puts the Thread radio back when it goes. See deploy/thread-watchdog.sh for
+# what it actually does and why a restart is not always enough.
+#
+# Not tied to otbr-agent with After= or Requires=: this has to run precisely
+# when otbr-agent is NOT working, and a dependency on a unit that reports
+# `active (exited)` while its daemon is dead would be a dependency on a lie.
+Description=smarthome - Thread radio watchdog
+Documentation=file:/opt/smarthome/deploy/thread-watchdog.sh
+
+[Service]
+Type=oneshot
+# root: ot-ctl, systemctl and writing to /sys/bus/usb/drivers all need it.
+ExecStart=/opt/smarthome/deploy/thread-watchdog.sh
+# The script sleeps while it waits for an attach; this is a ceiling on that,
+# not an expectation.
+TimeoutStartSec=180

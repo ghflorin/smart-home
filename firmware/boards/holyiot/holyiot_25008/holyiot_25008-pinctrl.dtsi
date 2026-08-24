@@ -1,0 +1,93 @@
+&pinctrl {
+	/* UART on P1.04 (TX) / P1.05 (RX), as in the official board upstream in
+	 * Zephyr. It was missing from the community definition we started from -
+	 * which is why we believed the module had no console at all. */
+	/omit-if-no-ref/ uart20_default: uart20_default {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 1, 4)>;
+		};
+
+		group2 {
+			psels = <NRF_PSEL(UART_RX, 1, 5)>;
+			bias-pull-up;
+		};
+	};
+
+	/omit-if-no-ref/ uart20_sleep: uart20_sleep {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 1, 4)>,
+				<NRF_PSEL(UART_RX, 1, 5)>;
+			low-power-enable;
+		};
+	};
+
+
+	/* PWM for the RGB LED.
+	 *
+	 * WARNING: on the module we have, only PWM_OUT1 (P1.10, green) actually
+	 * lights anything. PWM_OUT0 and PWM_OUT2 light nothing at all.
+	 *
+	 * Measured, not inferred. With the LED engine's background effect written
+	 * directly over SWD and read back to confirm it landed:
+	 *     rgb(0,255,0) -> bright green
+	 *     rgb(255,0,0) -> nothing
+	 *     rgb(0,0,255) -> nothing
+	 *
+	 * The pin numbers below are what the Zephyr board documentation says, and
+	 * they were once described here as "confirmed on the board" using
+	 * CONFIG_SMARTHOME_LED_CHANNEL_TEST. That confirmation was worthless: the
+	 * test lights one channel at a time and asks you which color you see, and
+	 * because the same green LED lit up every time, the reported order was the
+	 * order we expected rather than the order we observed. A test whose result
+	 * you can guess in advance confirms nothing.
+	 *
+	 * The consequence is not cosmetic. Any color whose green component is
+	 * small comes out nearly dark: rgb(255,32,8), which is a deep red-orange
+	 * on paper, drives green at 32/255 and shows up as a barely visible glow.
+	 * That is why the status LED communicates through brightness rather than
+	 * color - see automation.cpp.
+	 *
+	 * Left as-is deliberately. The right fix is the real pin numbers for red
+	 * and blue, from the module schematic; guessing them by driving GPIOs on a
+	 * board carrying an accelerometer and an external flash is not worth the
+	 * risk. Until then, do not trust the red/blue entries below.
+	 *
+	 * A single PWM block (pwm20) covers all three channels: nRF PWM has 4
+	 * channels per instance sharing one period - exactly what RGB wants, where
+	 * only the duty cycle differs between channels. */
+	/omit-if-no-ref/ pwm20_default: pwm20_default {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 2, 9)>,   /* red   */
+				<NRF_PSEL(PWM_OUT1, 1, 10)>,  /* green */
+				<NRF_PSEL(PWM_OUT2, 2, 7)>;   /* blue  */
+			/*
+			 * MANDATORY for active-low LEDs.
+			 *
+			 * Without it the pin idles LOW while PWM is stopped, so
+			 * "off" actually means all three channels at full: a
+			 * constant white LED that never changes.
+			 *
+			 * The driver has a shortcut for 0% duty - it stops the
+			 * peripheral and parks the pin in GPIO - but on nRF54L
+			 * the pad stays under PWM control, so the GPIO write
+			 * never reaches it. Verified on the board: the OUT
+			 * registers of P1 and P2 showed exactly the LED bits at
+			 * 0.
+			 *
+			 * nordic,invert fixes it at the source: the PWM output
+			 * idles HIGH, so the LED is off when nothing is driving
+			 * it.
+			 */
+			nordic,invert;
+		};
+	};
+
+	/omit-if-no-ref/ pwm20_sleep: pwm20_sleep {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 2, 9)>,
+				<NRF_PSEL(PWM_OUT1, 1, 10)>,
+				<NRF_PSEL(PWM_OUT2, 2, 7)>;
+			low-power-enable;
+		};
+	};
+};

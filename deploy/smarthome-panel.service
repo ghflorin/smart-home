@@ -1,0 +1,47 @@
+[Unit]
+# The admin panel: identify, binding table, sharing a device to another ecosystem.
+Description=smarthome - admin panel
+After=smarthome-chiptool.service
+Wants=smarthome-chiptool.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/smarthome/panel
+Environment=PANEL_PORT=8080
+Environment=CHIP_TOOL_WS=ws://127.0.0.1:9002
+Environment=CHIP_TOOL_LOG=/opt/smarthome/ota/state/chip-tool.log
+# Skips attestation certificate verification during commissioning.
+#
+# Required for the IKEA bulbs: the PAA root set shipped with the Matter SDK has
+# 40 authorities and does not include IKEA (vendor 0x117C), so commissioning
+# fails with "Attestation Information: err 101" = kPaaNotFound. Confirmed: BLE
+# connects, the certificates are exchanged, and only validating them fails.
+#
+# WHAT YOU GIVE UP: the defense against a counterfeit device. With this on,
+# anything that answers gets commissioned. The panel writes a warning to the
+# console on every commissioning so this does not get forgotten.
+#
+# The correct alternative, once you have the real certificates: drop this line
+# and put them in ota/paa-root-certs with ./deploy/paa-certs.sh
+Environment=PANEL_BYPASS_ATTESTATION=1
+# Do NOT set PANEL_DEMO here. Demo mode answers with fabricated data and has no
+# business on a system that actually controls the lights.
+ExecStart=/opt/smarthome/.venv/bin/python /opt/smarthome/panel/server.py
+Restart=on-failure
+RestartSec=10
+
+# A frozen chip-tool looks exactly like a dead one from the outside, and the
+# panel is what freezes it (PANEL_CHIP_IDLE_SEC). If the panel dies abruptly -
+# OOM kill, SIGKILL, power cut mid-write - it never gets to thaw it, and the
+# next person to touch the system finds a Matter admin that accepts connections
+# and answers nothing.
+#
+# systemd runs this on every stop, including a crash, so the process is always
+# left runnable. '-' because pkill exits non-zero when it matches nothing, which
+# is the normal case when chip-tool is not running at all.
+ExecStopPost=-/usr/bin/pkill -CONT -f "chip-tool interactive"
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+CONFIG_ARM_MPU=y
+
+# Starts the GRTC counter. WITHOUT THIS, NOTHING TIME-RELATED WORKS.
+#
+# On nRF54L the GRTC is shared between cores and must be started by exactly ONE
+# of them. Every official nRF54L board in Zephyr carries this line in its
+# defconfig (nrf54l15dk, nrf54l09pdk, all variants); the community definition we
+# started from omitted it.
+#
+# The symptom when it is missing: the kernel's curr_tick stays 0 forever. That
+# is, k_uptime_get() returns 0, no delayed k_work ever fires, no k_sleep ever
+# ends - and MPSL cannot grant radio timeslots, so even flash writes synchronized
+# with the radio hang. The device looks alive (BLE works, drivers initialize) but
+# nothing that depends on time ever happens.
+CONFIG_NRF_GRTC_START_SYSCOUNTER=y

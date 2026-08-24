@@ -1,0 +1,14 @@
+[Unit]
+Description=smarthome - check the Thread radio every minute
+
+[Timer]
+# Not from boot-0: otbr-agent is still bringing the network up, and a watchdog
+# that fires into a normal startup would call it a fault and reset the radio
+# out from under it.
+OnBootSec=3min
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=smarthome-thread-watchdog.service
+
+[Install]
+WantedBy=timers.target

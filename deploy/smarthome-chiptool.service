@@ -1,0 +1,45 @@
+[Unit]
+# chip-tool in "interactive server" mode: exposes a WebSocket on 9002 that the
+# panel and the scripts talk to. Keeps CASE sessions warm between commands.
+#
+# Starts after the border router. If OTBR is slow, this does not fail - it just
+# finds no devices until the Thread network comes up.
+Description=smarthome - chip-tool interactive server
+After=network-online.target otbr-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The account this was installed under. If you change it, change it in EVERY
+# unit: systemd fails with "status=217/USER" when the user does not exist, and
+# the message does not say which unit is at fault.
+User=pi
+Group=pi
+WorkingDirectory=/opt/smarthome
+# --paa-trust-store-path: the root certificates of the Product Attestation
+# Authorities (PAA). Without them chip-tool only has the TEST roots, so any
+# commercial device is rejected at the 'AttestationVerification' step with
+# "CHIP Error 0x000000AC: Internal error" - after BLE has connected and the
+# certificates have been read, which makes it look like a network problem.
+# It is not.
+#
+# Our switch passes without them: it has test credentials compiled into the
+# firmware. An IKEA bulb does not. The certificates ship with the Matter SDK
+# under credentials/production/paa-root-certs; copy them with
+# ./deploy/paa-certs.sh
+ExecStart=/opt/smarthome/ota/tools/chip-tool interactive server \
+    --port 9002 \
+    --storage-directory /opt/smarthome/ota/state \
+    --paa-trust-store-path /opt/smarthome/ota/paa-root-certs
+
+# The pairing codes (manual + QR) are written to stdout, not to the JSON reply
+# on the WebSocket. The panel reads them out of this file, so the path has to
+# match CHIP_TOOL_LOG in smarthome-panel.service.
+StandardOutput=append:/opt/smarthome/ota/state/chip-tool.log
+StandardError=append:/opt/smarthome/ota/state/chip-tool.log
+
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

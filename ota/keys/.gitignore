@@ -1,0 +1,3 @@
+# Cheia privata de semnare NU intra in git.
+# Daca o pierzi, device-urile deja in teren nu mai pot primi update-uri OTA.
+*.pem

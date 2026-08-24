@@ -1,0 +1,97 @@
+#
+# Copyright (c) 2023 Nordic Semiconductor ASA
+#
+# SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+#
+
+config WIFI_NRF70
+	default y if BOARD_NRF7002DK
+
+#### Radio core selection
+config NRF_DEFAULT_IPC_RADIO
+	default y
+
+# Enable IEEE802.15.4 serialization to network core
+# This config automatically pulls in the `overlay-802154.conf` in the ipc_radio image
+config NETCORE_IPC_RADIO_IEEE802154
+	default y if SOC_SERIES_NRF53X && !WIFI_NRF70
+
+# Enable Bluetooth serialization to network core
+# This config automatically pulls in the `overlay-bt_hci_ipc.conf` in the ipc_radio image
+config NETCORE_IPC_RADIO_BT_HCI_IPC
+	default y if SOC_SERIES_NRF53X
+
+#### Bootloader
+# MCUboot is required for OTA (two image slots). On Holyiot both slots live in
+# internal RRAM - the modules have no external flash.
+choice BOOTLOADER
+	default BOOTLOADER_MCUBOOT if !BOARD_NRF21540DK
+endchoice
+
+if BOOTLOADER_MCUBOOT
+
+#### DFU multi-image support
+config DFU_MULTI_IMAGE_PACKAGE_BUILD
+	default y
+
+config DFU_MULTI_IMAGE_PACKAGE_APP
+	default y
+
+# Secondary slot in external flash - only on boards that actually have one.
+# The Holyiot modules do not: both slots live in internal RRAM.
+config PM_EXTERNAL_FLASH_MCUBOOT_SECONDARY
+	default y if !BOARD_HOLYIOT_25015 && !BOARD_HOLYIOT_25008
+
+#### DFU network core configuration
+if SOC_SERIES_NRF53X
+
+config MCUBOOT_UPDATEABLE_IMAGES
+	default 2
+
+choice MCUBOOT_MODE
+	default MCUBOOT_MODE_OVERWRITE_ONLY
+endchoice
+
+choice BOOT_SIGNATURE_TYPE
+	default BOOT_SIGNATURE_TYPE_RSA
+endchoice
+
+config SECURE_BOOT_NETCORE
+	default y
+
+config NETCORE_APP_UPDATE
+	default y
+
+config DFU_MULTI_IMAGE_PACKAGE_NET
+	default y
+
+endif # SOC_SERIES_NRF53X
+
+if BOARD_NRF54L15DK_NRF54L15_CPUAPP_NS
+
+# Disable checking the external drivers for NS build.
+config PM_OVERRIDE_EXTERNAL_DRIVER_CHECK
+	default y
+
+# override the mcuboot pad size, because it is not set globally for NS build.
+config PM_MCUBOOT_PAD
+	default 0x800
+
+endif # BOARD_NRF54L15DK_NRF54L15_CPUAPP_NS
+
+endif # BOOTLOADER_MCUBOOT
+
+#### Matter OTA
+# SB_CONFIG_MATTER_OTA is FORCED onto the application image
+# (nrf/sysbuild/CMakeLists.txt: set_config_bool CONFIG_CHIP_OTA_REQUESTOR), so
+# CONFIG_CHIP_OTA_REQUESTOR in boards/*.conf is ignored - it is controlled from
+# here. The default is already y; we leave it that way on every board.
+
+#### Enable generating factory data
+# Stays off on Holyiot: without a factory_data partition in the partition
+# manager, the generator script gets an empty --offset and the build fails. The
+# device then uses the test credentials compiled into the firmware.
+config MATTER_FACTORY_DATA_GENERATE
+	default y if !BOARD_NRF21540DK && !BOARD_HOLYIOT_25015 && !BOARD_HOLYIOT_25008
+
+source "share/sysbuild/Kconfig"

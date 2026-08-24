@@ -1,0 +1,36 @@
+# Build artifacts. Hundreds of megabytes each, and fully reproducible from
+# source - they have no business in history.
+build-*/
+
+# SECRETS. Do not move these out of here.
+#
+# mcuboot-signing.pem: the private key the firmware is signed with. Its public
+# half is already burned into the bootloader of every device in the house.
+# Publish it and anyone can sign firmware those devices will accept.
+ota/keys/*.pem
+
+# ota/state/: the Matter fabric credentials (chip_tool_kvs, the chip-tool
+# configs) and the Thread network dataset. Whoever has them controls every
+# bulb and switch. Whoever loses them has to factory reset each device by
+# hand - so back this directory up separately, outside git.
+ota/state/
+
+# Third-party sources and tools, reproducible via ota/setup.sh.
+ota/tools/
+ota/matter-src/
+# chip-tool binaries cross-built for the Pi (17 MB). Rebuilt by
+# deploy/build-tools-docker.sh; not worth keeping in history.
+ota/tools-linux-arm64/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# macOS
+.DS_Store
+
+# Copies of the original firmware read back off the boards (Particle etc).
+# Large, proprietary, and specific to one individual board - they have no
+# business in history.
+backup/

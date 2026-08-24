@@ -1,0 +1,158 @@
+#
+# Copyright (c) 2022 Nordic Semiconductor
+#
+# SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+#
+mainmenu "Matter nRF Connect Light Switch Example Application"
+
+config STATE_LEDS
+	bool "Use LEDs to indicate the device state"
+	default y
+	help
+	  Use LEDs to render the current state of the device such as the progress of commissioning of
+	  the device into a network or the factory reset initiation. Note that setting this option to
+	  'n' does not disable the LED indicating the state of the simulated bolt.
+
+# Sample configuration used for Thread networking
+if NET_L2_OPENTHREAD
+
+choice OPENTHREAD_NORDIC_LIBRARY_CONFIGURATION
+	default OPENTHREAD_NORDIC_LIBRARY_MTD
+endchoice
+
+choice OPENTHREAD_DEVICE_TYPE
+	default OPENTHREAD_MTD
+endchoice
+
+config CHIP_ENABLE_ICD_SUPPORT
+	default y
+
+# Reduce Thread TX output power to 0 dBm for SED device
+config OPENTHREAD_DEFAULT_TX_POWER
+	int
+	default 0
+
+endif # NET_L2_OPENTHREAD
+
+if CHIP_WIFI
+
+config NRF_WIFI_LOW_POWER
+	default y
+
+endif # CHIP_WIFI
+
+# Enable Read Client functionality for all build configurations.
+config CHIP_ENABLE_READ_CLIENT
+	default y
+
+# ---------------- SmartHome ----------------
+
+config SMARTHOME_LOG_LEVEL
+	int "Log level for the application modules"
+	default 3
+
+config SMARTHOME_SNTP_SERVER
+	string "SNTP server"
+	depends on SMARTHOME_SNTP
+	default "pool.ntp.org"
+	help
+	  The name only resolves if the Border Router provides DNS64/NAT64.
+	  Otherwise use an IPv6 literal.
+
+config SMARTHOME_SNTP_TIMEOUT_MS
+	int "SNTP timeout (ms)"
+	depends on SMARTHOME_SNTP
+	default 4000
+
+config SMARTHOME_SNTP_RESYNC_HOURS
+	int "SNTP resync interval (hours)"
+	depends on SMARTHOME_SNTP
+	default 6
+
+config SMARTHOME_STARTUP_ONOFF
+	int "StartUpOnOff written to the bulb"
+	default 0
+	range 0 255
+	help
+	  0 = stays OFF after a power outage (what is set here)
+	  1 = turns on after a power outage
+	  2 = toggle relative to the previous state
+	  255 = null, the bulb returns to its state from before the outage
+
+	  Apple Home does not expose this attribute in its interface. The
+	  firmware writes it into the bulb and reasserts it daily, so the setting
+	  holds regardless of what the ecosystem does.
+
+config SMARTHOME_STARTUP_LEVEL
+	int "StartUpCurrentLevel written to the bulb"
+	default 255
+	# Irrelevant while STARTUP_ONOFF=0 (the bulb stays off), but still
+	# correct if you ever change it to 1.
+	range 0 255
+	help
+	  0 = MinLevel, 1..254 = that value,
+	  255 = return to the brightness from before the outage (recommended)
+
+config SMARTHOME_STARTUP_REFRESH_HOURS
+	int "How often the startup state is reasserted in the bulb (hours)"
+	default 24
+
+source "${ZEPHYR_CONNECTEDHOMEIP_MODULE_DIR}/config/nrfconnect/chip-module/Kconfig.features"
+source "${ZEPHYR_CONNECTEDHOMEIP_MODULE_DIR}/config/nrfconnect/chip-module/Kconfig.defaults"
+source "${ZEPHYR_NRF_MODULE_DIR}/samples/matter/common/src/Kconfig"
+source "Kconfig.zephyr"
+
+menu "RGB status LED"
+
+config SMARTHOME_LED_TRIM_R
+	int "Red channel attenuation (0-255, 255 = none)"
+	range 0 255
+	default 255
+	help
+	  Color balance for the RGB LED. The three dies in the package are not
+	  equally efficient at the same current, and the resistors on the module
+	  were chosen so the LED is visible, not to produce neutral white.
+	  Without trim, what you ask for as #ffa726 can come out yellow or
+	  reddish.
+
+	  Calibrated by eye: hold the module next to the screen with Identify
+	  running from the panel and pull down whichever channel dominates. Only
+	  two of the three should ever be touched - the third stays at 255,
+	  otherwise you are just throwing brightness away.
+
+config SMARTHOME_ACCEL_GESTURES
+	bool "Accelerometer gestures (tap / double tap)"
+	default n
+	help
+	  The gesture code. Off by default: we do not use it, and an
+	  accelerometer listening for taps has to stay powered up, which on
+	  battery costs far more than it is worth.
+
+	  With this off, the sensor is started by the driver at initialization
+	  and explicitly powered down immediately afterwards.
+
+config SMARTHOME_LED_CHANNEL_TEST
+	bool "LED channel identification test"
+	default n
+	help
+	  Lights ONE PWM channel at a time, two seconds each, forever: channel 0,
+	  then 1, then 2. You look at the board and note which color you see at
+	  each step.
+
+	  It is how you find the REAL pin-to-color mapping when what you see does
+	  not match the documentation. No guessing and no reflashing three times -
+	  one run gives all three answers.
+
+	  Do NOT leave it on in production.
+
+config SMARTHOME_LED_TRIM_G
+	int "Green channel attenuation (0-255)"
+	range 0 255
+	default 255
+
+config SMARTHOME_LED_TRIM_B
+	int "Blue channel attenuation (0-255)"
+	range 0 255
+	default 255
+
+endmenu

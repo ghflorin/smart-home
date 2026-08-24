@@ -1,0 +1,5204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Home</title>
+<script>
+/* The theme is resolved BEFORE the first paint, otherwise you get a flash of
+ * the wrong theme on every load. That is why this script is inline in the head
+ * and not in the big block at the end of the page.
+ *
+ * localStorage holds the preference (auto|light|dark). On <html> we set the
+ * EFFECTIVE theme (light|dark), so the CSS has only two palettes and no media
+ * query - "auto" is resolved here, and we keep listening for system changes for
+ * as long as the preference is auto. */
+(function () {
+  var mq = matchMedia("(prefers-color-scheme: light)");
+  var pref = "auto";
+  try { pref = localStorage.getItem("theme") || "auto"; } catch (e) {}
+
+  function apply() {
+    var eff = pref === "auto" ? (mq.matches ? "light" : "dark") : pref;
+    document.documentElement.dataset.theme = eff;
+  }
+  function reresolve() { if (pref === "auto") { apply(); } }
+
+  /* The normal case: the system announces the change and we catch it at once. */
+  mq.addEventListener("change", reresolve);
+  /* Safety net: the panel stays open for hours, and the event above does not
+   * arrive everywhere (some webviews and emulation tools only change the media
+   * query result, without notifying). We re-evaluate when the page becomes
+   * visible again or gets focus - practically free. */
+  document.addEventListener("visibilitychange", reresolve);
+  window.addEventListener("focus", reresolve);
+
+  window.themePref = function () { return pref; };
+  window.setThemePref = function (p) {
+    pref = p;
+    try { localStorage.setItem("theme", p); } catch (e) {}
+    apply();
+  };
+  apply();
+})();
+</script>
+<style>
+  /* ---------- palette ----------
+   * Everything colored on the page goes through these variables. If you add
+   * hardcoded colors below, the light theme breaks silently. For accent shades
+   * use color-mix on --amber / --link, so they adjust themselves when the
+   * palette changes. */
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg:        #0a0b0d;
+    --panel:     #101317;
+    --panel-hi:  #161a1f;
+    --line:      #1f242b;
+    --line-hi:   #2b323b;
+    --ink:       #dfe3e8;
+    --ink-dim:   #707886;
+    --ink-faint: #454c57;
+    --amber:     #ffa726;
+    --amber-hot: #ffcc66;
+    --link:      #45c4b0;
+    --bad:       #e5534b;
+
+    --sunken:    #08090b;  /* inputs, pre - deeper than the panel */
+    --sunken-hi: #0c0e11;
+    --scrim:     rgba(4,5,6,.88);
+    --ring:      rgba(255,255,255,.03);
+    --on-amber:  #1a1205;  /* text on an amber background */
+    --on-link:   #04110f;
+    --lit:       color-mix(in srgb, var(--amber) 19%, transparent);  /* the level fill */
+    /* The same colour the fill RESOLVES to over the plot ground, but opaque.
+       --lit is translucent, so painting a shape with it lets the ground through
+       and doubles up where it overlaps the fill. */
+    --lit-solid: color-mix(in srgb, var(--amber) 19%, var(--sunken));
+    --grid:      .35;      /* silkscreen opacity */
+  }
+
+  /* Light theme: not the dark one inverted, it is "printed datasheet" - warm
+   * paper, dark accents so they stay legible on white. The amber and teal from
+   * the dark theme have too little contrast on a light background, so they get
+   * darker. */
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg:        #f3f1ec;
+    --panel:     #ffffff;
+    --panel-hi:  #faf8f4;
+    --line:      #e0dcd3;
+    --line-hi:   #c6c0b5;
+    --ink:       #16191d;
+    --ink-dim:   #5c636d;
+    --ink-faint: #8b929c;
+    --amber:     #9c5a06;
+    --amber-hot: #7a4504;
+    --link:      #0c7a6b;
+    --bad:       #b8352b;
+
+    --sunken:    #edeae3;
+    --sunken-hi: #e6e2d9;
+    --scrim:     rgba(28,25,20,.62);
+    --ring:      rgba(0,0,0,.05);
+    --on-amber:  #fff4e4;
+    --on-link:   #eafaf7;
+    --lit:       color-mix(in srgb, var(--amber) 24%, transparent);
+    --lit-solid: color-mix(in srgb, var(--amber) 24%, var(--sunken));
+    --grid:      .5;
+  }
+
+  :root {
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "IBM Plex Mono",
+            "Roboto Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* fine grid, like a PCB silkscreen */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 32px 32px;
+    opacity: var(--grid);
+    mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, #000 30%, transparent 100%);
+  }
+
+  .wrap {
+    position: relative;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+
+  /* ---------- header ---------- */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--line-hi);
+    margin-bottom: 32px;
+  }
+  /* Title and status on two lines, as a column of their own; the theme icon
+   * stays on the right, centered on the full height. */
+  .brand {
+    display: grid;
+    gap: 6px;
+    justify-items: start;
+  }
+  h1 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  h1 .dot { color: var(--amber); }
+
+  /* The title is the way back.
+   *
+   * From a bulb's sheet or the schedule page there was no way home except the
+   * control you happened to arrive by, and the one thing every interface has
+   * trained people to click is the name in the corner. */
+  .home {
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+  }
+  .home:focus-visible { outline: 2px solid var(--link); outline-offset: 4px; border-radius: 4px; }
+
+  .logo { width: 21px; height: 21px; flex: none; display: block; }
+  .logo .lgline {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+  }
+  .logo .lglit  { fill: var(--lit); }
+  .logo .lgedge { fill: color-mix(in srgb, var(--amber) 55%, transparent); }
+  /* Hover raises the light in the house. The mark is a level in a container,
+     which is what every tile on the page is; making it move is the shortest
+     way to say the two are the same idea. */
+  .logo .lglit, .logo .lgedge { transition: y .4s cubic-bezier(.3,0,.2,1); }
+  .home:hover .logo .lglit  { y: 8.2; }
+  .home:hover .logo .lgedge { y: 7.8; }
+  @media (prefers-reduced-motion: reduce) {
+    .logo .lglit, .logo .lgedge { transition: none; }
+  }
+  /* The status sits under the title, where the subtitle used to be. */
+  #status {
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  #status::before {
+    content: "";
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--ink-faint);
+    box-shadow: 0 0 0 3px var(--ring);
+  }
+  #status.ok::before  { background: var(--link); box-shadow: 0 0 10px var(--link); }
+  #status.err::before  { background: var(--bad);   box-shadow: 0 0 10px var(--bad); }
+  #status.warn::before { background: var(--amber); box-shadow: 0 0 10px var(--amber); }
+
+  /* ---------- theme selector ----------
+   * A single button that cycles auto -> day -> night. The icon is one SVG with
+   * three moving pieces, not three icons swapped for one another:
+   *   .rays  - the sun rays; they pull in and rotate only for night
+   *   .carve - a black circle in the mask; moving it over the disc carves out
+   *            the crescent moon
+   *   .split - a rectangle in the mask; it covers the right half for auto
+   *   .ring  - the full outline, visible only on auto, so you can see the disc
+   *            is halved and not merely smaller
+   * Because these are pieces that translate, the transition is continuous: the
+   * sun really turns into the moon, it does not blink from one to the other. */
+  #theme { align-self: center; display: flex; }
+  .hdr-acts { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .hact {
+    font: inherit;
+    font-size: 11px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    background: transparent;
+    border: 1px solid var(--line-hi);
+    border-radius: 10px;
+    padding: 9px 14px;
+    cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .hact:hover { color: var(--link); border-color: var(--link); }
+  .hact.on {
+    color: var(--link);
+    border-color: var(--link);
+    background: color-mix(in srgb, var(--link) 12%, transparent);
+  }
+  .hact.add {
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 18px;
+    letter-spacing: 0;
+    line-height: 1;
+    display: grid;
+    place-items: center;
+  }
+
+  /* The three ways to add something, asked once instead of standing as three
+     permanent buttons. Each says what it is and what it is for, because
+     "device" and "switch" only look different to somebody who already knows. */
+  .choices { display: grid; gap: 10px; margin-top: 6px; }
+  .choice {
+    display: grid;
+    gap: 5px;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid var(--line-hi);
+    border-radius: 12px;
+    padding: 14px 16px;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .choice:hover {
+    border-color: var(--link);
+    background: color-mix(in srgb, var(--link) 8%, transparent);
+  }
+  .choice b { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; }
+  .choice span { font-size: 12px; color: var(--ink-dim); line-height: 1.45; }
+  #theme button {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--ink-dim);
+    cursor: pointer;
+    transition: color .2s, background .2s;
+  }
+  #theme button:hover {
+    color: var(--amber);
+    background: color-mix(in srgb, var(--amber) 9%, transparent);
+  }
+  #theme button:focus-visible {
+    outline: 1px solid var(--amber);
+    outline-offset: -1px;
+  }
+  #theme svg { width: 20px; height: 20px; display: block; }
+
+  /* All the pieces rotate around the same center, otherwise the movement comes
+   * out crooked. transform-box: view-box makes the px in transform be viewBox
+   * units. */
+  .tsw .rays, .tsw .carve, .tsw .split {
+    transform-box: view-box;
+    transform-origin: 12px 12px;
+  }
+  .tsw .rays  { transition: transform .5s cubic-bezier(.34,1.5,.5,1), opacity .28s ease; }
+  .tsw .carve { transition: transform .45s cubic-bezier(.5,.05,.2,1); }
+  .tsw .split { transition: transform .45s cubic-bezier(.5,.05,.2,1); }
+  .tsw .ring  { transition: opacity .3s ease .1s; }
+
+  /* day: a whole sun - full disc, rays extended */
+  .tsw[data-state="light"] .rays  { opacity: 1; transform: rotate(0deg) scale(1); }
+  .tsw[data-state="light"] .carve { transform: translate(0, 0); }
+  .tsw[data-state="light"] .split { transform: translate(15px, 0); }
+  .tsw[data-state="light"] .ring  { opacity: 0; }
+
+  /* night: the rays pull in and rotate, the circle in the mask moves in and
+   * carves the crescent. The disc radius does not change, so the sun really
+   * turns into the moon. */
+  .tsw[data-state="dark"] .rays  { opacity: 0; transform: rotate(-50deg) scale(.35); }
+  .tsw[data-state="dark"] .carve { transform: translate(-8.5px, 9.5px); }
+  .tsw[data-state="dark"] .split { transform: translate(15px, 0); }
+  .tsw[data-state="dark"] .ring  { opacity: 0; }
+
+  /* auto: half a disc, but with the rays in place - exactly the automatic
+   * brightness symbol from a phone, so it needs no explaining. */
+  .tsw[data-state="auto"] .rays  { opacity: 1; transform: rotate(0deg) scale(1); }
+  .tsw[data-state="auto"] .carve { transform: translate(0, 0); }
+  .tsw[data-state="auto"] .split { transform: translate(0, 0); }
+  .tsw[data-state="auto"] .ring  { opacity: 1; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tsw .rays, .tsw .carve, .tsw .split, .tsw .ring { transition: none; }
+  }
+
+  /* ---------- sections ---------- */
+  .section-label {
+    font-size: 10px;
+    letter-spacing: .28em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 34px 0 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .section-label .rule {
+    flex: 1;
+    height: 1px;
+    background: var(--line-hi);
+  }
+
+  /* ---------- the tile grid ----------
+   * Tiles, not a column of cards. Two reasons, and neither is fashion.
+   *
+   * A house has more devices than fit one per row, and a column wastes the
+   * whole right half of the screen to show a node ID nobody reads. What you
+   * want from across the room is which lights are on - that is state, and state
+   * reads better as a wall of small things than as a list of large ones.
+   *
+   * Each tile does two jobs, split the way HomeKit splits them: the round icon
+   * is the quick action (toggle the bulb, lock the switch), and everywhere else
+   * on the tile opens its settings. That split is worth stating because it is
+   * not discoverable by looking - hence the cursor and the hover ring on the
+   * icon, and the title on both halves.
+   *
+   * Rounded corners appear here and nowhere else on the page. The rest of the
+   * panel is deliberately square, PCB silkscreen; the tiles are the one place
+   * we borrow the phone idiom, because that is the thing being imitated.
+   */
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(8px); }
+  }
+
+  .grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(var(--tile), 1fr));
+  }
+  /* The three sizes are not one shape scaled. "s" is a row - icon beside the
+   * text - because below about 150px a square has no room for a name. "m" and
+   * "l" are squares, icon above, text anchored to the bottom edge. */
+  .grid[data-size="s"] { --tile: 208px; --ico: 38px; }
+  .grid[data-size="m"] { --tile: 158px; --ico: 44px; }
+  .grid[data-size="l"] { --tile: 226px; --ico: 54px; }
+
+  .tile {
+    position: relative;
+    overflow: hidden;              /* the level fill is clipped by the rounded edge */
+    border: 1px solid var(--line-hi);
+    border-radius: 12px;
+    background: linear-gradient(180deg, var(--panel-hi), var(--panel));
+    padding: 14px;
+    display: grid;
+    gap: 12px;
+    cursor: pointer;
+    transition: border-color .15s, background .3s, transform .12s;
+    /* A tile is a control, not prose. Without this, pressing one and dragging
+       paints a text selection across half the page before the drag even
+       arms - and the selection outlives the drop. */
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  /* Only on a tile's first appearance. Left on the element permanently it would
+     replay every time the tile moves between rooms, because inserting a node
+     restarts its CSS animations. */
+  .tile.fresh { animation: rise .4s cubic-bezier(.2,.7,.3,1) backwards; }
+  /* Everything readable sits above the fill. The badge only gets the z-index -
+     giving it position:relative would undo the absolute corner it lives in. */
+  .tile > .quick, .tile > .tmeta { position: relative; z-index: 1; }
+  .tile > .tbadge { z-index: 1; }
+  .grid[data-size="s"] .tile {
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 14px;
+  }
+  .grid[data-size="m"] .tile,
+  .grid[data-size="l"] .tile {
+    grid-template-rows: auto 1fr;
+    aspect-ratio: 1 / 1;
+  }
+  .grid[data-size="m"] .tmeta,
+  .grid[data-size="l"] .tmeta { align-self: end; }
+
+  .tile:hover { transform: translateY(-1px); border-color: var(--line-hi); }
+  .tile:focus-visible { outline: 1px solid var(--link); outline-offset: 2px; }
+
+  /* On: the tile itself carries the state, not a word in a corner. This is the
+   * thing you read from the doorway. */
+  .tile.on { border-color: color-mix(in srgb, var(--amber) 42%, transparent); }
+
+  /* ---------- the level ----------
+   * The amber is not decoration: the tile fills from the bottom to the bulb's
+   * brightness, so a row of tiles reads as a row of levels with no numbers
+   * being compared. A wash that only said "on" wasted the one channel that
+   * could carry the value for free.
+   *
+   * The fill is FLAT and its top edge is a hairline. Height is the only thing
+   * that varies, which is what makes it a measurement you can read across the
+   * room instead of a texture - shading it would add a second gradient that
+   * means nothing, and blur the very edge that carries the value. */
+  .tile .fill {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: calc(var(--lvl) * 100%);
+    background: var(--lit);
+    border-top: 1px solid color-mix(in srgb, var(--amber) 55%, transparent);
+    pointer-events: none;
+    /* Slow, because it is the bulb catching up, not the interface reacting. */
+    transition: height .55s cubic-bezier(.3,0,.2,1);
+  }
+  /* Full: the hairline has nothing above it left to separate, so it reads as a
+     stray rule along the edge instead of as a level. */
+  .tile .fill.full { border-top-color: transparent; }
+
+  /* Both fills get a compositing layer of their own.
+   *
+   * The horizontal bands reported across a tile are repaint residue, not
+   * elements: there is exactly one .fill per tile and one .hk-fill per sheet,
+   * and the surfaces behind them are opaque, so nothing can be showing
+   * through. What is left is the fill itself - a 24%-alpha box whose HEIGHT
+   * animates inside a rounded overflow:hidden clip. A renderer that composites
+   * each frame over the last instead of replacing it leaves a band at every
+   * intermediate height, and they accumulate for as long as the value keeps
+   * moving - which is why they showed up while the Thread radio was down and
+   * the level was flapping. On its own layer the frame is replaced.
+   *
+   * Not reproducible in Chromium, so this is the remedy for the class of bug
+   * rather than a fix confirmed against the artefact. */
+  .tile .fill, .hk-fill {
+    transform: translateZ(0);
+    will-change: height;
+  }
+  /* Their clips become stacking contexts to match, so a composited child
+     cannot paint outside the rounded corner it belongs to. */
+  .tile, .hk-lvl { isolation: isolate; }
+
+  /* Unknown is not off. A bulb that did not answer must not look like a bulb
+   * that is switched off - you would walk over and press a switch that is
+   * already in the right position. */
+  .tile.unknown { border-style: dashed; }
+  .tile.unknown .tstate { color: var(--ink-faint); }
+
+  .tile .quick {
+    width: var(--ico);
+    height: var(--ico);
+    border-radius: 50%;
+    border: 1px solid var(--line-hi);
+    background: var(--sunken);
+    color: var(--ink-dim);
+    display: grid;
+    place-items: center;
+    padding: 0;
+    cursor: pointer;
+    transition: background .2s, color .2s, border-color .2s, box-shadow .2s;
+  }
+  .tile .quick svg { width: 55%; height: 55%; display: block; }
+  .tile .quick:hover:not(:disabled) {
+    color: var(--ink);
+    border-color: var(--ink-faint);
+  }
+  .tile .quick:disabled { opacity: .5; cursor: default; }
+  .tile.on .quick {
+    background: var(--amber);
+    border-color: var(--amber);
+    color: var(--on-amber);
+    box-shadow: 0 0 18px color-mix(in srgb, var(--amber) 35%, transparent);
+  }
+  /* A command is in flight: the switch can be asleep for up to its poll
+   * interval, so "nothing happened yet" needs to look deliberate. */
+  .tile .quick.busy { animation: beacon 1s ease-in-out infinite; }
+  .tile .quick.failed {
+    color: var(--bad);
+    border-color: var(--bad);
+    background: color-mix(in srgb, var(--bad) 14%, transparent);
+  }
+
+  .tname {
+    font-size: 13px;
+    color: var(--ink);
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+  .tstate {
+    font-size: 10px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    margin-top: 4px;
+  }
+  /* Amber text on an amber fill is the one combination that stops reading, and
+     it is exactly the one that happens at high brightness. The hot shade keeps
+     it apart from the surface it sits on. */
+  .tile.on .tstate { color: var(--amber-hot); }
+  /* The bulb's actual light colour. Small on purpose: it is a qualifier on the
+     brightness beside it, not a second headline. */
+  .tstate .cdot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: none;
+    margin-right: 6px;
+    vertical-align: 1px;
+    box-shadow: 0 0 0 1px var(--ring);
+  }
+
+  /* Top right: the things that are true of the device regardless of what it is
+   * doing - its role, or that it is locked. In the square layouts it lands
+   * beside the icon, in the row layout it lands on top of the name - hence the
+   * reserved space. */
+  .grid[data-size="s"] .tile.badged .tname { padding-right: 46px; }
+  .tbadge {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    font-size: 8px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--bad);
+    border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent);
+    border-radius: 6px;
+    padding: 2px 6px;
+  }
+
+
+  /* ---------- the toolbar: rooms on the left, tile size on the right ------ */
+  .toolbar {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 26px;
+  }
+  .toolbar .rooms { margin-bottom: 0; flex: 1; }
+  .sizer { display: flex; gap: 6px; flex: none; }
+  .sizer button {
+    width: 32px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    background: transparent;
+    border: 1px solid var(--line-hi);
+    color: var(--ink-faint);
+    cursor: pointer;
+    padding: 0;
+    transition: color .15s, border-color .15s;
+  }
+  .sizer button:hover { color: var(--ink); }
+  .sizer button.on { color: var(--link); border-color: var(--link); }
+  .sizer svg { width: 14px; height: 14px; display: block; }
+
+  /* ---------- identify button ---------- */
+  button.id {
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--amber);
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--amber) 32%, transparent);
+    padding: 10px 18px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+    white-space: nowrap;
+  }
+  button.id:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--amber) 10%, transparent);
+    border-color: var(--amber);
+    color: var(--amber-hot);
+  }
+  button.id:active:not(:disabled) { transform: translateY(1px); }
+
+  /* Quiet until it is armed, then unmistakable. A destructive control that
+     shouts before you have asked for it just gets clicked past. */
+  button.forget {
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    background: transparent;
+    border: 1px solid var(--line-hi);
+    padding: 10px 18px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+    white-space: nowrap;
+  }
+  button.forget:hover:not(:disabled) { color: var(--bad); border-color: var(--bad); }
+  button.forget.armed {
+    color: var(--bad);
+    border-color: var(--bad);
+    background: color-mix(in srgb, var(--bad) 12%, transparent);
+  }
+  button.forget:active:not(:disabled) { transform: translateY(1px); }
+  button.forget:disabled { cursor: default; opacity: .6; }
+  .forget-note {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ink-dim);
+    margin-top: 10px;
+  }
+  .forget-note b { color: var(--ink); }
+  .forget-note .bad { color: var(--bad); }
+  button.id:disabled { cursor: default; }
+
+  button.id.busy {
+    color: var(--on-amber);
+    background: var(--amber);
+    border-color: var(--amber);
+    animation: beacon 1s ease-in-out infinite;
+  }
+  @keyframes beacon {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--amber) 50%, transparent); }
+    50%      { box-shadow: 0 0 22px 3px color-mix(in srgb, var(--amber) 38%, transparent); }
+  }
+
+  /* ---------- switch -> bulb bindings ---------- */
+  .links {
+    grid-column: 1 / -1;
+    margin-top: 4px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--line-hi);
+  }
+  .links .hdr {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 10px;
+  }
+  .link-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 0;
+    font-size: 13px;
+  }
+  .link-row .arrow { color: var(--link); }
+  /* A row that opens something. It is the one place on a sheet where a name is
+     a destination rather than a label, so it has to say so before it is
+     clicked. */
+  .link-row.go {
+    cursor: pointer;
+    margin: 0 -8px;
+    padding: 5px 8px;
+    border-radius: 8px;
+    transition: background .12s, color .12s;
+  }
+  .link-row.go .nm { color: var(--link); }
+  .link-row.go .cl { margin-left: auto; }
+  .link-row.go:hover { background: color-mix(in srgb, var(--link) 10%, transparent); }
+  .link-row.go:focus-visible {
+    outline: 1px solid var(--link);
+    outline-offset: 1px;
+  }
+  .link-row .cl {
+    margin-left: auto;
+    font-size: 10px;
+    letter-spacing: .14em;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+  }
+  .empty {
+    color: var(--ink-dim);
+    font-size: 12px;
+    padding: 4px 0;
+  }
+
+  button.share {
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--link);
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--link) 30%, transparent);
+    padding: 10px 18px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+    white-space: nowrap;
+  }
+  button.share:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--link) 10%, transparent);
+    border-color: var(--link);
+  }
+  button.share:disabled { opacity: .5; cursor: default; }
+
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .actions button { flex: 1; min-width: 118px; }
+
+  /* ---------- share sheet ---------- */
+  #overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--scrim);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    z-index: 10;
+    animation: fade .2s ease;
+  }
+  #overlay.on { display: flex; }
+  @keyframes fade { from { opacity: 0; } }
+
+  /* The wrapper carries the width. The X hangs off it rather than off the sheet
+     so it stays in the corner while the sheet scrolls underneath. */
+  .sheetwrap {
+    position: relative;
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+  }
+  /* The chart wants room. On anything narrower than about 1300px it is simply
+     the screen, less a margin. */
+  .sheetwrap.wide { max-width: min(1280px, 95vw); }
+
+  .sheet {
+    --pad: 28px;
+    background: var(--panel-hi);
+    border: 1px solid var(--line-hi);
+    border-radius: 22px;
+    width: 100%;
+    padding: var(--pad);
+    text-align: center;
+    /* Without this a long sheet grows past both edges of the screen and takes
+       its own controls with it. */
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+  }
+
+  /* One close button for every sheet, in the corner. It replaced a "close" or
+     "cancel" at the bottom of each one - which on a tall sheet meant scrolling
+     to the end to get out of it. */
+  .sheet-x {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    border-radius: 50%;
+    z-index: 2;
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    font-family: inherit;
+    font-size: 20px;
+    line-height: 1;
+    color: var(--ink-faint);
+    background: transparent;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: color .15s, border-color .15s;
+  }
+  .sheet-x:hover { color: var(--ink); border-color: var(--line-hi); }
+  .sheet-x:focus-visible { outline: 1px solid var(--link); outline-offset: 1px; }
+
+
+
+  /* ---------- lock ---------- */
+  button.lock {
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    background: transparent;
+    padding: 10px 16px;
+    cursor: pointer;
+    white-space: nowrap;
+    color: var(--ink-faint);
+    border: 1px solid var(--line-hi);
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  button.lock:hover:not(:disabled) { color: var(--ink); }
+  /* Locked is a state you want to see from across the room, not a discreet one
+     - which is why it is filled, not merely outlined. */
+  button.lock.on {
+    color: var(--on-amber);
+    background: var(--bad);
+    border-color: var(--bad);
+  }
+  button.lock:disabled { opacity: .45; cursor: default; }
+
+  /* Locked: dimmed, but not so dim that the red stops reading. The dimming
+     says "this one is out of play", the red icon says why. */
+  .tile.locked { opacity: .74; }
+  .tile.locked .quick {
+    background: var(--bad);
+    border-color: var(--bad);
+    color: var(--on-amber);
+  }
+  .tile.locked .quick:hover:not(:disabled) { color: var(--on-amber); }
+
+  .role-tag {
+    font-size: 9px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--bad);
+    border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent);
+    padding: 2px 7px;
+    margin-left: 8px;
+    vertical-align: 2px;
+  }
+
+
+  /* ---------- console ----------
+   * The switch has NO console in the production build (CONFIG_SERIAL is off so
+   * that two image slots fit for OTA), so this is the only place you can see
+   * what is happening: what the Pi sent and what the device answered.
+   * Collapsed by default - you do not want a wall of log over the panel. */
+  #console {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 20;
+    background: var(--panel);
+    border-top: 1px solid var(--line-hi);
+    font-size: 11px;
+  }
+  #console .bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 18px;
+    cursor: pointer;
+    color: var(--ink-faint);
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    font-size: 10px;
+    user-select: none;
+  }
+  #console .bar:hover { color: var(--ink); }
+  #console .chev {
+    transition: transform .2s;
+    display: inline-block;
+    font-size: 9px;
+  }
+  #console.open .chev { transform: rotate(180deg); }
+  #console .badge {
+    margin-left: auto;
+    font-size: 9px;
+    letter-spacing: .1em;
+    color: var(--ink-faint);
+  }
+  /* The dot pulses while a command is in flight, so you know nothing is stuck
+     - the switch is sleepy and may take 15 seconds to answer. */
+  #console .live {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--ink-faint);
+  }
+  #console.busy .live {
+    background: var(--amber);
+    animation: livepulse 1s ease-in-out infinite;
+  }
+  @keyframes livepulse {
+    0%, 100% { opacity: .3; }
+    50%      { opacity: 1; }
+  }
+  #console .body {
+    display: none;
+    max-height: 480px;
+    overflow-y: auto;
+    padding: 4px 18px 14px;
+    border-top: 1px solid var(--line);
+    background: var(--sunken);
+  }
+  #console.open .body { display: block; }
+  #console .line {
+    display: flex;
+    gap: 10px;
+    padding: 2px 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-variant-ligatures: none;
+  }
+  #console .line .ts { color: var(--ink-faint); flex: none; }
+  #console .line.cmd  { color: var(--ink); }
+  #console .line.ok   { color: var(--link); }
+  #console .line.err  { color: var(--bad); }
+  #console .line.warn { color: var(--amber); }
+  #console .line.step { color: var(--amber); }
+  #console .line.info { color: var(--ink-dim); }
+  #console .empty-log { color: var(--ink-faint); padding: 8px 0; }
+
+  /* Room for the bottom bar, so the last card does not sit underneath it. */
+  .wrap { padding-bottom: 120px; }
+
+  /* On short screens, 480px of console would cover the whole page. */
+  @media (max-height: 760px) {
+    #console .body { max-height: 55vh; }
+  }
+
+  /* ---------- a bulb's own controls ----------
+   * Two tall panels you drag, the way a phone does it, rather than a row of
+   * labelled sliders. Not fashion: brightness is the thing you came here for,
+   * and a control the size of your thumb that shows its value as a filled area
+   * is faster to read and to hit than a 6px track with a number beside it.
+   *
+   * The fill is painted in the bulb's own light colour, so the two controls
+   * explain each other - drag the colour and you can see what the brightness is
+   * going to look like. */
+  .hk {
+    display: flex;
+    gap: 14px;
+    justify-content: center;
+    margin: 20px 0 16px;
+  }
+  .hk.busy { opacity: .55; pointer-events: none; }
+  .hk-pad { display: flex; flex-direction: column; gap: 8px; }
+  .hk-cap {
+    font-size: 10px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    text-align: center;
+  }
+
+  .hk-lvl, .hk-ct {
+    position: relative;
+    overflow: hidden;
+    border-radius: 20px;
+    border: 1px solid var(--line-hi);
+    touch-action: none;          /* the gesture is ours, not the page's */
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: ns-resize;
+  }
+  .hk-lvl { width: 132px; height: 292px; background: var(--sunken); }
+  .hk-ct { width: 62px; height: 292px; }
+  .hk-lvl.grabbed, .hk-ct.grabbed { border-color: var(--ink-faint); }
+
+  /* The same fill and hairline as a lit tile and as the schedule's curve. A
+     bulb at 60% is one fact; it should not be three pictures. This panel was
+     painted in the light's own colour for a while, which put the colour
+     temperature in two places at once - here and in the strip beside it - and
+     at 5000 K the fill came out white on white. */
+  .hk-fill {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--lit);
+    border-top: 1px solid color-mix(in srgb, var(--amber) 55%, transparent);
+    /* Quick enough to feel attached to the finger, slow enough that a jump
+       coming from the bulb reads as the bulb moving, not as a glitch. */
+    transition: height .18s ease;
+  }
+  .hk-fill.full { border-top-color: transparent; }
+  .hk-lvl.grabbed .hk-fill { transition: background .25s ease; }
+  .hk-lvl.off .hk-fill { opacity: .18; }
+
+  /* The face sits above the fill and does not move with it: the number stays
+     where your eye already is instead of sliding up and down the panel. */
+  .hk-face {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+    padding-bottom: 18px;
+    pointer-events: none;
+  }
+  .hk-ico { width: 30px; height: 30px; color: var(--ink); opacity: .75; }
+  .hk-ico svg { width: 100%; height: 100%; display: block; }
+  .hk-pct {
+    font-size: 15px;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  .hk-lvl.off .hk-ico, .hk-lvl.off .hk-pct { opacity: .4; }
+
+  /* The colour handle is a bar across the strip and not a dot, so it reads
+     against a gradient that is pale at one end and saturated at the other. */
+  .hk-knob {
+    --p: 0;
+    position: absolute;
+    left: 6px;
+    right: 6px;
+    height: 6px;
+    /* Inset at both ends, and by more than the handle's own height: the strip
+       has a 20px radius, so near the ends it is narrowing, and a handle that is
+       merely "inside" still sits in the curve and reads as jammed against the
+       edge. Twelve clears it. */
+    bottom: calc(12px + var(--p) * (100% - 30px));
+    border-radius: 3px;
+    background: #fff;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 1px 3px rgba(0,0,0,.4);
+    pointer-events: none;
+    transition: bottom .18s ease;
+  }
+  .hk-ct.grabbed .hk-knob { transition: none; }
+
+  /* ---------- the light schedule ----------
+   * A page of its own. Two curves, both live at once: the filled area is
+   * brightness and the line over it is colour temperature, and the fill is
+   * painted with the colour the schedule is asking for at that hour - so the
+   * light's own colour runs through the shape that says how much of it there
+   * is. One picture answers "how bright, and what kind of white" at every hour,
+   * which is the question a light schedule exists to answer. */
+  .sched-view .section-label { margin-top: 26px; }
+  .sched-view .section-label .back {
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    background: transparent;
+    border: 1px solid var(--line-hi);
+    border-radius: 8px;
+    padding: 5px 11px;
+    cursor: pointer;
+  }
+  .sched-view .section-label .back:hover { color: var(--link); border-color: var(--link); }
+  .sched-view .section-label .tzn { font-size: 9px; color: var(--ink-faint); }
+
+  .sched-top {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin: 6px 0 12px;
+    min-height: 42px;
+  }
+  .scope-say { font-size: 12px; color: var(--ink-dim); }
+  /* Reset sits at the far end from the saves, because it is the one control
+     here that throws work away rather than keeping it. Plain outline: it is not
+     the thing you came to press. */
+  .sched-reset {
+    margin-left: auto;
+    flex: none;
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    background: transparent;
+    border: 1px solid var(--line-hi);
+    border-radius: 10px;
+    padding: 11px 18px;
+    cursor: pointer;
+    transition: color .15s, border-color .15s;
+  }
+  .sched-reset:hover { color: var(--amber); border-color: var(--amber); }
+  .sched-reset:active { transform: translateY(1px); }
+
+  /* The save button lives in the top bar, where the column stepper used to be:
+     it is the only thing on this page you press to make something happen, so it
+     belongs beside the sentence that says what will happen.
+     Same treatment as an active control anywhere else here - teal outline over a
+     wash of the same colour. A solid block was louder than anything else on the
+     page and read as borrowed from somewhere else. */
+  .sched-save {
+    flex: none;
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--link);
+    background: color-mix(in srgb, var(--link) 13%, transparent);
+    border: 1px solid var(--link);
+    border-radius: 10px;
+    padding: 11px 24px;
+    cursor: pointer;
+    transition: background .15s, opacity .15s;
+  }
+  .sched-save:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--link) 22%, transparent);
+  }
+  .sched-save:active:not(:disabled) { transform: translateY(1px); }
+  .sched-save:disabled { opacity: .5; cursor: default; }
+  /* With a target picked, saving globally is no longer the obvious next thing,
+     so it steps back rather than disappearing - it is still what you want if
+     you change your mind. */
+  .sched-save.dim { background: transparent; color: var(--ink-dim); border-color: var(--line-hi); }
+  .sched-save.dim:hover { color: var(--link); border-color: var(--link); }
+
+  /* The second save, and the target it will use. A split button because those
+     are two different questions with one answer between them: press the label
+     to save for what it names, press the caret to change what it names. */
+  .split { display: flex; flex: none; }
+  .split button {
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    background: transparent;
+    border: 1px solid var(--line-hi);
+    padding: 11px 16px;
+    cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .split .lbl { border-radius: 10px 0 0 10px; border-right: none; }
+  .split .caret { border-radius: 0 10px 10px 0; padding: 11px 12px; }
+  .split button:hover { color: var(--link); border-color: var(--link); }
+  .split.armed button {
+    color: var(--link);
+    border-color: var(--link);
+    background: color-mix(in srgb, var(--link) 13%, transparent);
+  }
+  .split.armed .lbl { border-right: none; }
+
+  .pick .nid.own { color: var(--amber); }
+
+  .chart {
+    border: 1px solid var(--line-hi);
+    border-radius: 14px;
+    background: var(--sunken);
+    padding: 2px 0 0;
+    touch-action: none;          /* the gesture is ours, not the page's */
+    overflow: hidden;
+  }
+  /* Only over a line is anything grabbable, and the cursor should not suggest
+     otherwise across the rest of the plot. */
+  .chart.on-line { cursor: ns-resize; }
+  .chart svg { display: block; width: 100%; height: auto; max-height: 62vh; }
+
+  /* Faint, and only where a horizontal line means something. There used to be a
+     separator per column plus a ladder plus a stem - three kinds of line
+     competing with the two that carry the data. */
+  .chart .grid {
+    stroke: var(--line-hi);
+    stroke-width: 1;
+    stroke-dasharray: 2 7;
+  }
+  .chart .axis {
+    fill: var(--ink-faint);
+    font-size: 11px;
+    font-family: var(--mono);
+    letter-spacing: 0;
+  }
+  .chart .tick { stroke: var(--line-hi); stroke-width: 1; }
+
+  /* The same fill a lit tile uses, and the same hairline on top of it. */
+  .chart .fill { stroke: none; fill: var(--lit); }
+  /* The top of the fill: it is the brightness curve, and it has to stay
+     findable where the fill has faded out beneath it. */
+  .chart .edge {
+    fill: none;
+    stroke: color-mix(in srgb, var(--amber) 55%, transparent);
+    stroke-width: 2;
+    stroke-linejoin: round;
+  }
+  /* Colour temperature. Ink rather than a colour of its own - the fill under it
+     is already saying what colour the light is, and a second coloured line
+     would be the same fact drawn twice. */
+  .chart .ctline {
+    fill: none;
+    stroke: var(--ink);
+    stroke-width: 2.5;
+    stroke-linejoin: round;
+    opacity: .62;
+  }
+
+  .chart .nowline {
+    stroke: var(--ink);
+    stroke-width: 1.5;
+    opacity: .45;
+    stroke-dasharray: 4 4;
+  }
+  .chart .nowtext {
+    fill: var(--ink-dim);
+    font-size: 15px;
+    font-family: var(--mono);
+    letter-spacing: .5px;
+  }
+  /* The curve's two values for this minute, under the time they belong to.
+     Quieter than the time: the time is what you look for, these are what you
+     came to find out once you have found it. */
+  .chart .nowval {
+    fill: var(--ink-faint);
+    font-size: 12.5px;
+    font-family: var(--mono);
+    letter-spacing: .3px;
+  }
+
+  /* The dormant handles: one open ring per column on each curve, marking the
+     twelve places the chart can be taken hold of. Without them the grab points
+     were invisible until the pointer happened to find one, so the chart looked
+     like a picture rather than a control.
+
+     No fill, so the plot shows through - that alone separates them from the one
+     you are holding, which has a solid centre. And the curve is masked OUT
+     inside each ring rather than drawn through it, so a dot reads as a gap in
+     the line rather than a bead sitting on top of it. Ground and fill show
+     through; the line does not. */
+  /* Each ring takes the stroke of the line it sits on, declaration for
+     declaration - same width, same colour, same fade. Drawn at full strength
+     against a line at 55% they read as a different object stuck onto the
+     chart; identical, they read as part of it. */
+  .chart .dot { fill: none; pointer-events: none; }
+  /* The brightness ring is filled with the fill's own colour rather than left
+     open. It rides the top edge of the filled area, so an open ring there is
+     half ground and half fill - the one place on the chart where see-through
+     reads as a smudge instead of a marker. Filled, the area simply continues
+     through it. The colour ring stays open: it crosses in and out of the fill
+     all day, so no single colour would sit right under it. */
+  .chart .dot.level {
+    stroke: color-mix(in srgb, var(--amber) 55%, transparent);
+    stroke-width: 2;
+    fill: var(--lit-solid);
+  }
+  /* Opacity rather than color-mix, to match .ctline exactly. Safe here only
+     because the ring has no fill to fade with it. */
+  .chart .dot.ct { stroke: var(--ink); stroke-width: 2.5; opacity: .62; }
+
+  /* The handle. A circle on the curve with an arrow above and below - the whole
+     vocabulary, no legend needed - and it exists only under the pointer, so the
+     chart at rest is the two curves and nothing else. */
+  .chart .handle .ring {
+    fill: var(--panel);
+    stroke: var(--ink);
+    stroke-width: 2;
+  }
+  .chart .handle .arw {
+    fill: none;
+    stroke: var(--ink);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: .45;
+  }
+  .chart .handle.live .arw { opacity: .8; }
+  .chart .handle .hval {
+    fill: var(--ink);
+    font-size: 12px;
+    font-family: var(--mono);
+    paint-order: stroke;
+    stroke: var(--sunken);
+    stroke-width: 3.5;
+    stroke-linejoin: round;
+  }
+
+  .sched-foot {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-top: 12px;
+    min-height: 30px;
+  }
+  .sched-foot .note { text-align: left; margin: 0; flex: 1; }
+  /* It was wearing `.chip.wideadd`, whose rules are all scoped to `.sheet` -
+     so on a page rather than in a dialog it came out as a browser default
+     button. Same outline as everything else here, in amber because it undoes an
+     override rather than making one. */
+  .sched-revert {
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--amber);
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent);
+    border-radius: 10px;
+    padding: 10px 18px;
+    flex: none;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  .sched-revert:hover:not(:disabled) {
+    border-color: var(--amber);
+    background: color-mix(in srgb, var(--amber) 12%, transparent);
+  }
+  .sched-revert:disabled { opacity: .5; cursor: default; }
+
+  /* ---------- which bulbs you are editing ----------
+   * A list rather than a row of chips: chips are fine for three bulbs and wrap
+   * into a wall at thirty, with nowhere to put a room name or the schedule each
+   * one follows. */
+  .scope {
+    text-align: left;
+    border: 1px solid var(--line-hi);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+  .scope-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    font-size: 9px;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    background: var(--sunken-hi);
+    border-bottom: 1px solid var(--line);
+  }
+  .scope-head .rule { flex: 1; height: 1px; background: var(--line-hi); }
+  .scope-head .all {
+    font-family: inherit;
+    font-size: 9px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    background: transparent;
+    border: 1px solid var(--line-hi);
+    border-radius: 6px;
+    padding: 3px 9px;
+    cursor: pointer;
+  }
+  .scope-head .all:hover { color: var(--link); border-color: var(--link); }
+
+  /* Scrolls, because a house can have thirty bulbs and the chart above it is
+     the thing that must not be pushed off the screen. */
+  .scope-list { max-height: 168px; overflow-y: auto; }
+  .srow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--ink);
+    margin: 0;
+  }
+  .srow:last-child { border-bottom: none; }
+  .srow:hover { background: color-mix(in srgb, var(--link) 7%, transparent); }
+  .srow.on { background: color-mix(in srgb, var(--link) 12%, transparent); }
+  /* Specific enough to beat `.sheet input`, which is written for text fields
+     and would stretch this checkbox to the full width of the row. */
+  .srow input {
+    width: 15px;
+    height: 15px;
+    min-width: 0;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: none;
+    accent-color: var(--link);
+    flex: none;
+  }
+  .srow .nm { flex: 1; }
+  .srow .rm {
+    font-size: 10px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  /* Which schedule this bulb answers to - the column that makes "are any of
+     mine different?" a question you answer by looking. */
+  .srow .fw {
+    width: 74px;
+    text-align: right;
+    flex: none;
+    font-size: 10px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .srow .fw.own { color: var(--amber); }
+
+  /* On a phone the sheet is about 270px of usable width, and everything in the
+     plot is in svg user units - so it shrinks with the element and the hour
+     labels come out around 5px unless they are put back. */
+  @media (max-width: 560px) {
+    .sheet { --pad: 16px; padding: 20px var(--pad); }
+    .sched-top { flex-wrap: wrap; gap: 10px; }
+    .sched-save { margin-left: 0; flex: 1; }
+    .split { flex: 1; }
+    .split .lbl { flex: 1; }
+    .sched-foot { flex-direction: column; align-items: stretch; }
+    .sched-revert { width: 100%; }
+    /* Twenty-five labels do not fit across a phone; every third, and the grid
+       still carries the rest. */
+    .chart .axis { font-size: 24px; }
+    .chart .axis:not(.keep) { display: none; }
+    .chart .nowtext { font-size: 28px; }
+    .chart .handle .hval { font-size: 24px; }
+    .hk-lvl { width: 118px; height: 240px; }
+    .hk-ct { width: 54px; height: 240px; }
+  }
+
+  .series {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    margin-bottom: 4px;
+  }
+  .series button {
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    background: transparent;
+    border: 1px solid var(--line-hi);
+    padding: 7px 13px;
+    cursor: pointer;
+  }
+  .series button.on {
+    color: var(--link);
+    background: color-mix(in srgb, var(--link) 13%, transparent);
+    border-color: var(--link);
+  }
+  .series button:disabled { opacity: .45; cursor: default; }
+  /* The primary control of a sheet, not a tab strip: full width, and big enough
+     to hit without aiming. */
+  .series.big { gap: 8px; margin: 18px 0 14px; }
+  .series.big button { flex: 1; padding: 12px 10px; font-size: 11px; }
+  /* Locked is a state you want to see from across the room, so it is red and
+     filled - the same reasoning as the old lock button it replaces. */
+  .series button.on.danger {
+    color: var(--on-amber);
+    background: var(--bad);
+    border-color: var(--bad);
+  }
+  /* A lit bulb is amber everywhere else on the page; the sheet must not call the
+     same thing teal. */
+  .series button.on.warm {
+    color: var(--amber);
+    background: color-mix(in srgb, var(--amber) 15%, transparent);
+    border-color: var(--amber);
+  }
+
+  /* The bindings list reads as a list, so it stays left aligned inside a sheet
+     that is otherwise centered. */
+  .sheet .links { text-align: left; margin-top: 18px; }
+
+  /* A device the panel reads rather than commands: its sheet is a list of
+     numbers, so they get a column each and line up down the page. */
+  .reads { text-align: left; margin: 18px 0 4px; }
+  .read {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .read:last-child { border-bottom: none; }
+  .read .k {
+    flex: 1;
+    font-size: 10px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .read .v {
+    font-size: 15px;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  .sheet .actions { margin-top: 16px; }
+  /* In a sheet the small edit buttons sit in a row with identify and share, so
+     they have to be the same height. */
+  .sheet .actions button.edit { padding: 10px 18px; font-size: 11px; }
+
+  /* Everything inside picks up a radius as well. Square controls in a rounded
+     frame read as an oversight rather than as a contrast. */
+  .sheet button.go,
+  .sheet .actions button,
+  .sheet button.danger,
+  .sheet .chip.wideadd,
+  .sheet input,
+  .series button { border-radius: 10px; }
+  .sheet .pick { border-radius: 12px; overflow: hidden; }
+
+  .sheet h2 {
+    margin: 0 0 4px;
+    font-size: 13px;
+    letter-spacing: .24em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+  .sheet .who {
+    color: var(--ink-dim);
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    margin-bottom: 22px;
+  }
+  /* QR on white - scans far more reliably than inverted */
+  .qr {
+    background: #fff;
+    padding: 14px;
+    display: inline-block;
+    line-height: 0;
+  }
+  .qr svg { width: 232px; height: 232px; }
+
+  .manual {
+    margin-top: 20px;
+    font-size: 21px;
+    letter-spacing: .12em;
+    color: var(--amber);
+  }
+  .manual small {
+    display: block;
+    font-size: 9px;
+    letter-spacing: .22em;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    letter-spacing: .22em;
+  }
+  .countdown {
+    margin-top: 18px;
+    font-size: 11px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+  }
+  .countdown.low { color: var(--bad); }
+  .sheet .note {
+    margin-top: 18px;
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--ink-faint);
+    text-align: left;
+  }
+  .sheet .working { color: var(--ink-dim); font-size: 12px; padding: 40px 0; }
+  .sheet .failed { color: var(--bad); font-size: 12px; padding: 20px 0; text-align: left; }
+
+
+  .sheet label {
+    display: block;
+    text-align: left;
+    font-size: 10px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 14px 0 6px;
+  }
+  .sheet input {
+    font-family: inherit;
+    font-size: 14px;
+    width: 100%;
+    background: var(--sunken);
+    border: 1px solid var(--line-hi);
+    color: var(--ink);
+    padding: 11px 12px;
+  }
+  .sheet input:focus { outline: none; border-color: var(--link); }
+  /* room combobox: input + filtered list */
+  .combo { position: relative; }
+  .combo-list {
+    position: absolute;
+    left: 0; right: 0; top: 100%;
+    background: var(--sunken);
+    border: 1px solid var(--line-hi);
+    border-top: none;
+    max-height: 190px;
+    overflow-y: auto;
+    z-index: 5;
+    display: none;
+    text-align: left;
+  }
+  .combo-list.on { display: block; }
+  .combo-list div {
+    padding: 10px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--line);
+  }
+  .combo-list div:last-child { border-bottom: none; }
+  .combo-list div:hover,
+  .combo-list div.sel { background: color-mix(in srgb, var(--link) 12%, transparent); color: var(--link); }
+  .combo-list div.new { color: var(--link); }
+  .combo-list div.new b { font-weight: 400; color: var(--ink); }
+  .combo-list .none { color: var(--ink-faint); cursor: default; }
+  .combo-list .none:hover { background: none; color: var(--ink-faint); }
+
+  .sheet button.go {
+    margin-top: 22px;
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--on-link);
+    background: var(--link);
+    border: 1px solid var(--link);
+    padding: 12px 22px;
+    cursor: pointer;
+    width: 100%;
+  }
+  .sheet button.go:disabled { opacity: .5; cursor: default; }
+
+  /* ---------- toolbar actions ---------- */
+  .rooms {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 26px;
+  }
+  .rooms .chip {
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    background: transparent;
+    border: 1px dashed var(--line-hi);
+    padding: 9px 15px;
+    cursor: pointer;
+    transition: color .15s, border-color .15s;
+  }
+  .rooms .chip:hover { color: var(--link); border-color: var(--link); }
+  .rooms .chip.bulk:hover { color: var(--bad); border-color: var(--bad); }
+  /* Not an "add": it opens something that already exists. */
+  .rooms .chip.plain { border-style: solid; color: var(--ink-dim); }
+
+  /* ---------- a room ----------
+   * The section IS the room: its header names it, its grid holds it, and its
+   * whole area is the drop target. Making only the grid a target would mean
+   * missing an empty room by a few pixels of header. */
+  .room { margin-bottom: 6px; }
+  .room .section-label, .toolbar { user-select: none; -webkit-user-select: none; }
+  .room .section-label .count {
+    font-size: 10px;
+    letter-spacing: .1em;
+    color: var(--ink-faint);
+  }
+  .room .chip-edit {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 22px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--line-hi);
+    color: var(--ink-faint);
+    cursor: pointer;
+  }
+  .room .chip-edit svg { width: 13px; height: 13px; display: block; }
+  .room .chip-edit:hover { color: var(--link); border-color: var(--link); }
+
+  .empty-room {
+    grid-column: 1 / -1;
+    border: 1px dashed var(--line-hi);
+    border-radius: 12px;
+    padding: 22px;
+    text-align: center;
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  /* ---------- dragging a device ---------- */
+  .tile.dragging {
+    z-index: 50;
+    pointer-events: none;      /* so elementFromPoint sees what is underneath */
+    cursor: grabbing;
+    box-shadow: 0 14px 34px rgba(0,0,0,.45);
+    transition: none;          /* it must track the finger, not lag behind it */
+  }
+  /* The gap the tile would drop into. It is a real grid item, so the preview is
+     the layout itself rather than a line drawn over a layout that might
+     disagree with it. */
+  .grid .tile.ghost {
+    aspect-ratio: auto;        /* its height is the tile's, measured at grab */
+    background: none;
+    border-style: dashed;
+    border-color: var(--link);
+    pointer-events: none;
+    animation: none;
+  }
+  /* While a drag is live, nothing else on the page should light up under the
+     pointer as it passes over. */
+  body.dnd { cursor: grabbing; user-select: none; }
+  body.dnd .tile:hover { transform: none; }
+  .room.over .grid {
+    outline: 1px dashed var(--link);
+    outline-offset: 6px;
+    border-radius: 12px;
+  }
+  .room.over .empty-room { display: none; }
+
+  /* Destructive, and it says so. It is also the only button on the page that
+     asks twice before it does anything. */
+  .sheet button.danger {
+    font-family: inherit;
+    width: 100%;
+    font-size: 11px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--bad);
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--bad) 35%, transparent);
+    padding: 11px;
+    margin-top: 8px;
+    cursor: pointer;
+  }
+  .sheet button.danger:hover { border-color: var(--bad); }
+  .sheet button.danger.armed { background: var(--bad); color: var(--on-amber); }
+
+  .pick .group {
+    padding: 9px 14px;
+    font-size: 9px;
+    letter-spacing: .24em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    background: var(--sunken-hi);
+    border-bottom: 1px solid var(--line);
+  }
+
+  button.edit {
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    background: transparent;
+    border: 1px solid var(--line-hi);
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  /* Only the first button pushes the group to the right; otherwise the two
+     would drift apart, each with an auto of its own. */
+  .links .hdr button.edit:first-of-type { margin-left: auto; }
+  button.edit:hover { color: var(--link); border-color: var(--link); }
+  .links .hdr { display: flex; align-items: center; gap: 12px; }
+
+  .pick {
+    text-align: left;
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid var(--line-hi);
+    margin-top: 14px;
+  }
+  .pick label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+    margin: 0;
+    font-size: 13px;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--ink);
+  }
+  .pick label:last-child { border-bottom: none; }
+  .pick label:hover { background: color-mix(in srgb, var(--link) 7%, transparent); }
+  .pick input { width: 16px; height: 16px; accent-color: var(--link); }
+  .pick .room {
+    margin-left: auto;
+    font-size: 10px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .pick .nid { color: var(--ink-faint); font-size: 11px; }
+
+
+  details.raw { margin-top: 14px; }
+  details.raw summary {
+    cursor: pointer;
+    font-size: 10px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  details.raw pre {
+    background: var(--sunken);
+    border: 1px solid var(--line);
+    padding: 12px;
+    overflow-x: auto;
+    font-size: 11px;
+    color: var(--ink-dim);
+    max-height: 320px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <h1><button type="button" class="home" id="go-home"
+                  title="rooms" aria-label="go to rooms">
+        <svg class="logo" viewBox="0 0 24 24" aria-hidden="true">
+          <defs>
+            <clipPath id="logo-house">
+              <path d="M12 2.2 21.8 10.4 V19 a2 2 0 0 1-2 2 H4.2 a2 2 0 0 1-2-2 V10.4 Z"/>
+            </clipPath>
+          </defs>
+          <!-- The light inside, drawn as the level fill a lit tile carries -
+               the same shape this whole interface is built out of. -->
+          <g clip-path="url(#logo-house)">
+            <rect class="lglit"  x="0" y="13.4" width="24" height="12"/>
+            <rect class="lgedge" x="0" y="13" width="24" height="1"/>
+          </g>
+          <path class="lgline"
+                d="M12 2.2 21.8 10.4 V19 a2 2 0 0 1-2 2 H4.2 a2 2 0 0 1-2-2 V10.4 Z"/>
+        </svg>
+        <span>Smart Home<span class="dot">.</span></span>
+      </button></h1>
+      <span id="status">connecting</span>
+    </div>
+    <!-- The two things you do TO the house, as opposed to the things you do
+         to one lamp. They were down in the toolbar as three separate "+"
+         chips plus a schedule chip, which put four permanent buttons across
+         the top of a page whose subject is the rooms underneath them. -->
+    <div class="hdr-acts">
+      <button type="button" class="hact" id="go-sched">schedule</button>
+      <button type="button" class="hact add" id="go-add"
+              title="add a device, a switch or a room" aria-label="add">+</button>
+    </div>
+    <div id="theme">
+      <button type="button" class="tsw" data-state="auto">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <mask id="theme-cut">
+            <rect x="-6" y="-6" width="36" height="36" fill="#fff"/>
+            <!-- the base positions are the "day" state: both outside the disc -->
+            <circle class="carve" cx="26" cy="-2" r="7" fill="#000"/>
+            <rect class="split" x="12" y="-6" width="20" height="36" fill="#000"/>
+          </mask>
+          <g class="rays" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+            <line x1="12"  y1="3.8"  x2="12"   y2="1.4"/>
+            <line x1="17.8" y1="6.2" x2="19.5" y2="4.5"/>
+            <line x1="20.2" y1="12"  x2="22.6" y2="12"/>
+            <line x1="17.8" y1="17.8" x2="19.5" y2="19.5"/>
+            <line x1="12"  y1="20.2" x2="12"   y2="22.6"/>
+            <line x1="6.2" y1="17.8" x2="4.5"  y2="19.5"/>
+            <line x1="3.8" y1="12"   x2="1.4"  y2="12"/>
+            <line x1="6.2" y1="6.2"  x2="4.5"  y2="4.5"/>
+          </g>
+          <circle class="ring" cx="12" cy="12" r="6" fill="none"
+                  stroke="currentColor" stroke-width="1.6"/>
+          <circle class="body" cx="12" cy="12" r="6" fill="currentColor"
+                  mask="url(#theme-cut)"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <div id="content"></div>
+
+</div>
+
+
+<div id="console">
+  <div class="bar">
+    <span class="live"></span>
+    <span class="chev">&#9650;</span>
+    <span>console</span>
+    <span class="badge"></span>
+  </div>
+  <div class="body"><div class="empty-log">nothing yet</div></div>
+</div>
+
+<div id="overlay">
+  <!-- The wrapper carries the width so the X can sit at its corner and stay
+       there while the sheet scrolls inside. -->
+  <div class="sheetwrap" id="sheetwrap">
+    <button type="button" class="sheet-x" id="sheet-x" title="close"
+            aria-label="close">&times;</button>
+    <div class="sheet" id="sheet"></div>
+  </div>
+</div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+
+const state = { devices: null, switches: [], bySwitch: {}, raw: null,
+                locks: {}, bulbs: {}, view: 'home' };
+
+function setStatus(text, cls) {
+  const el = $('#status');
+  el.textContent = text;
+  el.className = cls || '';
+}
+
+// The old single-'switch' shape is still accepted, so existing installs keep
+// working. One place knows that, and everything that receives a fresh
+// devices.json goes through it.
+function adoptDevices(d) {
+  state.devices = d;
+  state.switches = d.switches || (d.switch ? [d.switch] : []);
+}
+
+async function load() {
+  try {
+    adoptDevices(await (await api('/api/devices')).json());
+  } catch (e) {
+    setStatus('panel offline', 'err');
+    return;
+  }
+
+  render();  // the devices show up right away
+
+  // What the bulbs are doing, in the background. It is the one value here that
+  // changes without us: the wall switch sends Toggle straight to the bulb over
+  // Thread and the Pi never sees it. See pollBulbs().
+  loadBulbs();
+
+  // The lock state is read separately so it does not delay the first render.
+  // Without that, the page would sit blank for 30 s when nobody answers.
+  api('/api/lock').then(r => r.json()).then(j => {
+    state.locks = j.bySwitch || {};
+    render();
+  }).catch(() => {});
+
+  try {
+    const b = await (await api('/api/bindings')).json();
+    state.bySwitch = b.bySwitch || {};
+    state.raw = b.raw;
+    // The state comes from the server, in layers. The old version checked
+    // `b.raw.error`, but `raw` is keyed by switch node, so that field never
+    // exists - and it always fell through to "connected". Which meant it said
+    // "connected" even with no dongle and no Thread network, which only proved
+    // that the browser had reached the server.
+    const h = b.health || {};
+    if (!h.chipTool) {
+      setStatus('chip-tool is not answering', 'err');
+    } else if (!h.total) {
+      setStatus('no devices configured', '');
+    } else if (h.reachable === 0) {
+      setStatus('no device is answering', 'err');
+    } else if (h.reachable < h.total) {
+      setStatus(`connected ${h.reachable}/${h.total}`, 'warn');
+    } else {
+      setStatus('connected', 'ok');
+    }
+  } catch (e) {
+    setStatus('chip-tool unreachable', 'err');
+  }
+  render();
+}
+
+/* A row in a "controls / controlled by" list, and it opens the thing it names.
+ *
+ * The two lists are the only place the panel states a relationship between two
+ * devices, so they are also the only place you are looking at a device you did
+ * not come here for. Making the name dead text meant reading it, closing the
+ * sheet, finding the tile and opening that - four steps to follow a link the
+ * page had already drawn for you. */
+function linkRow(name, open, tail) {
+  const row = document.createElement('div');
+  row.className = 'link-row go';
+  row.setAttribute('role', 'button');
+  row.tabIndex = 0;
+  row.title = 'open ' + name;
+  row.innerHTML = '<span class="arrow">&rarr;</span><span class="nm"></span>' +
+                  (tail ? `<span class="cl">${tail}</span>` : '');
+  row.querySelector('.nm').textContent = name;
+  row.onclick = open;
+  row.onkeydown = ev => {
+    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
+  };
+  return row;
+}
+
+function bulbName(node) {
+  const b = (state.devices.bulbs || []).find(x => String(x.node) === String(node));
+  return b ? b.name : `unknown node ${node}`;
+}
+
+function switchName(node) {
+  const s = state.switches.find(x => String(x.node) === String(node));
+  return s ? s.name : `unknown node ${node}`;
+}
+
+// The Matter clusters a switch can be bound on. 768 is 0x300, ColorControl -
+// it showed as "cluster 768" in the bindings list for want of one line here.
+const CLUSTER_NAMES = { 6: 'on/off', 8: 'brightness', 768: 'colour' };
+
+/* ---------- icons ----------
+ * Inline SVG, and no icon font. The Pi may have no way out to the internet, and
+ * a font that fails to load would leave every tile blank - the one thing the
+ * grid cannot survive, since the icon IS the button. currentColor throughout,
+ * so the palette drives them and both themes work with no second copy. */
+const ICONS = {
+  bulb: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M12 2.8a6.2 6.2 0 0 0-3.8 11.1c.6.5 1 1.2 1.1 1.9l.1.7h5.2l.1-.7c.1-.7.5-1.4 1.1-1.9A6.2 6.2 0 0 0 12 2.8Z"/>
+    <path d="M9.6 18.6h4.8"/><path d="M10.6 21.2h2.8"/></svg>`,
+
+  switch: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect x="4.6" y="2.9" width="14.8" height="18.2" rx="3"/>
+    <rect x="8.7" y="7" width="6.6" height="10" rx="2.4"/>
+    <path d="M9.5 12h5"/></svg>`,
+
+  lock: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect x="4.9" y="10.3" width="14.2" height="10.4" rx="2.6"/>
+    <path d="M8.5 10.3V7.5a3.5 3.5 0 0 1 7 0v2.8"/>
+    <circle cx="12" cy="15.5" r="1.25"/></svg>`,
+
+  // Anything that is neither a switch nor a bulb: a sensor, a plug, a blind.
+  // A dial, because what these have in common is that they READ - the panel
+  // does not command them, it asks them.
+  sensor: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="8.4"/>
+    <path d="M12 7.2v4.8l3.1 2"/></svg>`,
+
+  // A wrench, not a gear. A gear at 13px - a disc with spokes around it - is
+  // the same drawing as a sun, and this button sits on a page whose other round
+  // control is a light.
+  wrench: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M15.6 3.3a5.4 5.4 0 0 0-6.9 6.9l-5.2 5.2a1.9 1.9 0 0 0 0 2.7l1.5 1.5a1.9 1.9 0 0 0 2.7 0l5.2-5.2a5.4 5.4 0 0 0 6.9-6.9l-3.2 3.2-2.9-.6-.6-2.9 3.2-3.2Z"/></svg>`,
+
+  // The size picker: how many tiles fit, drawn literally.
+  sizeS: `<svg viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
+    <rect x="0" y="0" width="3.5" height="3.5"/><rect x="5.25" y="0" width="3.5" height="3.5"/><rect x="10.5" y="0" width="3.5" height="3.5"/>
+    <rect x="0" y="5.25" width="3.5" height="3.5"/><rect x="5.25" y="5.25" width="3.5" height="3.5"/><rect x="10.5" y="5.25" width="3.5" height="3.5"/>
+    <rect x="0" y="10.5" width="3.5" height="3.5"/><rect x="5.25" y="10.5" width="3.5" height="3.5"/><rect x="10.5" y="10.5" width="3.5" height="3.5"/></svg>`,
+  sizeM: `<svg viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
+    <rect x="0" y="0" width="6" height="6"/><rect x="8" y="0" width="6" height="6"/>
+    <rect x="0" y="8" width="6" height="6"/><rect x="8" y="8" width="6" height="6"/></svg>`,
+  sizeL: `<svg viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
+    <rect x="0.5" y="0.5" width="13" height="13"/></svg>`,
+};
+
+/* ---------- tile size ----------
+ * Kept in localStorage, so it is per browser and not per installation: the
+ * tablet on the wall and the laptop want different sizes, and they are looking
+ * at the same server. */
+const SIZES = ['s', 'm', 'l'];
+let tileSize = 'm';
+try { tileSize = localStorage.getItem('tiles') || 'm'; } catch (e) {}
+if (!SIZES.includes(tileSize)) { tileSize = 'm'; }
+
+function setTileSize(v) {
+  tileSize = v;
+  try { localStorage.setItem('tiles', v); } catch (e) {}
+  render();
+}
+
+/* One tile. The two halves are wired here rather than by a later
+ * querySelectorAll pass, so a tile always carries its own device - with a grid
+ * you cannot recover it from a data attribute without stringifying everything.
+ *
+ * The split: the round icon is the quick action, the rest of the tile opens the
+ * settings. click on the icon stops there, otherwise every quick action would
+ * also pop the sheet open behind it. */
+/* ---------- the screen is patched, never rebuilt ----------
+ *
+ * render() used to empty #content and build everything again. That is fine
+ * when it happens on a click and ruinous when it happens on a timer: the bulb
+ * poll runs every 15 s, so every 15 s the whole grid was destroyed, recreated,
+ * and faded back in - and if it landed while you were dragging a tile, the
+ * element under your finger stopped existing.
+ *
+ * So render() now reconciles: it keeps the elements it already has, moves the
+ * ones that belong elsewhere, creates only what is new, and writes a property
+ * only when its value actually differs. Nothing flashes, focus and scroll
+ * survive, and a redraw during a drag is simply deferred.
+ *
+ * What makes it possible to keep an element is that its listeners are bound
+ * once, at build time, and read `el._o` - the current options - when they fire.
+ * Rebinding on every redraw would be most of the work of rebuilding anyway. */
+const DOM = { toolbar: null, sizer: [], lockAll: [], sections: new Map(),
+              tiles: new Map(), raw: null, sched: null,
+              fresh: 0, firstPaint: true };
+
+function setText(el, text) {
+  const t = text == null ? '' : String(text);
+  if (el.textContent !== t) { el.textContent = t; }
+}
+
+function setAttr(el, name, val) {
+  if (val === null || val === undefined || val === '') {
+    if (el.hasAttribute(name)) { el.removeAttribute(name); }
+  } else if (el.getAttribute(name) !== String(val)) {
+    el.setAttribute(name, val);
+  }
+}
+
+/* Put exactly these children, in this order, under this parent - moving what is
+ * already there rather than replacing it. Anything not in the list goes. */
+function place(parent, wanted) {
+  const want = new Set(wanted);
+  for (const child of [...parent.children]) {
+    if (!want.has(child)) { child.remove(); }
+  }
+  wanted.forEach((el, i) => {
+    if (parent.children[i] !== el) { parent.insertBefore(el, parent.children[i] || null); }
+  });
+}
+
+function buildTile(o) {
+  const el = document.createElement('div');
+  el.className = 'tile fresh';
+  el.setAttribute('role', 'button');
+  el.tabIndex = 0;
+  el.dataset.node = o.node;
+
+  const q = document.createElement('button');
+  q.type = 'button';
+  q.className = 'quick';
+
+  const meta = document.createElement('div');
+  meta.className = 'tmeta';
+  const name = document.createElement('div');
+  name.className = 'tname';
+  const st = document.createElement('div');
+  st.className = 'tstate';
+  const dot = document.createElement('i');
+  dot.className = 'cdot';
+  const txt = document.createElement('span');
+  st.append(dot, txt);
+  meta.append(name, st);
+  el.append(q, meta);
+  el._parts = { q, name, st, txt, dot, fill: null, badge: null,
+                icon: null, lvl: null };
+
+  // Bound once, reading el._o when they fire. This is the whole reason a redraw
+  // can leave the element alone: rebinding on every pass would be most of the
+  // cost of rebuilding it.
+  q.onclick = ev => {
+    ev.stopPropagation();
+    if (el._o.onQuick) { el._o.onQuick(q); }
+  };
+  const open = () => { if (el._o.onOpen) { el._o.onOpen(); } };
+  el.onclick = open;
+  el.onkeydown = ev => {
+    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
+  };
+  armDrag(el);
+
+  // The entry animation belongs to .fresh and is dropped as soon as it has
+  // run. Left on the element it would replay every time the tile is moved
+  // between rooms - inserting a node restarts its CSS animations - which is
+  // exactly the flashing this rewrite is here to stop.
+  el.addEventListener('animationend', ev => {
+    if (ev.target === el) { el.classList.remove('fresh'); }
+  });
+  // animationend does not fire in a tab that was never painted - a background
+  // tab freezes its animations - and a stuck .fresh would replay the entry
+  // animation on every move for the life of the page. The timer is the floor.
+  setTimeout(() => el.classList.remove('fresh'), 2000);
+  return el;
+}
+
+function paintTile(el, o) {
+  el._o = o;
+  const p = el._parts;
+
+  el.classList.toggle('on', o.cls === 'on');
+  el.classList.toggle('unknown', o.cls === 'unknown');
+  el.classList.toggle('locked', o.cls === 'locked');
+  setAttr(el, 'title', o.openTitle || 'open settings');
+
+  // innerHTML re-parses the svg, so it is guarded by what is already drawn.
+  if (p.icon !== o.icon) { p.q.innerHTML = o.icon; p.icon = o.icon; }
+  setAttr(p.q, 'title', o.quickTitle);
+  setAttr(p.q, 'aria-label', o.quickTitle);
+  if (p.q.disabled !== !!o.quickDisabled) { p.q.disabled = !!o.quickDisabled; }
+
+  setText(p.name, o.name);
+  setText(p.txt, o.state);
+  p.dot.style.display = o.dot ? 'inline-block' : 'none';
+  if (o.dot) { p.dot.style.background = o.dot; }
+
+  // A level of 0 is "off" and draws nothing; null is "this device has no level"
+  // (a switch), which is not the same thing.
+  if (o.level) {
+    if (!p.fill) {
+      p.fill = document.createElement('div');
+      p.fill.className = 'fill';
+      el.append(p.fill);
+    }
+    if (p.lvl !== o.level) { p.fill.style.setProperty('--lvl', o.level); p.lvl = o.level; }
+    // At the top there is nothing above the line for it to separate, so it
+    // stops being a level marker and becomes a stray rule along the edge.
+    p.fill.classList.toggle('full', o.level >= 0.995);
+  } else if (p.fill) {
+    p.fill.remove();
+    p.fill = null;
+    p.lvl = null;
+  }
+
+  if (o.badge) {
+    if (!p.badge) {
+      p.badge = document.createElement('span');
+      p.badge.className = 'tbadge';
+      el.append(p.badge);
+    }
+    setText(p.badge, o.badge);
+    el.classList.add('badged');
+  } else if (p.badge) {
+    p.badge.remove();
+    p.badge = null;
+    el.classList.remove('badged');
+  }
+}
+
+function tileFor(o) {
+  let el = DOM.tiles.get(o.node);
+  if (!el) {
+    el = buildTile(o);
+    // Staggered, but only for the tiles that arrive together on the first
+    // paint. One tile appearing later has nothing to be staggered against, and
+    // making it wait most of a second before showing up would just look broken.
+    if (DOM.firstPaint) {
+      el.style.animationDelay = Math.min(DOM.fresh++, 24) * 35 + 'ms';
+    }
+    DOM.tiles.set(o.node, el);
+  }
+  paintTile(el, o);
+  return el;
+}
+
+/* How a measurement is written. The names, units and scales all come from the
+ * server, so adding a cluster is one line there and nothing here. */
+function measureLabel(key) {
+  const m = ((state.devices || {}).measures || []).find(x => x.key === key);
+  return m ? m.label : key;
+}
+
+function measureText(key, val) {
+  if (val === null || val === undefined) { return '\u2014'; }
+  if (key === 'airquality') {
+    const words = (state.devices || {}).airQualityWords || [];
+    return words[val] || ('level ' + val);
+  }
+  const m = ((state.devices || {}).measures || []).find(x => x.key === key);
+  const unit = m && m.unit ? ' ' + m.unit : '';
+  return (typeof val === 'number' ? val : String(val)) + unit;
+}
+
+// The one worth putting on a tile, which has room for one. Air quality first
+// because it is the summary the others feed; then whatever is left, in the
+// order the server lists them.
+function headlineMeasure(measured) {
+  const order = ((state.devices || {}).measures || []).map(m => m.key);
+  const keys = Object.keys(measured || {});
+  if (keys.includes('airquality')) { return 'airquality'; }
+  return order.find(k => keys.includes(k)) || null;
+}
+
+function deviceOpts(d) {
+  const st = state.bulbs[String(d.node)];
+  const measured = (st && st.measured) || null;
+  const head = measured ? headlineMeasure(measured) : null;
+
+  let text;
+  if (head) { text = `${measureLabel(head)} ${measureText(head, measured[head])}`; }
+  else if (st && st.ok === false) { text = 'no answer'; }
+  else if (st) { text = d.kind || 'device'; }
+  else { text = 'reading\u2026'; }
+
+  return {
+    node: d.node,
+    icon: ICONS.sensor,
+    cls: st && st.ok === false ? 'unknown' : '',
+    name: d.name,
+    state: text,
+    // Nothing to toggle: these are read, not commanded. The quick action is the
+    // one thing that always applies - make it show you which one it is.
+    quickTitle: 'identify \u2014 ' + d.name,
+    onQuick: q => identifySwitch(d, q),
+    openTitle: 'readings for ' + d.name,
+    onOpen: () => openDevice(d),
+  };
+}
+
+function bulbOpts(b) {
+  const st = state.bulbs[String(b.node)];
+  const on = st ? st.on : undefined;
+  const known = on === true || on === false;
+  // Perceptual, like every other percentage on the page. It used to be the raw
+  // Matter level here and only here, so the same bulb read 40% in its sheet and
+  // 11% on its tile - the same light, two scales, and no way to tell which was
+  // lying.
+  const pct = (st && typeof st.level === 'number')
+    ? Math.round(perceived(st.level) * 100) + '%' : null;
+
+  let text;
+  if (known) { text = on ? (pct ? 'on · ' + pct : 'on') : 'off'; }
+  else if (st) { text = 'no answer'; }
+  else { text = 'reading…'; }
+
+  // How high the tile fills. On with no level read back fills completely: we
+  // know it is lit and nothing more, and a half-full tile would be a number we
+  // invented.
+  // And the fill, so the tile and the sheet's panel stand at the same height for
+  // the same bulb. The floor keeps a bulb that is on but at its minimum from
+  // looking off.
+  const lvl = on !== true ? 0
+    : (st && typeof st.level === 'number' ? Math.max(0.05, perceived(st.level)) : 1);
+
+  return {
+    node: b.node,
+    level: lvl,
+    // The colour the bulb is actually running at, as a dot on the tile.
+    // Brightness alone does not tell you how much light there is: the same
+    // level 254 at 2200 K is one channel of the LEDs and a fraction of the
+    // output it gives at 4000 K. Without this, "full brightness and still dim"
+    // has no visible explanation anywhere on the page.
+    dot: (on === true && st && st.mireds) ? ctColor(st.mireds) : '',
+    icon: ICONS.bulb,
+    // "not read yet" is not "did not answer", and neither is "off". A bulb out
+    // of range must never look like a bulb somebody switched off - you would
+    // walk over and press a switch that is already in the right position.
+    cls: on === true ? 'on' : (st && !known ? 'unknown' : ''),
+    name: b.name,
+    state: text,
+    quickTitle: (on === true ? 'turn off' : 'turn on') + ' — ' + b.name,
+    onQuick: q => toggleBulb(b, q),
+    openTitle: 'settings for ' + b.name,
+    onOpen: () => openBulb(b),
+  };
+}
+
+function switchOpts(sw) {
+  const lk = state.locks[String(sw.node)] || {};
+  const isLock = lk.role === 1 || sw.role === 'lock';
+  const bound = state.bySwitch[String(sw.node)] || [];
+  const n = new Set(bound.map(e => e.node)).size;
+  const locked = lk.locked;
+  const known = locked === true || locked === false;
+
+  return {
+    node: sw.node,
+    // Locked, the switch becomes a padlock. It is the only state a switch has,
+    // and it is worth seeing from the doorway rather than reading.
+    icon: locked ? ICONS.lock : ICONS.switch,
+    cls: locked ? 'locked' : '',
+    name: sw.name,
+    state: isLock ? `locks ${n} switch${n === 1 ? '' : 'es'}`
+                  : `${n} bulb${n === 1 ? '' : 's'}`,
+    badge: isLock ? 'lock' : (locked ? 'locked' : ''),
+    // A lock cannot lock itself: it would leave you no way to unlock the rest
+    // from the wall. So its quick action is the other useful one - blink it, so
+    // you know which of them it is.
+    quickTitle: isLock ? 'identify — ' + sw.name
+      : (locked ? 'unlock ' : 'lock ') + sw.name,
+    quickDisabled: !isLock && !known,
+    onQuick: q => (isLock ? identifySwitch(sw, q) : quickLock(sw, q)),
+    openTitle: 'settings for ' + sw.name,
+    onOpen: () => openSwitch(sw),
+  };
+}
+
+function buildToolbar() {
+  const toolbar = document.createElement('div');
+  toolbar.className = 'toolbar';
+
+  const acts = document.createElement('div');
+  acts.className = 'rooms';
+  const act = (label, fn, cls) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip' + (cls ? ' ' + cls : '');
+    b.textContent = label;
+    b.onclick = fn;
+    return b;
+  };
+  // Adding and the schedule live in the header now - see .hdr-acts. What is
+  // left here acts on what is already on the page.
+
+  // Only worth showing with more than one switch, so they are built now and
+  // attached or detached later.
+  DOM.lockAll = [act('lock all', ev => setLockAll(true, ev.target), 'bulk'),
+                 act('unlock all', ev => setLockAll(false, ev.target), 'bulk')];
+
+  const sizer = document.createElement('div');
+  sizer.className = 'sizer';
+  DOM.sizer = [['s', ICONS.sizeS, 'small tiles'],
+               ['m', ICONS.sizeM, 'medium tiles'],
+               ['l', ICONS.sizeL, 'large tiles']].map(([v, ico, label]) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.size = v;
+    b.innerHTML = ico;
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.onclick = () => setTileSize(v);
+    sizer.append(b);
+    return b;
+  });
+
+  toolbar.append(acts, sizer);
+  toolbar._acts = acts;
+  return toolbar;
+}
+
+function paintToolbar() {
+  const acts = DOM.toolbar._acts;
+  const want = state.switches.length > 1;
+  const has = DOM.lockAll[0].parentNode === acts;
+  if (want && !has) { acts.append(...DOM.lockAll); }
+  else if (!want && has) { DOM.lockAll.forEach(b => b.remove()); }
+  DOM.sizer.forEach(b => b.classList.toggle('on', b.dataset.size === tileSize));
+  // The header is static markup, so its state is painted from here.
+  const sched = $('#go-sched');
+  if (sched) { sched.classList.toggle('on', state.view === 'schedule'); }
+}
+
+function buildSection(name) {
+  const sec = document.createElement('section');
+  sec.className = 'room';
+  sec.dataset.room = name;
+
+  const head = document.createElement('div');
+  head.className = 'section-label';
+  const t = document.createElement('span');
+  t.textContent = name || 'no room';
+  const rule = document.createElement('span');
+  rule.className = 'rule';
+  const count = document.createElement('span');
+  count.className = 'count';
+  head.append(t, rule, count);
+
+  // "no room" is where devices land when they belong nowhere. There is nothing
+  // to rename and nothing to delete, so it gets no wrench.
+  if (name) {
+    const w = document.createElement('button');
+    w.type = 'button';
+    w.className = 'chip-edit';
+    w.innerHTML = ICONS.wrench;
+    w.title = 'rename or delete ' + name;
+    w.setAttribute('aria-label', 'rename or delete ' + name);
+    w.onclick = () => editRoom(name);
+    head.append(w);
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'grid';
+  sec.append(head, grid);
+  sec._parts = { count, grid, empty: null };
+  return sec;
+}
+
+function sectionFor(name) {
+  let sec = DOM.sections.get(name);
+  if (!sec) { sec = buildSection(name); DOM.sections.set(name, sec); }
+  return sec;
+}
+
+/* Where a device sits in its room.
+ *
+ * `pos` is written by a drop and is the only thing that decides order once it
+ * exists. Devices without one - an install that has never been rearranged, or a
+ * device commissioned into a room that has - fall back to the original rule,
+ * switches before bulbs in devices.json order, and sort after everything that
+ * has been placed by hand. So a house nobody has touched looks exactly as it
+ * did, and a newly added device turns up at the end rather than in the middle.
+ */
+function orderOf(d, i, isSwitch) {
+  return typeof d.pos === 'number' ? d.pos
+                                   : 1e6 + (isSwitch ? 0 : 1e3) + i;
+}
+
+// The devices of one room, in the order they are drawn.
+/* Every device in the house, whatever it is.
+ *
+ * Switches and bulbs keep their own arrays because the binding table, the ACL
+ * and the schedule are genuinely switch-and-bulb logic. Everything else lives
+ * in one open list, so adding a kind of thing is a line in the type table on
+ * the server rather than a branch here. */
+function allDevices() {
+  const d = state.devices || {};
+  return [...state.switches, ...(d.bulbs || []), ...(d.devices || [])];
+}
+
+function roomMembers(name) {
+  const mine = d => (d.where || '') === name;
+  const out = [];
+  state.switches.forEach((d, i) => {
+    if (mine(d)) { out.push({ d, key: orderOf(d, i, true), opts: switchOpts }); }
+  });
+  (state.devices.bulbs || []).forEach((d, i) => {
+    if (mine(d)) { out.push({ d, key: orderOf(d, i, false), opts: bulbOpts }); }
+  });
+  // Everything else, after the two kinds that have a hand-placed default order.
+  (state.devices.devices || []).forEach((d, i) => {
+    if (mine(d)) { out.push({ d, key: orderOf(d, i + 2000, false), opts: deviceOpts }); }
+  });
+  out.sort((a, b) => a.key - b.key);
+  return out;
+}
+
+function render() {
+  const root = $('#content');
+  if (!state.devices) { return; }
+
+  // A redraw in the middle of a drag would move the ground under the finger -
+  // and, before this was reconciliation, would delete the element being
+  // dragged outright. Defer it to the drop.
+  if (DRAG.live) { DRAG.dirty = true; return; }
+
+  if (!DOM.toolbar) { DOM.toolbar = buildToolbar(); }
+  paintToolbar();
+
+  // The schedule is a page, not a dialog: a whole day, two curves and a list of
+  // bulbs do not fit in a box in the middle of the screen, and every pixel of
+  // backdrop is a pixel the chart does not get.
+  if (state.view === 'schedule') {
+    if (!DOM.sched) { DOM.sched = buildScheduleView(); }
+    place(root, [DOM.toolbar, DOM.sched]);
+    return;
+  }
+
+  // --- one section per room ---
+  //
+  // Rooms are the structure of the page, not a filter over it. Grouping by kind
+  // instead - all the switches, then all the bulbs - answers a question nobody
+  // asks; you know perfectly well whether you are looking for a lamp. What is
+  // not obvious is which room a device ended up in, and that is what the
+  // sections make impossible to get wrong.
+  //
+  // Empty rooms are drawn too. A room you cannot see is a room you cannot drop
+  // anything into, and a new one starts empty by definition.
+  const all = allDevices();
+  const names = (state.devices.rooms || []).slice();
+  if (all.some(d => !d.where)) { names.push(''); }
+
+  const sections = names.map(name => {
+    const sec = sectionFor(name);
+    const members = roomMembers(name).map(m => m.opts(m.d));
+    setText(sec._parts.count, members.length);
+    if (sec._parts.grid.dataset.size !== tileSize) {
+      sec._parts.grid.dataset.size = tileSize;
+    }
+
+    const want = members.map(tileFor);
+    if (!members.length) {
+      if (!sec._parts.empty) {
+        const e = document.createElement('div');
+        e.className = 'empty-room';
+        e.textContent = 'empty — drag a device here';
+        sec._parts.empty = e;
+      }
+      want.push(sec._parts.empty);
+    }
+    place(sec._parts.grid, want);
+    return sec;
+  });
+
+  // --- the raw response, for when parsing does not catch the format ---
+  if (state.raw && !DOM.raw) {
+    DOM.raw = document.createElement('details');
+    DOM.raw.className = 'raw';
+  }
+  if (state.raw) {
+    DOM.raw.innerHTML = `<summary>raw chip-tool response</summary>
+                         <pre>${JSON.stringify(state.raw, null, 2)}</pre>`;
+  }
+
+  place(root, [DOM.toolbar, ...sections, ...(state.raw ? [DOM.raw] : [])]);
+
+  // Anything no longer on screen stops being remembered, or a device deleted
+  // from devices.json would keep its element alive for the life of the tab.
+  for (const [k, el] of DOM.tiles) { if (!el.isConnected) { DOM.tiles.delete(k); } }
+  for (const [k, el] of DOM.sections) { if (!el.isConnected) { DOM.sections.delete(k); } }
+  DOM.firstPaint = false;
+}
+
+/* ---------- what a tile does when you press its icon ---------- */
+
+async function toggleBulb(b, q) {
+  q.classList.add('busy');
+  q.disabled = true;
+  // Ask for the state we want, not for a toggle, whenever we know where it is:
+  // two clicks in a row on a slow bulb would otherwise cancel each other out.
+  // With no idea, toggle is the only honest thing to send.
+  const cur = (state.bulbs[String(b.node)] || {}).on;
+  const action = cur === true ? 'off' : cur === false ? 'on' : 'toggle';
+
+  const j = await setLight(b.node, b.endpoint ?? 1, action);
+  // The tile survives a redraw now, so whatever we put on the button we take
+  // off ourselves - it is no longer swept away by the element being replaced.
+  q.disabled = false;
+  q.classList.remove('busy');
+  if (j.error) {
+    q.classList.add('failed');
+    setStatus(j.error, 'err');
+    setTimeout(() => q.classList.remove('failed'), 3000);
+    return;
+  }
+  render();
+}
+
+/* One command to a bulb, plus the state it read back.
+ *
+ * The server re-reads the bulb after every command and returns what it found.
+ * A confirmed command is not proof the bulb obeyed, and here you are looking
+ * straight at the bulb - showing "on" for a bulb that stayed dark is worse than
+ * showing nothing. */
+async function setLight(node, endpoint, action) {
+  let j;
+  try {
+    j = await (await api('/api/light', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ node: Number(node), endpoint: Number(endpoint), action })
+    })).json();
+  } catch (err) { j = { error: String(err) }; }
+
+  if (!j.error) { adoptBulb(node, j); }
+  return j;
+}
+
+/* What the server read back off the bulb after a command, into our copy.
+ *
+ * It is a read, not an assumption: the server re-reads the device before
+ * answering, precisely because a confirmed command is not proof the bulb
+ * obeyed - and with a bulb you are looking straight at, showing the value you
+ * asked for instead of the one you got is the expensive kind of wrong. */
+function adoptBulb(node, j) {
+  const cur = state.bulbs[String(node)] || {};
+  const next = { ...cur, ok: true };
+  if (j.on === true || j.on === false) { next.on = j.on; }
+  if (typeof j.level === 'number') { next.level = j.level; }
+  if (typeof j.mireds === 'number' && j.mireds) { next.mireds = j.mireds; }
+  if (typeof j.onlevel === 'number') { next.onlevel = j.onlevel; }
+  if (typeof j.ctMin === 'number' && j.ctMin) { next.ctMin = j.ctMin; }
+  if (typeof j.ctMax === 'number' && j.ctMax) { next.ctMax = j.ctMax; }
+  if (typeof j.held === 'boolean') { next.held = j.held; }
+  state.bulbs[String(node)] = next;
+}
+
+async function quickLock(sw, q) {
+  q.classList.add('busy');
+  q.disabled = true;
+  const ok = await toggleLock(sw.node, null);   // sendLock redraws on its own
+  q.classList.remove('busy');
+  q.disabled = false;
+  if (!ok) {
+    q.classList.add('failed');
+    setTimeout(() => q.classList.remove('failed'), 3000);
+  }
+}
+
+/* Identify from a tile, which cannot use identify() - that one counts down in
+ * the button's text, and this button's content is an svg. Setting textContent
+ * on it would delete the icon and never bring it back.
+ *
+ * The beacon animation says it better anyway: it is the same amber pulse, at
+ * the same rhythm, as the LED on the wall. */
+async function identifySwitch(sw, q) {
+  const seconds = 15;
+  q.disabled = true;
+  q.classList.add('busy');
+  let j;
+  try {
+    j = await (await api('/api/identify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ node: sw.node, endpoint: sw.endpoint ?? 1, seconds })
+    })).json();
+  } catch (err) { j = { error: String(err) }; }
+
+  if (j.error) {
+    q.classList.remove('busy');
+    q.classList.add('failed');
+    setStatus(j.error, 'err');
+    setTimeout(() => { q.classList.remove('failed'); q.disabled = false; }, 2500);
+    return;
+  }
+  setTimeout(() => { q.classList.remove('busy'); q.disabled = false; }, seconds * 1000);
+}
+
+/* ---------- the settings sheet behind a tile ---------- */
+
+function sheetActions(dev, extra) {
+  return `<div class="actions">${extra || ''}
+    <button class="id">identify</button>
+    <button class="share">share</button>
+    <button class="forget" type="button">remove</button>
+  </div>
+  <div class="forget-note" hidden></div>`;
+}
+
+/* Removing a device, in two presses.
+ *
+ * Not a confirm() and not a second dialog: the button says what it is about to
+ * do and the sentence underneath says what that costs, which is the part
+ * nobody can guess. Unpairing is not "take it off the list" - it hands the
+ * device back, and getting it into another system means a factory reset first.
+ * Disarms itself after a few seconds, so an armed button is never left lying
+ * around for the next person to press. */
+function wireForget(sheet, dev) {
+  const btn = sheet.querySelector('.forget');
+  const note = sheet.querySelector('.forget-note');
+  if (!btn) { return; }
+  let armed = null;
+
+  const disarm = () => {
+    clearTimeout(armed);
+    armed = null;
+    btn.classList.remove('armed');
+    btn.textContent = 'remove';
+    note.hidden = true;
+  };
+
+  btn.onclick = async () => {
+    if (!armed) {
+      btn.classList.add('armed');
+      btn.textContent = 'remove for good?';
+      note.hidden = false;
+      note.innerHTML = `<b>${dev.name}</b> is unpaired from the fabric and taken
+        out of the house &mdash; along with any switch that drives it and any
+        schedule of its own. To use it again, anywhere, it has to be factory
+        reset first.`;
+      armed = setTimeout(disarm, 6000);
+      return;
+    }
+    clearTimeout(armed);
+    btn.disabled = true;
+    btn.textContent = 'removing…';
+    let j;
+    try {
+      j = await (await api('/api/forget', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ node: dev.node })
+      })).json();
+    } catch (err) { j = { error: String(err) }; }
+    btn.disabled = false;
+    if (j.error) {
+      disarm();
+      note.hidden = false;
+      note.innerHTML = `<span class="bad">not removed: ${j.error}</span>`;
+      return;
+    }
+    closeSheet();
+    setStatus(j.unpaired
+      ? `${j.name} removed`
+      : `${j.name} removed here, but it did not answer the unpair \u2014 factory reset it before using it elsewhere`,
+      j.unpaired ? 'ok' : 'warn');
+    load();
+  };
+}
+
+function wireActions(sheet, dev) {
+  const idb = sheet.querySelector('.id');
+  idb.dataset.node = dev.node;
+  idb.dataset.endpoint = dev.endpoint ?? 1;
+  idb.onclick = () => identify(idb);
+
+  const shb = sheet.querySelector('.share');
+  shb.dataset.node = dev.node;
+  shb.dataset.name = dev.name;
+  shb.onclick = () => share(shb);
+
+  wireForget(sheet, dev);
+}
+
+function openBulb(b) {
+  const sheet = $('#sheet');
+  const drivers = state.switches.filter(sw =>
+    (state.bySwitch[String(sw.node)] || []).some(e => String(e.node) === String(b.node)));
+
+  sheet.innerHTML = `
+    <h2></h2>
+    <div class="who"></div>
+    <div class="hk">
+      <div class="hk-pad">
+        <div class="hk-lvl" id="hk-lvl">
+          <div class="hk-fill"></div>
+          <div class="hk-face">
+            <span class="hk-ico">${ICONS.bulb}</span>
+            <span class="hk-pct"></span>
+          </div>
+        </div>
+        <div class="hk-cap" id="cap-lvl"></div>
+      </div>
+      <div class="hk-pad">
+        <div class="hk-ct" id="hk-ct"><div class="hk-knob"></div></div>
+        <div class="hk-cap" id="cap-ct"></div>
+      </div>
+    </div>
+    ${sheetActions(b)}
+    <div class="links" id="drivers"></div>
+    <div class="links" id="sched-of"></div>`;
+
+  sheet.querySelector('h2').textContent = b.name;
+  sheet.querySelector('.who').textContent =
+    `bulb · node ${b.node}` + (b.where ? ` · ${b.where}` : '');
+
+  const lvlBox = sheet.querySelector('#hk-lvl');
+  const ctBox = sheet.querySelector('#hk-ct');
+  const fill = sheet.querySelector('.hk-fill');
+  const knob = sheet.querySelector('.hk-knob');
+  const pct = sheet.querySelector('.hk-pct');
+  const capL = sheet.querySelector('#cap-lvl');
+  const capC = sheet.querySelector('#cap-ct');
+
+  /* The strip's travel is THIS BULB's range, not the Matter range.
+   *
+   * The spec allows 153..500 mireds; this lamp reports 153..454 and silently
+   * clamps anything warmer. So the bottom eighth of the slider did nothing -
+   * you dragged into it and the value sprang back as soon as it was read again.
+   * Springing back is the right behaviour when a bulb refuses something, and it
+   * is still there as the backstop; it is the wrong way to find out that a
+   * eighth of a control is decorative.
+   *
+   * Until the bulb has been read we use the Matter range, which is the widest
+   * anything could be - narrowing later only ever removes travel that was not
+   * doing anything. */
+  const ctLo = () => (state.bulbs[String(b.node)] || {}).ctMin || MIRED_MIN;
+  const ctHi = () => (state.bulbs[String(b.node)] || {}).ctMax || MIRED_MAX;
+  const paintStrip = () => {
+    const lo = ctLo();
+    const hi = ctHi();
+    const at = f => ctColor(hi - f * (hi - lo));
+    ctBox.style.background = `linear-gradient(0deg, ${at(0)}, ${at(.33)}, ` +
+      `${at(.5)}, ${at(.67)}, ${at(1)})`;
+  };
+  paintStrip();
+
+  // What the two controls are showing, while a drag is in progress. null means
+  // "whatever the bulb says"; a number means the finger is in charge.
+  let dragLvl = null;
+  let dragCt = null;
+
+  /* Which brightness to show.
+   *
+   * A bulb that is OFF reports CurrentLevel 1 - that is its off reading, not a
+   * setting - so showing it made the control read 4% while off and 25% the
+   * moment you switched it on, as though pressing ON had also changed the
+   * brightness. While off, the honest number is OnLevel: what it will come up
+   * at, which is also what dragging the control is about to change. */
+  const shownNorm = () => {
+    if (dragLvl !== null) { return dragLvl; }
+    const cur = state.bulbs[String(b.node)] || {};
+    if (cur.on === true && typeof cur.level === 'number') { return perceived(cur.level); }
+    if (typeof cur.onlevel === 'number') { return perceived(cur.onlevel); }
+    return typeof cur.level === 'number' ? perceived(cur.level) : 0;
+  };
+  const shownMireds = () => {
+    if (dragCt !== null) { return dragCt; }
+    const cur = state.bulbs[String(b.node)] || {};
+    return Math.min(ctHi(), Math.max(ctLo(), cur.mireds || 370));
+  };
+
+  const paintCtl = () => {
+    const cur = state.bulbs[String(b.node)] || {};
+    const on = cur.on === true;
+    const v = Math.max(0, Math.min(1, shownNorm()));
+    const mir = shownMireds();
+
+    lvlBox.classList.toggle('off', !on);
+    fill.style.height = (v * 100).toFixed(1) + '%';
+    fill.classList.toggle('full', v >= 0.995);
+    pct.textContent = Math.round(v * 100) + '%';
+    // "held" is worth a word, because otherwise the next question is why the
+    // schedule has stopped touching this lamp. It is shown while the lamp is
+    // dark too: a hold set on a dark lamp is waiting for its power-on, and
+    // hiding it there meant the one state you could not see was the one that
+    // outlives the moment you set it.
+    capL.textContent = cur.held ? (on ? 'on · held' : 'off · held')
+      : on ? 'on' : (cur.on === false ? 'off' : '\u2014');
+    capL.title = cur.held
+      ? 'set by hand — the schedule leaves it alone until you switch it off' : '';
+
+    // The handle's travel is inset by its own height, so at either end it sits
+    // fully inside the strip. Positioned by its centre it was drawn half
+    // outside at the top and clipped by the rounded corner, which read as the
+    // control running past its own limit.
+    const lo = ctLo();
+    const hi = ctHi();
+    knob.style.setProperty('--p', hi > lo ? (hi - mir) / (hi - lo) : 0);
+    capC.textContent = `${kelvin(mir)} K`;
+    capC.title = ctWord(mir);
+  };
+  paintCtl();
+
+  const send = async payload => {
+    const box = sheet.querySelector('.hk');
+    box.classList.add('busy');
+    let j;
+    try {
+      j = await (await api('/api/light', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ node: b.node, endpoint: b.endpoint ?? 1, ...payload })
+      })).json();
+    } catch (err) { j = { error: String(err) }; }
+    box.classList.remove('busy');
+    dragLvl = null;
+    dragCt = null;
+    if (j.error) { paintCtl(); return setStatus(j.error, 'err'); }
+    adoptBulb(b.node, j);
+    paintStrip();
+    paintCtl();
+    render();
+  };
+
+  /* One gesture, two meanings, told apart by whether it moved.
+   *
+   * Drag the panel and it sets the value; press and let go without moving and it
+   * toggles the light. That is how the same control does both on a phone, and it
+   * is why there is no separate on/off pair here any more: two buttons whose job
+   * the big control already does, taking up the room the control wanted.
+   *
+   * Sends on RELEASE. A control that fires while you drag puts a hundred
+   * commands on the radio for one gesture and the bulb only shows the last.
+   *
+   * The drag is RELATIVE: it starts from where the control already is and
+   * follows the hand from there. Absolute - jumping to wherever the pointer
+   * happens to be - is the same gesture on paper and a trap in practice, because
+   * the two meanings share a threshold. Click low in the panel to toggle a lamp,
+   * twitch six pixels on the way up, and it stopped being a tap and became "set
+   * 2%": the lamp came on almost invisibly, and being a brightness change it
+   * wrote OnLevel and took a hold as well. Relative, the same twitch is worth
+   * two percent, which is what a twitch should be worth.
+   *
+   * The slop is 8px rather than 5 for the same reason - a mouse click is not
+   * perfectly still, and this control's tap has a job of its own. */
+  const SLOP = 8;
+  const grab = (el, opts) => {
+    let moved = false;
+    let startY = 0;
+    let base = 0;
+    el.onpointerdown = ev => {
+      ev.preventDefault();
+      moved = false;
+      startY = ev.clientY;
+      base = opts.base();
+      el.setPointerCapture(ev.pointerId);
+      el.classList.add('grabbed');
+    };
+    el.onpointermove = ev => {
+      if (!el.hasPointerCapture || !el.hasPointerCapture(ev.pointerId)) { return; }
+      if (!moved && Math.abs(ev.clientY - startY) < SLOP) { return; }
+      moved = true;
+      const r = el.getBoundingClientRect();
+      opts.set(Math.max(0, Math.min(1, base + (startY - ev.clientY) / r.height)));
+      paintCtl();
+    };
+    const up = ev => {
+      if (!el.hasPointerCapture || !el.hasPointerCapture(ev.pointerId)) { return; }
+      el.releasePointerCapture(ev.pointerId);
+      el.classList.remove('grabbed');
+      if (moved) { opts.commit(); } else if (opts.tap) { opts.tap(); }
+    };
+    el.onpointerup = up;
+    el.onpointercancel = ev => {
+      if (el.hasPointerCapture && el.hasPointerCapture(ev.pointerId)) {
+        el.releasePointerCapture(ev.pointerId);
+      }
+      el.classList.remove('grabbed');
+      dragLvl = null;
+      dragCt = null;
+      paintCtl();
+    };
+  };
+
+  grab(lvlBox, {
+    base: () => shownNorm(),
+    // A floor of 1%: dragging to the very bottom of a brightness control means
+    // "as low as it goes", not "off". Off is the tap.
+    set: v => { dragLvl = Math.max(0.01, v); },
+    commit: () => send({ level: levelFromPerceived(dragLvl) }),
+    tap: () => send({ action: 'toggle' }),
+  });
+
+  grab(ctBox, {
+    base: () => (ctHi() - shownMireds()) / (ctHi() - ctLo()),
+    set: v => { dragCt = Math.round(ctHi() - v * (ctHi() - ctLo())); },
+    commit: () => send({ mireds: dragCt }),
+  });
+
+  /* Which schedule this bulb answers to.
+   *
+   * Every bulb a switch drives is written to by the schedule every minute, and
+   * until this row existed nothing on the bulb's own sheet said so - you could
+   * watch a lamp change by itself with no way to find out what was doing it,
+   * let alone which curve.
+   *
+   * Asked for separately because the tile state does not carry it, and it is
+   * one small read of a file on the Pi. */
+  const schedBox = sheet.querySelector('#sched-of');
+  (async () => {
+    let d;
+    try { d = await (await api('/api/schedule')).json(); } catch (err) { return; }
+    if (d.error) { return; }
+    const gov = (d.governed || []).find(g => g.node === b.node);
+    schedBox.innerHTML = '<div class="hdr">affected by schedule</div>';
+    if (!gov) {
+      // Driven by no switch, so nothing writes to it on a timer.
+      schedBox.insertAdjacentHTML('beforeend',
+        '<div class="empty">no schedule reaches this bulb &mdash; it is not bound to a switch</div>');
+      return;
+    }
+    schedBox.append(linkRow(gov.own ? 'its own schedule' : 'the house schedule',
+                            () => editSchedule({ nodes: [b.node] })));
+  })();
+
+  const list = sheet.querySelector('#drivers');
+  list.innerHTML = '<div class="hdr">controlled by</div>';
+  if (drivers.length) {
+    drivers.forEach(sw => list.append(linkRow(sw.name, () => openSwitch(sw))));
+  } else {
+    list.insertAdjacentHTML('beforeend',
+      '<div class="empty">no switch is bound to this bulb</div>');
+  }
+
+  wireActions(sheet, b);
+  $('#overlay').classList.add('on');
+}
+
+/* A device the panel reads rather than commands.
+ *
+ * No controls, because there are none to offer: a sensor answers questions. So
+ * the sheet is its readings, what it says it is, and the two things that apply
+ * to every device on the fabric - make it identify itself, and hand it to
+ * another ecosystem. */
+function openDevice(d) {
+  const sheet = $('#sheet');
+  const st = state.bulbs[String(d.node)] || {};
+  const measured = st.measured || {};
+  const keys = ((state.devices || {}).measures || [])
+    .map(m => m.key).filter(k => k in measured);
+
+  sheet.innerHTML = `
+    <h2></h2>
+    <div class="who"></div>
+    <div class="reads" id="reads"></div>
+    ${sheetActions(d)}`;
+
+  sheet.querySelector('h2').textContent = d.name;
+  sheet.querySelector('.who').textContent =
+    `${d.kind || 'device'} · node ${d.node}` + (d.where ? ` · ${d.where}` : '');
+
+  /* The readings, repainted in place.
+   *
+   * In place and not by rebuilding the sheet, which is what it did at first -
+   * and since rebuilding it also kicked off the fresh read that rebuilt it, the
+   * sheet redrew itself forever. The visible symptom was the buttons flickering
+   * under the pointer, because every pass destroyed and recreated them; the
+   * invisible one was a sensor being polled in a loop. */
+  const box = sheet.querySelector('#reads');
+  const paintReads = () => {
+    const cur = (state.bulbs[String(d.node)] || {});
+    const vals = cur.measured || {};
+    const rows = ((state.devices || {}).measures || [])
+      .map(m => m.key).filter(k => k in vals);
+    box.innerHTML = '';
+    if (!rows.length) {
+      // The three reasons there is nothing here are different, and which one it
+      // is decides what you do about it.
+      const described = Object.values(((d.desc || {}).endpoints) || {})
+        .some(e => (e.clusters || []).length);
+      box.innerHTML = `<div class="empty">${cur.ok === false ? 'not answering'
+        : !described ? 'it did not describe itself when it was added'
+        : 'nothing read from it yet'}</div>`;
+      return;
+    }
+    rows.forEach(k => {
+      const row = document.createElement('div');
+      row.className = 'read';
+      row.innerHTML = '<span class="k"></span><span class="v"></span>';
+      row.querySelector('.k').textContent = measureLabel(k);
+      row.querySelector('.v').textContent = measureText(k, vals[k]);
+      box.append(row);
+    });
+  };
+  paintReads();
+
+  wireActions(sheet, d);
+  $('#overlay').classList.add('on');
+
+  // ONE fresh read, and only the numbers are repainted with it. A sheet that is
+  // open is somebody looking, so the readings are worth being current; a sheet
+  // that reopens itself to show them is a loop.
+  loadBulbs(true).then(() => { if (box.isConnected) { paintReads(); } });
+}
+
+function openSwitch(sw) {
+  const sheet = $('#sheet');
+  const lk = state.locks[String(sw.node)] || {};
+  const isLock = lk.role === 1 || sw.role === 'lock';
+  const bound = state.bySwitch[String(sw.node)] || [];
+  const byNode = {};
+  for (const e of bound) { (byNode[e.node] ||= []).push(e.cluster); }
+
+  sheet.innerHTML = `
+    <h2></h2>
+    <div class="who"></div>
+    ${isLock ? '' : `<div class="series big" id="lockpick">
+      <button data-lock="0">unlocked</button>
+      <button data-lock="1">locked</button>
+    </div>`}
+    <div class="links" id="links"></div>
+    ${sheetActions(sw, `
+      <button class="edit" data-go="bind">bindings</button>
+      <button class="edit" data-go="sched">schedule</button>`)}`;
+
+  sheet.querySelector('h2').textContent = sw.name;
+  sheet.querySelector('.who').textContent =
+    `${isLock ? 'lock' : 'switch'} · node ${sw.node}` +
+    (sw.where ? ` · ${sw.where}` : '');
+
+  const list = sheet.querySelector('#links');
+  list.innerHTML = `<div class="hdr">${isLock ? 'locks these switches'
+                                              : 'controls directly'}</div>`;
+  if (Object.keys(byNode).length) {
+    for (const [node, clusters] of Object.entries(byNode)) {
+      const tail = clusters.map(c => CLUSTER_NAMES[c] || ('cluster ' + c)).join(' · ');
+      // A lock's targets are switches, everything else's are bulbs - so the row
+      // opens whichever kind it is actually naming.
+      const target = isLock
+        ? state.switches.find(x => String(x.node) === String(node))
+        : (state.devices.bulbs || []).find(x => String(x.node) === String(node));
+      const name = isLock ? switchName(node) : bulbName(node);
+      if (!target) {
+        // In the binding table but not in devices.json: nothing to open, and
+        // saying so is better than a link that does nothing.
+        const dead = document.createElement('div');
+        dead.className = 'link-row';
+        dead.innerHTML = `<span class="arrow">&rarr;</span><span class="nm"></span>
+                          <span class="cl">${tail}</span>`;
+        dead.querySelector('.nm').textContent = name;
+        list.append(dead);
+        continue;
+      }
+      list.append(linkRow(name,
+        () => (isLock ? openSwitch(target) : openBulb(target)), tail));
+    }
+  } else {
+    list.insertAdjacentHTML('beforeend',
+      `<div class="empty">no bindings &mdash; this ${isLock ? 'lock locks nothing'
+                                                            : 'switch controls no bulb'}</div>`);
+  }
+
+  const seg = sheet.querySelector('#lockpick');
+  if (seg) {
+    const paint = () => {
+      const cur = (state.locks[String(sw.node)] || {}).locked;
+      seg.querySelectorAll('button').forEach(x => {
+        const want = x.dataset.lock === '1';
+        x.classList.toggle('on', cur === want);
+        x.classList.toggle('danger', want);
+        x.disabled = cur === null || cur === undefined;
+      });
+    };
+    paint();
+    seg.querySelectorAll('button').forEach(x => x.onclick = async () => {
+      const want = x.dataset.lock === '1';
+      if ((state.locks[String(sw.node)] || {}).locked === want) { return; }
+      seg.querySelectorAll('button').forEach(y => y.disabled = true);
+      await sendLock({ switches: [sw.node], locked: want }, null);
+      paint();
+    });
+  }
+
+  sheet.querySelector('[data-go="bind"]').onclick = () => editLinks(sw.node);
+  // A switch has no schedule of its own; what it has is bulbs. Scoping to them
+  // is the only reading of "schedule" on a switch's sheet that means anything.
+  sheet.querySelector('[data-go="sched"]').onclick = () =>
+    editSchedule({ nodes: [...new Set(bound.map(e => e.node))] });
+  wireActions(sheet, sw);
+  $('#overlay').classList.add('on');
+}
+
+async function identify(btn) {
+  const seconds = 15;
+  const original = btn.textContent.trim();
+  btn.disabled = true;
+  btn.classList.add('busy');
+
+  let left = seconds;
+  btn.textContent = left + 's';
+  const tick = setInterval(() => {
+    btn.textContent = (--left) + 's';
+    if (left <= 0) clearInterval(tick);
+  }, 1000);
+
+  try {
+    const r = await api('/api/identify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        node: btn.dataset.node,
+        endpoint: Number(btn.dataset.endpoint),
+        seconds
+      })
+    });
+    const j = await r.json();
+    if (j.error) {
+      clearInterval(tick);
+      btn.textContent = 'error';
+      btn.classList.remove('busy');
+      console.error(j);
+      setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2500);
+      return;
+    }
+  } catch (e) {
+    console.error(e);
+  }
+
+  setTimeout(() => {
+    clearInterval(tick);
+    btn.classList.remove('busy');
+    btn.textContent = original;
+    btn.disabled = false;
+  }, seconds * 1000);
+}
+
+// The bulbs grouped by room, with the switch's own room first - that is usually
+// where the ones you want are. The rest stay reachable further down.
+function renderPick(bulbs, bound, ownRoom, empty = 'no bulbs',
+                    ownLabel = 'the switch\'s room') {
+  if (!bulbs.length) return `<div class="empty" style="padding:14px">${empty}</div>`;
+  const groups = {};
+  bulbs.forEach(b => (groups[b.where || ''] ||= []).push(b));
+  const names = Object.keys(groups).sort((a, b) => {
+    if (a === ownRoom) return -1;
+    if (b === ownRoom) return 1;
+    return a.localeCompare(b);
+  });
+  return names.map(r => `
+    <div class="group">${r || 'no room'}${r === ownRoom ? ' &middot; ' + ownLabel : ''}</div>
+    ${groups[r].map(b => `
+      <label>
+        <input type="checkbox" value="${b.node}" ${bound.has(b.node) ? 'checked' : ''}>
+        <span>${b.name}</span>
+        <span class="nid">${b.node}</span>
+      </label>`).join('')}`).join('');
+}
+
+// ---------- the light schedule ----------
+//
+// One schedule, and it belongs to the house. It lives on the Pi, which writes
+// the level and the colour INTO each bulb when the slot changes; the switch only
+// ever sends Toggle. So this is not a program you send to a device - it is what
+// the bulbs will be set to, hour by hour.
+//
+// THE DAY IS COLUMNS. Left edge is 00:00, right edge is 23:59, and the day is
+// cut into N equal columns. Adding a column re-divides the whole day; there is
+// no such thing as a point at 06:37 any more. That is a real loss of precision
+// and a large gain in everything else: every column is the same width, so the
+// chart is readable as a shape rather than a set of coordinates, and you adjust
+// a period by dragging it rather than by typing a time into a field.
+//
+// TWO LINES, OVERLAID. Brightness and colour temperature share the plot. The one
+// you are editing is drawn in front and is the one that reacts; the other stays
+// behind at low opacity, because what you usually want to know while dragging
+// one is what the other is doing at the same hour.
+//
+// THE COLOUR OF A LINE IS ITS VALUE. Both strokes are painted with a vertical
+// gradient in user space, so a point's colour depends on its height alone: dim
+// blue at the bottom of the brightness line and warm gold at the top; on the
+// colour line, literally the light's own colour, candle at the bottom and
+// daylight at the top. It means you can read the chart without reading the axis.
+const SCHED = { points: [], max: 24, now: 0, tz: '',
+                hover: -1, hoverSeries: null, drag: -1, dragSeries: null,
+                nowAt: 0, tick: null, pending: null,
+                // What the server holds, and which of it is being edited.
+                data: null, sel: { house: true } };
+
+/* Twelve columns of two hours, fixed.
+ *
+ * It was adjustable, stepping through the divisors of 24, and the control cost
+ * a corner of the toolbar to answer a question nobody asks twice. Two hours is
+ * fine enough to shape an evening and coarse enough that the curve through the
+ * column centres stays smooth; below it you are drawing noise, above it you
+ * cannot separate dusk from night.
+ */
+const COLUMNS = 12;
+
+/* The plot has the page to itself, so it is tall.
+ *
+ * The gap between `bottom` and `axis` is the whole of the time scale, and it is
+ * deliberately narrow: the hours are a reference, not a row of headings, so they
+ * get a line of small type and a tick each rather than a band of their own. */
+const PLOT = { w: 1200, top: 68, bottom: 452, axis: 476, h: 492 };
+
+const hhmm = m => String(Math.floor(m / 60) % 24).padStart(2, '0') + ':' +
+                  String(Math.round(m) % 60).padStart(2, '0');
+
+// Perceptual brightness, and it is not a refinement.
+//
+// Matter level 1..254 is proportional to the light emitted, and the eye is not:
+// at 127 you do not see "half", you see about three quarters. Plotted linearly
+// the entire useful evening range is squashed into the bottom sixth of the
+// chart. L* from CIE Lab is literally "how bright it looks", so half the height
+// really does look half as bright - and that lands at level 47, not 127.
+function perceived(level) {
+  const y = Math.max(0, Math.min(1, level / 254));
+  return (y > 0.008856 ? 116 * Math.cbrt(y) - 16 : 903.3 * y) / 100;
+}
+function levelFromPerceived(p) {
+  const l = Math.max(0, Math.min(1, p)) * 100;
+  const y = l > 8 ? Math.pow((l + 16) / 116, 3) : l / 903.3;
+  return Math.max(1, Math.min(254, Math.round(y * 254)));
+}
+
+/* The recommended day, one entry per column at 12 columns.
+ *
+ * Modelled on how adaptive lighting behaves rather than copied from it: warm
+ * and nearly out overnight, climbing to cold and full through the morning,
+ * holding over the middle of the day, then falling back through the afternoon
+ * and warming to candle by bedtime. Kelvin in the comments, mireds in the
+ * value, because mireds are what the bulb takes and rounding twice would put
+ * the curve a degree off what it says.
+ *
+ * Brightness is PERCEIVED, the same scale the chart and the tiles use, so
+ * "60%" here is the 60% you would set by hand - not Matter's level 152. */
+const SCHED_RECOMMENDED = [
+  // 4% is the floor, not a choice: it is what Matter level 1 comes out at on
+  // this scale, and a bulb cannot be dimmer than its lowest step.
+  { at: '01:00', pct:   4, mireds: 454 },   // 2200 K
+  { at: '03:00', pct:   4, mireds: 454 },   // 2200 K
+  { at: '05:00', pct:   4, mireds: 454 },   // 2200 K
+  { at: '07:00', pct:  35, mireds: 370 },   // 2700 K
+  { at: '09:00', pct:  80, mireds: 250 },   // 4000 K
+  { at: '11:00', pct: 100, mireds: 217 },   // 4600 K
+  { at: '13:00', pct: 100, mireds: 208 },   // 4800 K
+  { at: '15:00', pct:  95, mireds: 222 },   // 4500 K
+  { at: '17:00', pct:  80, mireds: 263 },   // 3800 K
+  { at: '19:00', pct:  60, mireds: 333 },   // 3000 K
+  { at: '21:00', pct:  40, mireds: 370 },   // 2700 K
+  { at: '23:00', pct:  15, mireds: 417 },   // 2400 K
+];
+
+const MIRED_MIN = 153;   // 6500 K, cold daylight - the top of the colour axis
+const MIRED_MAX = 500;   // 2000 K, candle - the bottom
+const kelvin = m => Math.round(1e6 / Math.max(1, m) / 50) * 50;
+
+/* What a colour temperature looks like - RELATIVE to a neutral white, which is
+ * the only way it can be drawn usefully.
+ *
+ * The absolute chromaticity of a blackbody is the usual piecewise fit below, and
+ * on its own it is useless here: at 6500 K it comes out (255,254,250), which is
+ * white, and everything from 2000 K to about 4500 K is orange. Drawn straight,
+ * a colour-temperature strip is orange from end to end with a white cap - you
+ * cannot aim at it, and it does not match what the light looks like in a room
+ * either.
+ *
+ * The eye does not see absolute chromaticity, it adapts. Sitting under 3500 K
+ * you call that white, and 6500 K looks blue. So the blackbody colour is divided
+ * by the blackbody colour of a reference and renormalised - von Kries, in the
+ * crudest possible form. Below the reference goes orange, above it goes blue,
+ * and the strip spans the range the way the room does.
+ *
+ * 3500 K for the reference: it puts white about three fifths of the way up the
+ * strip, which is where the mired scale actually puts neutral. */
+const CT_REF_K = 3500;
+
+function blackbody(kelvin) {
+  const t = Math.max(1000, Math.min(12000, kelvin)) / 100;
+  let r, g, b;
+  if (t <= 66) { r = 255; } else { r = 329.698727446 * Math.pow(t - 60, -0.1332047592); }
+  if (t <= 66) { g = 99.4708025861 * Math.log(t) - 161.1195681661; }
+  else { g = 288.1221695283 * Math.pow(t - 60, -0.0755148492); }
+  if (t >= 66) { b = 255; }
+  else if (t <= 19) { b = 0; }
+  else { b = 138.5177312231 * Math.log(t - 10) - 305.0447927307; }
+  // The floor matters: at 2000 K the blue channel lands near zero, and dividing
+  // by a near-zero reference would blow the adaptation up.
+  return [Math.max(1, r), Math.max(1, g), Math.max(1, b)];
+}
+
+const CT_REF = blackbody(CT_REF_K);
+
+function ctColor(mireds) {
+  const rgb = blackbody(1e6 / Math.max(1, mireds));
+  const rel = [rgb[0] / CT_REF[0], rgb[1] / CT_REF[1], rgb[2] / CT_REF[2]];
+  const m = Math.max(rel[0], rel[1], rel[2]);
+  const c = v => Math.max(0, Math.min(255, Math.round(v / m * 255)));
+  return `rgb(${c(rel[0])},${c(rel[1])},${c(rel[2])})`;
+}
+
+function ctWord(mireds) {
+  const k = 1e6 / Math.max(1, mireds);
+  if (k >= 5000) { return 'daylight'; }
+  if (k >= 4000) { return 'cool'; }
+  if (k >= 3200) { return 'neutral'; }
+  if (k >= 2500) { return 'warm'; }
+  return 'candle';
+}
+
+/* Both series through one pair of functions, so nothing downstream has to know
+ * which one it is drawing. norm is 0 at the bottom of the plot and 1 at the top;
+ * everything - the curve, the drag, the snapping, the dotted ladder - works in
+ * norm and only these two touch the units. */
+function normOf(p, series) {
+  if (series === 'level') { return perceived(p.level); }
+  const m = Math.min(MIRED_MAX, Math.max(MIRED_MIN, p.mireds || 370));
+  // High on the chart is cold, low is candle: the way a day runs.
+  return 1 - (m - MIRED_MIN) / (MIRED_MAX - MIRED_MIN);
+}
+function setNorm(p, series, n) {
+  const v = Math.max(0, Math.min(1, n));
+  if (series === 'level') { p.level = levelFromPerceived(v); }
+  else { p.mireds = Math.round(MIRED_MIN + (1 - v) * (MIRED_MAX - MIRED_MIN)); }
+}
+
+/* The minute of the day it is now, on the PI's clock.
+ *
+ * The Pi answers with its own minute when the sheet opens, because the Pi is
+ * what runs the schedule and a browser abroad would put the marker hours off.
+ * From there the browser's clock only supplies the time elapsed since - the two
+ * disagree about what time it is, never about how fast it passes. */
+function nowMinute() {
+  const since = SCHED.nowAt ? (Date.now() - SCHED.nowAt) / 60000 : 0;
+  return (SCHED.now + since) % 1440;
+}
+
+const colWidth = () => PLOT.w / SCHED.points.length;
+const colCentre = i => (i + 0.5) * colWidth();
+const DOT_R = 4;              // dormant handle; the live one is 6
+const yOf = n => PLOT.bottom - n * (PLOT.bottom - PLOT.top);
+const normFromY = y => (PLOT.bottom - y) / (PLOT.bottom - PLOT.top);
+
+// Which column a minute of the day falls in.
+function colAt(minute) {
+  const n = SCHED.points.length;
+  return Math.max(0, Math.min(n - 1, Math.floor(minute / 1440 * n)));
+}
+
+/* The curve, and it is the same curve the Pi follows.
+ *
+ * A spline through the middle of each column, sampled - not emitted as beziers
+ * and then applied as something else. It used to be drawn as beziers while the
+ * Pi applied a step function, so dragging the 12:00 column visibly bent the line
+ * over 11:40 while the light at 11:40 did not move. Drawing by sampling the very
+ * function the server evaluates makes that class of bug impossible rather than
+ * merely fixed: server.py has the same twenty lines, in Python.
+ *
+ * CYCLIC, because a day is a loop. The sample before the first column is the
+ * last one, so the light glides through midnight instead of stepping at it. */
+/* Monotone cubic - Fritsch-Carlson - and not Catmull-Rom, which is what this
+ * used to be.
+ *
+ * Catmull-Rom takes the tangent at a point from its neighbours, so the first
+ * column of a plateau gets a large upward tangent from the ramp before it and
+ * the curve sails PAST the plateau before coming back down to it. That bump,
+ * and the kink where it lands, are the sharp bits: a flat top drawn as a hump.
+ * The same thing inverted puts a dip under a valley floor.
+ *
+ * Monotone tangents are clamped so the curve can never leave the interval
+ * between two neighbouring values. A plateau is arrived at with zero slope and
+ * stays flat, a step becomes a clean S, and nothing overshoots a value you never
+ * asked for - which on a light schedule is not only ugly but wrong: a bump above
+ * a 100% plateau is a brightness the bulb cannot produce.
+ *
+ * Cyclic throughout, like everything else about the day. */
+function monoTangents(y) {
+  const n = y.length;
+  const at = k => y[((k % n) + n) % n];
+  const d = [];
+  for (let i = 0; i < n; i++) { d.push(at(i + 1) - at(i)); }
+  const m = [];
+  for (let i = 0; i < n; i++) { m.push((d[(i - 1 + n) % n] + d[i]) / 2); }
+
+  // A flat segment pins both its ends: this is what keeps plateaus flat.
+  for (let i = 0; i < n; i++) {
+    if (d[i] === 0) { m[i] = 0; m[(i + 1) % n] = 0; }
+  }
+  // And the circle condition, which is what keeps the rest inside its interval.
+  for (let i = 0; i < n; i++) {
+    if (d[i] === 0) { continue; }
+    const j = (i + 1) % n;
+    const a = m[i] / d[i];
+    const b = m[j] / d[i];
+    const q = a * a + b * b;
+    if (q > 9) {
+      const t = 3 / Math.sqrt(q);
+      m[i] = t * a * d[i];
+      m[j] = t * b * d[i];
+    }
+  }
+  return m;
+}
+
+function sampleNorm(vals, minute, tang) {
+  const n = vals.length;
+  if (n < 2) { return vals[0] || 0; }
+  const m = tang || monoTangents(vals);
+  const u = minute / (1440 / n) - 0.5;      // 0 at the first column's centre
+  const i = Math.floor(u);
+  const t = u - i;
+  const i0 = ((i % n) + n) % n;
+  const i1 = (i0 + 1) % n;
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return (2 * t3 - 3 * t2 + 1) * vals[i0]
+       + (t3 - 2 * t2 + t) * m[i0]
+       + (-2 * t3 + 3 * t2) * vals[i1]
+       + (t3 - t2) * m[i1];
+}
+
+/* ---------- the chart ----------
+ *
+ * TWO CONTROLS, BOTH ALWAYS VISIBLE, AND NO SWITCH BETWEEN THEM.
+ *
+ *   the filled area  is brightness - its height is the level
+ *   the line         is colour temperature - its height is the mireds
+ *
+ * There used to be a brightness/colour toggle and only one of them was live at
+ * a time, which is the wrong shape for the job: setting an evening means
+ * setting both, and having to remember which mode you were in is a tax on every
+ * single edit. The pointer picks whichever curve it is nearer, so there is
+ * nothing to choose in advance and nothing to be in the wrong mode for.
+ *
+ * The fill is exactly what a lit tile uses on the home page: --lit, flat, with a
+ * hairline along its top edge. Same colour and same treatment on purpose - a
+ * bulb at 60% on a tile and the schedule asking for 60% at this hour are the
+ * same fact, and they should not be two different pictures. It was a vertical
+ * gradient of its own for a while, which was prettier in isolation and wrong
+ * next to the thing it describes.
+ */
+const CURVE_STEP = 6;      // minutes between samples of the drawn curve
+
+// How finely each control moves. Brightness in tenths with a floor at 10%,
+// because finer is a schedule full of 61% and 63% and below a tenth is a lamp
+// that is technically on. Colour is finer - a step there is about 14 mireds,
+// roughly where a change stops being visible.
+const LADDER = {
+  level: { min: 0.1, notches: 10 },
+  ct: { min: 0, notches: 25 },
+};
+
+function snapNorm(n, series) {
+  const l = LADDER[series] || LADDER.ct;
+  const q = Math.round(n * (l.notches - 1)) / (l.notches - 1);
+  return Math.max(l.min, Math.min(1, l.min + q * (1 - l.min)));
+}
+
+function seriesNorms(series) {
+  const vals = SCHED.points.map(p => normOf(p, series));
+  const tang = monoTangents(vals);
+  const out = [];
+  for (let m = 0; m <= 1440; m += CURVE_STEP) {
+    out.push([m, Math.max(0, Math.min(1, sampleNorm(vals, m, tang)))]);
+  }
+  return out;
+}
+
+function pathOf(samples) {
+  return samples.map(([m, v], i) =>
+    (i ? 'L ' : 'M ') + (m / 1440 * PLOT.w).toFixed(1) + ' ' + yOf(v).toFixed(1)
+  ).join(' ');
+}
+
+/* Which control the pointer is on, or nothing.
+ *
+ * You have to be ON a line. Anywhere else in the plot is not a control, and a
+ * handle that follows the pointer across empty chart claims otherwise - it also
+ * means there is no way to just look at the schedule without appearing to be
+ * about to change it.
+ *
+ * Within reach, the nearer wins. Nothing else: there used to be a rule that
+ * below BOTH curves you were inside the filled area and therefore meant
+ * brightness, which was written before the reach limit existed and became a bug
+ * the moment it did - the colour line is below the brightness edge for most of
+ * a normal day, so hovering just under it satisfied "below both" and the handle
+ * jumped to the orange line above. Standing deep inside the fill now selects
+ * nothing at all, which is what the limit is for. */
+const GRAB = 30;      // svg units - about 7% of the plot's height
+
+function nearestSeries(minute, y) {
+  const at = series => {
+    const vals = SCHED.points.map(p => normOf(p, series));
+    return yOf(Math.max(0, Math.min(1, sampleNorm(vals, minute))));
+  };
+  const dl = Math.abs(y - at('level'));
+  const dc = Math.abs(y - at('ct'));
+  if (Math.min(dl, dc) > GRAB) { return null; }
+  return dl <= dc ? 'level' : 'ct';
+}
+
+function drawChart() {
+  const box = $('#chart');
+  if (!box) { return; }
+  const pts = SCHED.points;
+  if (!pts.length) { return; }
+
+  const now = nowMinute();
+  const lvl = seriesNorms('level');
+  const ct = seriesNorms('ct');
+  const area = pathOf(lvl) + ` L ${PLOT.w} ${PLOT.bottom} L 0 ${PLOT.bottom} Z`;
+
+  // Quarters across; down, one rule per column - and a column is exactly what
+  // you can take hold of. A rule at every hour looked tidier and was worse to
+  // use: twenty-three identical lines, twelve of which meant "grab here" and
+  // eleven of which meant nothing, with no way to tell them apart. The grid
+  // answers "where are the handles" now, which is the only question anyone
+  // asks of it while dragging.
+  let grid = '';
+  for (const f of [0.25, 0.5, 0.75]) {
+    const y = yOf(f).toFixed(1);
+    grid += `<line class="grid" x1="0" y1="${y}" x2="${PLOT.w}" y2="${y}"/>`;
+  }
+  for (let i = 0; i < pts.length; i++) {
+    const x = colCentre(i).toFixed(1);
+    grid += `<line class="grid" x1="${x}" y1="${PLOT.top}" x2="${x}" y2="${PLOT.bottom}"/>`;
+  }
+
+  // Every hour. Small type on a tick, and each one sitting on its own grid line,
+  // so a time on the chart is read rather than estimated.
+  let axis = '';
+  for (let h = 0; h <= 24; h++) {
+    const x = h / 24 * PLOT.w;
+    const lx = h === 0 ? x + 8 : h === 24 ? x - 8 : x;
+    axis += `<line class="tick" x1="${x.toFixed(1)}" y1="${PLOT.bottom}"
+                   x2="${x.toFixed(1)}" y2="${PLOT.bottom + 4}"/>`;
+    axis += `<text class="axis${h % 3 ? '' : ' keep'}" x="${lx.toFixed(1)}" y="${PLOT.axis}"
+                   text-anchor="${h === 0 ? 'start' : h === 24 ? 'end' : 'middle'}"
+             >${String(h).padStart(2, '0')}</text>`;
+  }
+
+  // One open ring per column per curve, and a hole in the curve beneath each.
+  // The ring under the pointer is left out: the live handle stands in for it,
+  // and two markers on the same spot is one too many.
+  const liveCol = SCHED.drag >= 0 ? SCHED.drag : SCHED.hover;
+  const liveSeries = SCHED.dragSeries || SCHED.hoverSeries;
+  const holes = { level: '', ct: '' };
+  let dots = '';
+  for (let i = 0; i < pts.length; i++) {
+    const cx = colCentre(i).toFixed(1);
+    for (const s of ['level', 'ct']) {
+      const cy = yOf(normOf(pts[i], s)).toFixed(1);
+      // Luminance mask: black hides. Literal colours because only the channel
+      // matters here - the same exception the grid mask gets.
+      holes[s] += `<circle cx="${cx}" cy="${cy}" r="${DOT_R}" fill="#000"/>`;
+      if (i === liveCol && s === liveSeries) { continue; }
+      dots += `<circle class="dot ${s}" cx="${cx}" cy="${cy}" r="${DOT_R}"/>`;
+    }
+  }
+  const maskFor = s => `<mask id="m-${s}" maskUnits="userSpaceOnUse"
+        x="0" y="0" width="${PLOT.w}" height="${PLOT.h}">
+        <rect x="0" y="0" width="${PLOT.w}" height="${PLOT.h}" fill="#fff"/>
+        ${holes[s]}</mask>`;
+
+  // What the curve is asking for at this exact minute, beside the time it is
+  // asking for it. The chart could always be read off by eye, but reading a
+  // spline against a dotted ladder is estimating, and the one value anybody
+  // actually wants to check is the one for right now.
+  const nowLvl = sampleNorm(SCHED.points.map(p => normOf(p, 'level')), now);
+  const nowCtN = sampleNorm(SCHED.points.map(p => normOf(p, 'ct')), now);
+  const nowMir = Math.round(MIRED_MIN + (1 - nowCtN) * (MIRED_MAX - MIRED_MIN));
+  const nowSay = `(${Math.round(nowLvl * 100)}% \u00b7 ${kelvin(nowMir)} K)`;
+
+  const nx = now / 1440 * PLOT.w;
+  const nudge = nx < 120 ? 8 : nx > PLOT.w - 120 ? -8 : 0;
+  const anchor = nx < 120 ? 'start' : nx > PLOT.w - 120 ? 'end' : 'middle';
+  const nowMark = `
+    <line class="nowline" x1="${nx.toFixed(1)}" y1="${PLOT.top - 12}"
+          x2="${nx.toFixed(1)}" y2="${PLOT.bottom}"/>
+    <text class="nowtext" x="${(nx + nudge).toFixed(1)}" y="${PLOT.top - 38}"
+          text-anchor="${anchor}">${hhmm(now)}</text>
+    <text class="nowval" x="${(nx + nudge).toFixed(1)}" y="${PLOT.top - 19}"
+          text-anchor="${anchor}">${nowSay}</text>`;
+
+  box.innerHTML = `<svg viewBox="0 0 ${PLOT.w} ${PLOT.h}" id="chart-svg">
+    <defs>${maskFor('level')}${maskFor('ct')}</defs>
+    ${grid}
+    <path class="fill" d="${area}"/>
+    <path class="edge" mask="url(#m-level)" d="${pathOf(lvl)}"/>
+    <path class="ctline" mask="url(#m-ct)" d="${pathOf(ct)}"/>
+    ${dots}
+    ${nowMark}
+    ${axis}
+  </svg>`;
+
+  drawHandle();
+}
+
+/* The handle: a circle sitting on the curve, with an arrow above and below.
+ *
+ * Two arrows and a circle is the whole vocabulary - it says "this point, and it
+ * moves up and down" without a legend, and it appears only under the pointer so
+ * the chart at rest is the two curves and nothing else. */
+function drawHandle() {
+  const svg = document.querySelector('#chart-svg');
+  const i = SCHED.drag >= 0 ? SCHED.drag : SCHED.hover;
+  const series = SCHED.dragSeries || SCHED.hoverSeries;
+  if (!svg || i < 0 || !SCHED.points[i] || !series) { return; }
+
+  const p = SCHED.points[i];
+  const cx = colCentre(i);
+  const cy = yOf(normOf(p, series));
+  const label = series === 'level'
+    ? Math.round(perceived(p.level) * 100) + '%'
+    : kelvin(p.mireds || 370) + ' K';
+  const side = cx < PLOT.w - 200 ? 1 : -1;
+  // Sized against the chart's own type, which is 11 units: the handle was drawn
+  // at nearly twice that and read as a control borrowed from a bigger
+  // interface. It is a marker on a hairline, not a button.
+  const arrow = (dy, up) =>
+    `<path class="arw" d="M ${(cx - 4.5).toFixed(1)} ${(cy + dy + (up ? 3.5 : -3.5)).toFixed(1)}
+        L ${cx.toFixed(1)} ${(cy + dy).toFixed(1)}
+        L ${(cx + 4.5).toFixed(1)} ${(cy + dy + (up ? 3.5 : -3.5)).toFixed(1)}"/>`;
+
+  svg.insertAdjacentHTML('beforeend', `
+    <g class="handle${SCHED.drag >= 0 ? ' live' : ''}">
+      ${arrow(-18, true)}${arrow(18, false)}
+      <circle class="ring" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="6"/>
+      <text class="hval" x="${(cx + side * 15).toFixed(1)}" y="${(cy + 4.5).toFixed(1)}"
+            text-anchor="${side > 0 ? 'start' : 'end'}">${label}</text>
+    </g>`);
+}
+
+/* Pointer to column, series and value.
+ *
+ * Through the svg's own matrix rather than a rule of three on the container's
+ * box: the svg is replaced on every move, and measuring an element that is
+ * about to be replaced is how a dragged point ends up in the corner. */
+function chartAt(ev) {
+  const svg = document.querySelector('#chart-svg');
+  const ctm = svg && svg.getScreenCTM();
+  if (!ctm) { return null; }
+  const pt = svg.createSVGPoint();
+  pt.x = ev.clientX;
+  pt.y = ev.clientY;
+  const loc = pt.matrixTransform(ctm.inverse());
+  const n = SCHED.points.length;
+  const minute = Math.max(0, Math.min(1440, loc.x / PLOT.w * 1440));
+  return {
+    col: Math.max(0, Math.min(n - 1, Math.floor(loc.x / PLOT.w * n))),
+    series: nearestSeries(minute, loc.y),
+    norm: Math.max(0, Math.min(1, normFromY(loc.y))),
+  };
+}
+
+function bindChart() {
+  const box = $('#chart');
+  if (!box) { return; }
+
+  box.onpointermove = ev => {
+    const at = chartAt(ev);
+    if (!at) { return; }
+    if (SCHED.drag >= 0) {
+      setNorm(SCHED.points[SCHED.drag], SCHED.dragSeries,
+              snapNorm(at.norm, SCHED.dragSeries));
+      drawChart();
+      return;
+    }
+    // Off both lines: no handle, and the cursor says so.
+    box.classList.toggle('on-line', !!at.series);
+    const col = at.series ? at.col : -1;
+    if (col !== SCHED.hover || at.series !== SCHED.hoverSeries) {
+      SCHED.hover = col;
+      SCHED.hoverSeries = at.series;
+      drawChart();
+    }
+  };
+
+  box.onpointerleave = () => {
+    if (SCHED.drag >= 0) { return; }
+    box.classList.remove('on-line');
+    SCHED.hover = -1;
+    SCHED.hoverSeries = null;
+    drawChart();
+  };
+
+  box.onpointerdown = ev => {
+    const at = chartAt(ev);
+    if (!at || !at.series) { return; }     // pressing empty chart is not a drag
+    ev.preventDefault();
+    SCHED.drag = at.col;
+    SCHED.dragSeries = at.series;
+    SCHED.hover = at.col;
+    SCHED.hoverSeries = at.series;
+    box.setPointerCapture(ev.pointerId);
+    // The value does not jump on the press itself - the first move is what
+    // moves it. Pressing to read a column must not change it.
+    drawChart();
+  };
+
+  const release = ev => {
+    if (SCHED.drag < 0) { return; }
+    SCHED.drag = -1;
+    SCHED.dragSeries = null;
+    if (box.hasPointerCapture && box.hasPointerCapture(ev.pointerId)) {
+      box.releasePointerCapture(ev.pointerId);
+    }
+    drawChart();
+  };
+  box.onpointerup = release;
+  box.onpointercancel = release;
+}
+
+function note(msg) {
+  const el = $('#sched-msg');
+  if (el) { el.textContent = msg || ''; }
+}
+
+/* What the save actually did, in a sentence you can act on.
+ *
+ * "written into 1 bulb" was true and read as a lie: a bulb that is off takes
+ * every write and shows nothing, because MoveToLevel is ignored while off - on
+ * purpose, so a schedule can never light a dark room at four in the morning.
+ * Standing in front of an unchanged lamp, "written into 1 bulb" is exactly the
+ * wrong thing to be told. */
+function saveOutcome(j) {
+  const pct = typeof j.level === 'number'
+    ? Math.round(perceived(j.level) * 100) + '%' : '';
+  const bulbs = n => `${n} bulb${n === 1 ? '' : 's'}`;
+  const bits = [];
+  if (j.lit) { bits.push(`${bulbs(j.lit)} now at ${pct}`); }
+  if (j.dark) {
+    bits.push(`${bulbs(j.dark)} off — ${j.dark === 1 ? 'it' : 'they'} will come up at ${pct}`);
+  }
+  if (j.unknown) { bits.push(`${bulbs(j.unknown)} did not answer`); }
+  if (j.held) { bits.push(`${bulbs(j.held)} released from being held by hand`); }
+  if (!bits.length) { return 'saved · no bulb is bound to a switch, so nothing to write'; }
+  return 'saved · ' + bits.join(' · ');
+}
+
+/* Whatever is in the file, expressed as twelve equal columns.
+ *
+ * A schedule may have been written with any number of points at any times - by
+ * the older editor, or by hand - so the first thing that happens is a resample:
+ * each column takes the value that was in effect at its own midpoint. The shape
+ * of the day survives, which is the part somebody actually chose. */
+function columnsFrom(points) {
+  const n = COLUMNS;
+  const at = minute => {
+    let slot = points[points.length - 1];
+    for (const p of points) {
+      if ((p.min || 0) <= minute) { slot = p; } else { break; }
+    }
+    return slot || { level: 128, mireds: 370, fade: 20 };
+  };
+  return Array.from({ length: n }, (_, i) => {
+    const src = at(Math.round((i + 0.5) * 1440 / n));
+    const p = { min: Math.round(i * 1440 / n), level: src.level,
+                mireds: src.mireds || 370, fade: src.fade ?? 20 };
+    // Onto the ladder on the way in: a column between two notches is one you
+    // cannot put back where you found it, and a floor that spares what is
+    // already there is not a floor.
+    setNorm(p, 'level', snapNorm(perceived(p.level), 'level'));
+    setNorm(p, 'ct', snapNorm(normOf(p, 'ct'), 'ct'));
+    return p;
+  });
+}
+
+/* ---------- the schedule is a page, not a dialog ----------
+ *
+ * A whole day, two curves and a list of bulbs does not fit in a box in the
+ * middle of the screen, and every pixel spent on the backdrop is a pixel the
+ * chart does not get. It takes over the view instead: same page, same toolbar,
+ * a back control where the room sections would be. */
+
+async function refreshScope() {
+  try {
+    const d = await (await api('/api/schedule')).json();
+    if (!d.error) { SCHED.data = d; paintScope(); }
+  } catch (err) { /* the list keeps its last honest state */ }
+}
+
+function schedGoverned() { return (SCHED.data && SCHED.data.governed) || []; }
+
+function pointsForSel() {
+  const data = SCHED.data;
+  if (!data) { return { points: [], mixed: false }; }
+  if (SCHED.sel.house) { return { points: data.points, mixed: false }; }
+  const sets = SCHED.sel.nodes.map(n => data.bulbs[String(n)] || data.points);
+  const first = JSON.stringify(sets[0] || data.points);
+  return { points: sets[0] || data.points,
+           mixed: sets.some(x => JSON.stringify(x) !== first) };
+}
+
+/* Two different things, and conflating them cost an edit.
+ *
+ * retarget() changes who a save is FOR. selectScope() changes that AND throws
+ * away the curve on screen to load theirs. Save-globally wants the first: the
+ * curve you just drew, given to the house. It called the second, which quietly
+ * reloaded the saved curve a moment before posting it - so the save worked
+ * perfectly and stored what was already there, and the edit vanished in the
+ * one frame between the click and the request. */
+
+/* Load the recommended day into the editor - and only into the editor.
+ *
+ * It does not save. Resetting straight into the house would mean the one
+ * button on this page that cannot be looked at before it takes effect, and the
+ * curve is the whole point of looking. */
+function resetToRecommended() {
+  SCHED.points = SCHED_RECOMMENDED.map((r, i) => ({
+    min: Math.round(i * 1440 / SCHED_RECOMMENDED.length),
+    level: levelFromPerceived(r.pct / 100),
+    mireds: r.mireds,
+    fade: 20,
+  }));
+  SCHED.hover = -1;
+  SCHED.drag = -1;
+  drawChart();
+  note('recommended day loaded — nothing is saved until you press save');
+}
+
+function retarget(scope) {
+  SCHED.sel = scope;
+  paintScope();
+}
+
+function selectScope(scope) {
+  retarget(scope);
+  const r = pointsForSel();
+  SCHED.points = columnsFrom(JSON.parse(JSON.stringify(r.points)));
+  SCHED.hover = -1;
+  SCHED.drag = -1;
+  drawChart();
+  note(r.mixed
+    ? 'these bulbs do not have the same schedule — saving gives them all this one'
+    : '');
+}
+
+/* What the two save buttons say, and what the line above the chart says.
+ *
+ * The scope used to be a list sitting under the chart, always open whether you
+ * were changing it or not - a table of every bulb in the house taking permanent
+ * room on a page whose job is a curve. It is a picker now, behind the second
+ * button, and the button itself carries the answer: you can see what a save
+ * will hit without opening anything.
+ */
+function paintScope() {
+  const say = $('#scope-say');
+  if (!say) { return; }
+  const gov = schedGoverned();
+  const followers = gov.filter(g => !g.own).length;
+  const picked = SCHED.sel.house ? [] : SCHED.sel.nodes;
+  const owned = picked.filter(n => (SCHED.data.bulbs || {})[String(n)]);
+  const names = picked.map(n => (gov.find(g => g.node === n) || {}).name || n);
+
+  say.textContent = SCHED.sel.house
+    ? `editing the house schedule — ${followers} bulb${followers === 1 ? '' : 's'} follow${followers === 1 ? 's' : ''} it`
+    : picked.length === 1
+      ? `editing ${names[0]} on its own`
+      : `editing ${picked.length} bulbs together`;
+
+  // The second button is pre-filled when you arrived from a bulb, so the common
+  // case - open a lamp's schedule, change it, save it - is one press with the
+  // target already named on the button.
+  const split = $('#save-some');
+  const lbl = split.querySelector('.lbl');
+  lbl.textContent = !picked.length ? 'save for…'
+    : picked.length === 1 ? `save for ${names[0]}`
+    : `save for ${picked.length} bulbs`;
+  split.classList.toggle('armed', picked.length > 0);
+
+  $('#save-sched').classList.toggle('dim', picked.length > 0);
+
+  const back = $('#sched-follow');
+  back.style.display = owned.length ? '' : 'none';
+  back.textContent = owned.length === 1
+    ? 'put it back on the house schedule'
+    : `put ${owned.length} bulbs back on the house schedule`;
+}
+
+/* Which bulbs get this schedule.
+ *
+ * Grouped by room, because that is how anybody holds a house in their head -
+ * "the bedside lamps", not "nodes 1004 and 1005". A bulb that already has a
+ * schedule of its own is marked, so you can see what you are about to overwrite
+ * before you tick it. */
+function openTargetPicker() {
+  const sheet = $('#sheet');
+  const gov = schedGoverned();
+  const picked = new Set(SCHED.sel.house ? [] : SCHED.sel.nodes);
+
+  const byRoom = {};
+  gov.forEach(g => (byRoom[g.where || ''] ||= []).push(g));
+  const rooms = Object.keys(byRoom).sort((a, b) => a.localeCompare(b));
+
+  sheet.innerHTML = `<h2>save this schedule for</h2>
+    <div class="who"></div>
+    <div class="pick" id="tpick"></div>
+    <button class="go" id="tsave"></button>
+    <div class="note" id="tnote"></div>`;
+
+  sheet.querySelector('.who').textContent =
+    gov.length ? 'tick the bulbs this curve should govern' : '';
+
+  const list = sheet.querySelector('#tpick');
+  if (!gov.length) {
+    list.innerHTML = '<div class="empty" style="padding:14px">no bulb is bound to a switch, so no schedule reaches anything</div>';
+  }
+  rooms.forEach(room => {
+    const head = document.createElement('div');
+    head.className = 'group';
+    head.textContent = room || 'no room';
+    list.append(head);
+    byRoom[room].forEach(g => {
+      const row = document.createElement('label');
+      row.innerHTML = `<input type="checkbox"${picked.has(g.node) ? ' checked' : ''}>
+        <span class="nm"></span>
+        <span class="nid">${g.own ? 'has its own' : 'house'}</span>`;
+      row.querySelector('.nm').textContent = g.name;
+      if (g.own) { row.querySelector('.nid').classList.add('own'); }
+      row.querySelector('input').onchange = ev => {
+        if (ev.target.checked) { picked.add(g.node); } else { picked.delete(g.node); }
+        paintCount();
+      };
+      list.append(row);
+    });
+  });
+
+  const btn = sheet.querySelector('#tsave');
+  const paintCount = () => {
+    btn.disabled = picked.size === 0;
+    btn.textContent = picked.size === 0 ? 'pick at least one bulb'
+      : picked.size === 1 ? 'save for this bulb'
+      : `save for these ${picked.size} bulbs`;
+  };
+  paintCount();
+
+  btn.onclick = async () => {
+    const nodes = [...picked];
+    if (!nodes.length) { return; }
+    closeSheet();
+    selectScope({ nodes });
+    await saveSchedule();
+  };
+
+  $('#overlay').classList.add('on');
+}
+/* One save, whatever pressed it.
+ *
+ * The scope always travels with the points. The one thing this editor must
+ * never do is change something other than what the line above the chart says it
+ * is changing, and that is only guaranteed if there is a single place where the
+ * two are put in the same request. */
+async function saveSchedule() {
+  const btns = [$('#save-sched'), $('#save-some .lbl')].filter(Boolean);
+  btns.forEach(b => { b.disabled = true; });
+  const lbl = $('#save-some .lbl');
+  const before = lbl ? lbl.textContent : '';
+  note('saving…');
+  let j;
+  try {
+    j = await (await api('/api/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(SCHED.sel.house
+        ? { all: true, points: SCHED.points }
+        : { nodes: SCHED.sel.nodes, points: SCHED.points })
+    })).json();
+  } catch (err) { j = { error: String(err) }; }
+  btns.forEach(b => { b.disabled = false; });
+  if (lbl) { lbl.textContent = before; }
+  if (j.error) { return note('not saved: ' + j.error); }
+  await refreshScope();
+  note(saveOutcome(j));
+  loadBulbs(true);
+}
+
+function closeSchedule() {
+  clearInterval(SCHED.tick);
+  state.view = 'home';
+  DOM.sched = null;
+  render();
+}
+
+/* The way back, from wherever you are.
+ *
+ * Deliberately not a no-op when you are already home: pressed from the rooms
+ * view it still closes an open sheet and takes you to the top, which is what
+ * "home" means to somebody halfway down a long house. */
+function goHome() {
+  closeSheet();
+  if (state.view !== 'home') { closeSchedule(); }
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+async function editSchedule(scope) {
+  closeSheet();
+  state.view = 'schedule';
+  SCHED.pending = scope;
+  render();
+
+  let data;
+  try {
+    data = await (await api('/api/schedule')).json();
+  } catch (err) { data = { error: String(err) }; }
+  if (state.view !== 'schedule') { return; }   // left again while it loaded
+
+  const body = $('#sched-body');
+  if (!body) { return; }
+  if (data.error) {
+    body.innerHTML = `<div class="failed">${data.error}</div>`;
+    return;
+  }
+
+  SCHED.max = data.maxPoints || 24;
+  SCHED.data = data;
+  SCHED.now = typeof data.now === 'number' ? data.now : 0;
+  SCHED.nowAt = Date.now();
+  SCHED.tz = data.tz || '';
+
+  body.innerHTML = `
+    <div class="sched-top">
+      <div class="scope-say" id="scope-say"></div>
+      <button type="button" class="sched-reset" id="reset-sched"
+              title="load the recommended day into the editor">reset</button>
+      <button class="sched-save" id="save-sched">save globally</button>
+      <div class="split" id="save-some">
+        <button type="button" class="lbl"></button>
+        <button type="button" class="caret" title="choose which bulbs"
+                aria-label="choose which bulbs">&#9662;</button>
+      </div>
+    </div>
+    <div class="chart" id="chart"></div>
+    <div class="sched-foot">
+      <div class="note" id="sched-msg"></div>
+      <button class="sched-revert" id="sched-follow" style="display:none"></button>
+    </div>`;
+
+  $('#reset-sched').onclick = resetToRecommended;
+  $('#save-sched').onclick = () => { retarget({ house: true }); saveSchedule(); };
+  $('#save-some .lbl').onclick = () =>
+    (SCHED.sel.house ? openTargetPicker() : saveSchedule());
+  $('#save-some .caret').onclick = openTargetPicker;
+
+  $('#sched-follow').onclick = async ev => {
+    const btn = ev.target;
+    const nodes = (SCHED.sel.nodes || [])
+      .filter(n => (SCHED.data.bulbs || {})[String(n)]);
+    if (!nodes.length) { return; }
+    btn.disabled = true;
+    let j;
+    try {
+      j = await (await api('/api/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodes, follow: true })
+      })).json();
+    } catch (err) { j = { error: String(err) }; }
+    btn.disabled = false;
+    if (j.error) { return note('not changed: ' + j.error); }
+    await refreshScope();
+    selectScope(SCHED.sel);
+    note(saveOutcome(j));
+    loadBulbs(true);
+  };
+
+  const want = SCHED.pending;
+  SCHED.pending = null;
+  selectScope(want && want.nodes && want.nodes.length ? want : { house: true });
+  bindChart();
+
+  // The page stays open for minutes at a time. A now-marker frozen where it was
+  // when you opened it would be worse than none: you would trust it.
+  clearInterval(SCHED.tick);
+  SCHED.tick = setInterval(() => {
+    if (!$('#chart')) { clearInterval(SCHED.tick); return; }
+    if (SCHED.drag < 0) { drawChart(); }
+  }, 30000);
+}
+
+function buildScheduleView() {
+  const sec = document.createElement('section');
+  sec.className = 'sched-view';
+  sec.innerHTML = `
+    <div class="section-label">
+      <button type="button" class="back">&lsaquo; rooms</button>
+      <span>light schedule</span>
+      <span class="rule"></span>
+      <span class="tzn"></span>
+    </div>
+    <div id="sched-body"><div class="empty">reading…</div></div>`;
+  sec.querySelector('.back').onclick = closeSchedule;
+  return sec;
+}
+
+// ---------- rooms ----------
+//
+// A room exists only in devices.json. Matter has no concept of one - it is our
+// grouping, and it is the only reason that file sits next to the fabric.
+//
+// This sheet does the two things a drag cannot: name it, and get rid of it.
+// Which devices are in it is answered by dragging them there, where the answer
+// is also the question - you can see the room you are dropping into.
+function editRoom(name) {
+  const sheet = $('#sheet');
+  const all = [...state.switches, ...(state.devices.bulbs || [])];
+  const members = all.filter(d => (d.where || '') === name).length;
+
+  sheet.innerHTML = `
+    <h2>${name ? 'room' : 'new room'}</h2>
+    <div class="who"></div>
+    <label>name</label>
+    <input id="r-name" placeholder="Kitchen" autocomplete="off">
+    <button class="go">${name ? 'save' : 'create'}</button>
+    ${name ? '<button class="danger" id="r-del">delete room</button>' : ''}
+    <div class="note" id="r-msg"></div>`;
+
+  const input = sheet.querySelector('#r-name');
+  input.value = name || '';
+  sheet.querySelector('.who').textContent = name
+    ? `${members} device${members === 1 ? '' : 's'} in it`
+    : 'drag devices into it afterwards';
+
+  const msg = t => { sheet.querySelector('#r-msg').textContent = t || ''; };
+
+  const save = async btn => {
+    const want = input.value.trim();
+    if (!want) { input.focus(); return msg('the room needs a name'); }
+    if (name && want === name) { return closeSheet(); }
+    btn.disabled = true;
+    const before = btn.textContent;
+    btn.textContent = 'saving…';
+    const j = name ? await room({ op: 'rename', name, to: want })
+                   : await room({ op: 'add', name: want });
+    btn.disabled = false;
+    btn.textContent = before;
+    if (j.error) { return msg(j.error); }
+    closeSheet();
+    if (j.devices) { adoptDevices(j.devices); render(); } else { await load(); }
+  };
+  sheet.querySelector('.go').onclick = e => save(e.target);
+  input.onkeydown = e => { if (e.key === 'Enter') { save(sheet.querySelector('.go')); } };
+
+  const del = sheet.querySelector('#r-del');
+  if (del) {
+    // Two presses. Deleting a room does not delete what is in it - the devices
+    // simply end up with no room - but you have no way of knowing that before
+    // you press, so it should not happen by accident either.
+    del.onclick = async () => {
+      if (!del.classList.contains('armed')) {
+        del.classList.add('armed');
+        del.textContent = members ? `press again — ${members} device(s) lose their room`
+                                  : 'press again to delete';
+        setTimeout(() => {
+          del.classList.remove('armed');
+          del.textContent = 'delete room';
+        }, 4000);
+        return;
+      }
+      del.disabled = true;
+      const j = await room({ op: 'remove', name });
+      if (j.error) { del.disabled = false; return msg(j.error); }
+      closeSheet();
+      if (j.devices) { adoptDevices(j.devices); render(); } else { await load(); }
+    };
+  }
+
+  $('#overlay').classList.add('on');
+  input.focus();
+  input.select();
+}
+
+async function room(payload) {
+  try {
+    return await (await api('/api/room', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })).json();
+  } catch (err) { return { error: String(err) }; }
+}
+
+/* ---------- dragging a device into another room ----------
+ *
+ * Written on pointer events rather than the HTML drag-and-drop API, which does
+ * not exist on touch at all - and a panel on a wall tablet is the case where
+ * this matters most.
+ *
+ * It starts on a LONG PRESS, not on movement, and the same way for mouse and
+ * finger. Starting on movement would mean every attempt to scroll the page with
+ * a finger picks up whatever tile it started on. The press has to hold still:
+ * move more than SLOP before the timer fires and it is a scroll, and we let it
+ * go.
+ *
+ * The tile itself is what moves - no clone. A copy would have to reproduce the
+ * fill, the badge and the icon state, and would drift from them the moment any
+ * of that changed. Transformed in place, its slot in the grid stays behind,
+ * which is also a useful thing to see: where it came from. */
+const DRAG = { el: null, node: null, from: null, id: null, x: 0, y: 0,
+               px: 0, py: 0, timer: null, scroll: null, live: false,
+               target: null, moved: false, dirty: false, ph: null, rect: null };
+const DRAG_HOLD_MS = 350;
+const DRAG_SLOP = 10;
+const DRAG_EDGE = 90;      // px from the viewport edge where the page scrolls
+const DRAG_SPEED = 14;     // px per tick at the very edge
+
+function armDrag(el) {
+  el.addEventListener('pointerdown', ev => {
+    // The quick action is a button of its own; holding it must not drag.
+    if (ev.target.closest('.quick')) { return; }
+    if (ev.button !== undefined && ev.button !== 0) { return; }
+
+    DRAG.el = el;
+    DRAG.node = Number(el.dataset.node);
+    DRAG.from = el.closest('.room') ? el.closest('.room').dataset.room : '';
+    DRAG.id = ev.pointerId;
+    DRAG.x = DRAG.px = ev.clientX;
+    DRAG.y = DRAG.py = ev.clientY;
+    DRAG.live = false;
+    DRAG.moved = false;
+    clearTimeout(DRAG.timer);
+    DRAG.timer = setTimeout(() => startDrag(ev), DRAG_HOLD_MS);
+  });
+}
+
+function startDrag(ev) {
+  const el = DRAG.el;
+  if (!el) { return; }
+  DRAG.live = true;
+
+  /* Out of the grid's flow, pinned exactly where it already was.
+   *
+   * position:fixed rather than a transform on an element still in the layout,
+   * because the grid has to reflow around the gap so you can see where the
+   * tile will land. Fixed is also what makes the auto-scroll simple: the
+   * element is placed in viewport coordinates and so is the pointer, so it
+   * tracks the finger whatever the page does underneath. */
+  const r = el.getBoundingClientRect();
+  DRAG.rect = r;
+
+  // The gap. It is a real element in the grid, moved to wherever the drop
+  // would land - so the preview is the layout itself, not a line drawn on top
+  // of it that the layout might disagree with.
+  const ph = document.createElement('div');
+  ph.className = 'tile ghost';
+  ph.style.height = r.height + 'px';
+  el.parentNode.insertBefore(ph, el);
+  DRAG.ph = ph;
+
+  el.style.position = 'fixed';
+  el.style.left = r.left + 'px';
+  el.style.top = r.top + 'px';
+  el.style.width = r.width + 'px';
+  el.style.height = r.height + 'px';
+  el.style.margin = '0';
+  el.classList.add('dragging');
+  document.body.classList.add('dnd');
+  el.setPointerCapture(DRAG.id);
+
+  // Anything the press managed to select before the hold completed. The CSS
+  // stops a selection starting on a tile; this clears one that began just
+  // outside it and was dragged across.
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed) { sel.removeAllRanges(); }
+  // A short buzz on touch: the gesture has no other way of telling you it took.
+  if (navigator.vibrate) { navigator.vibrate(12); }
+  // Hold near an edge and the page scrolls. Without it you can only drop into a
+  // room that happens to be on screen already, and elementFromPoint returns
+  // nothing outside the viewport - so the drop would silently do nothing.
+  clearInterval(DRAG.scroll);
+  DRAG.scroll = setInterval(dragScrollTick, 16);
+  aimAt(DRAG.px, DRAG.py);
+}
+
+function dragScrollTick() {
+  if (!DRAG.live) { return; }
+  const top = DRAG.py - DRAG_EDGE;
+  const bottom = DRAG.py - (window.innerHeight - DRAG_EDGE);
+  let dy = 0;
+  if (top < 0) { dy = (top / DRAG_EDGE) * DRAG_SPEED; }
+  else if (bottom > 0) { dy = (bottom / DRAG_EDGE) * DRAG_SPEED; }
+  if (!dy) { return; }
+  window.scrollBy(0, dy);
+  // The tile is in viewport coordinates and so is the finger, so neither needs
+  // correcting for the scroll. What the page moved is everything else - so the
+  // drop position has to be worked out again.
+  aimAt(DRAG.px, DRAG.py);
+}
+
+/* Where in a grid the tile would land: the index of the first tile the pointer
+ * is before.
+ *
+ * "Before" in a grid is two questions, not one - above this row, or inside it
+ * and left of this tile's middle. Comparing distance to centres instead, the
+ * usual shortcut, puts the gap in the wrong row whenever the rows are taller
+ * than they are wide. */
+function insertionIndex(grid, x, y) {
+  const kids = [...grid.children].filter(
+    c => c.classList.contains('tile') && c !== DRAG.ph && c !== DRAG.el);
+  for (let i = 0; i < kids.length; i++) {
+    const r = kids[i].getBoundingClientRect();
+    if (y < r.top) { return i; }
+    if (y <= r.bottom && x < r.left + r.width / 2) { return i; }
+  }
+  return kids.length;
+}
+
+/* Which room, and which slot in it. Called on every move and on every scroll
+ * tick, so it does nothing when the answer has not changed - moving the gap
+ * reflows a grid, and doing that sixty times a second for no reason is visible.
+ *
+ * The dragged tile is pointer-events:none, so this sees what is underneath it
+ * rather than the tile itself. */
+function aimAt(x, y) {
+  const under = document.elementFromPoint(x, y);
+  const sec = under && under.closest('.room');
+  // Off every room - between two of them, or past the end of the page. Keep the
+  // last answer rather than dropping the gap; the pointer is on its way
+  // somewhere and a gap that vanishes and comes back flickers.
+  if (!sec || !sec._parts) { return; }
+
+  if (DRAG.target !== sec.dataset.room) {
+    document.querySelectorAll('.room.over').forEach(r => r.classList.remove('over'));
+    sec.classList.add('over');
+    DRAG.target = sec.dataset.room;
+  }
+
+  const grid = sec._parts.grid;
+  const idx = insertionIndex(grid, x, y);
+  const kids = [...grid.children].filter(
+    c => c.classList.contains('tile') && c !== DRAG.ph && c !== DRAG.el);
+  const ref = kids[idx] || null;
+  if (DRAG.ph.parentNode !== grid || DRAG.ph.nextSibling !== ref) {
+    grid.insertBefore(DRAG.ph, ref);
+  }
+}
+
+function endDrag(commit) {
+  clearTimeout(DRAG.timer);
+  clearInterval(DRAG.scroll);
+  const el = DRAG.el;
+  if (el && DRAG.live) {
+    // Back into the flow, at the gap.
+    el.classList.remove('dragging');
+    ['position', 'left', 'top', 'width', 'height', 'margin', 'transform']
+      .forEach(k => { el.style[k] = ''; });
+    if (DRAG.ph && DRAG.ph.parentNode) {
+      if (commit) { DRAG.ph.parentNode.insertBefore(el, DRAG.ph); }
+      DRAG.ph.remove();
+    }
+    DRAG.ph = null;
+    document.body.classList.remove('dnd');
+    document.querySelectorAll('.room.over').forEach(r => r.classList.remove('over'));
+    if (commit) { commitDrop(el); }
+  }
+  const was = DRAG.live;
+  DRAG.el = null;
+  DRAG.live = false;
+  DRAG.target = null;
+  DRAG.ph = null;
+  // Whatever the poll wanted to redraw while the finger was down.
+  if (DRAG.dirty) { DRAG.dirty = false; render(); }
+  return was;
+}
+
+/* The drop, read back off the screen.
+ *
+ * The order is taken from the DOM rather than computed from where we think the
+ * tile went, because the DOM is what the user just watched settle. Anything
+ * else would be a second opinion about the same event. */
+function commitDrop(el) {
+  const sec = el.closest('.room');
+  if (!sec) { return; }
+  const to = sec.dataset.room;
+  const nodes = [...sec._parts.grid.children]
+    .filter(c => c.classList.contains('tile') && !c.classList.contains('ghost'))
+    .map(c => Number(c.dataset.node));
+
+  // Dropped back where it started, in the same place. Nothing to write.
+  const before = roomMembers(to).map(m => m.d.node);
+  if (to === DRAG.from && before.length === nodes.length &&
+      before.every((n, i) => n === nodes[i])) { return; }
+
+  saveOrder(to, nodes);
+}
+
+async function saveOrder(to, nodes) {
+  // The model is updated first, so the redraw that follows agrees with what is
+  // already on screen. Waiting for the round trip means the tile snaps back to
+  // where it came from for a moment, which reads as "the drop did not take" -
+  // and then jumps again when the answer arrives.
+  const all = [...state.switches, ...(state.devices.bulbs || [])];
+  const undo = all.map(d => ({ d, where: d.where, pos: d.pos }));
+  nodes.forEach((n, i) => {
+    const d = all.find(x => x.node === n);
+    if (d) { d.where = to; d.pos = i; }
+  });
+  render();
+
+  const j = await room({ op: 'order', name: to, nodes });
+  if (j.error) {
+    undo.forEach(u => { u.d.where = u.where; u.d.pos = u.pos; });
+    render();
+    return setStatus(j.error, 'err');
+  }
+  // The server's copy wins, and it is already in the reply - no reason to go
+  // and ask for it again.
+  if (j.devices) { adoptDevices(j.devices); render(); }
+}
+
+document.addEventListener('pointermove', ev => {
+  if (!DRAG.el || ev.pointerId !== DRAG.id) { return; }
+  const dx = ev.clientX - DRAG.x;
+  const dy = ev.clientY - DRAG.y;
+
+  if (!DRAG.live) {
+    // Still waiting out the hold: any real movement means this was a scroll or
+    // a slip, not a grab.
+    if (Math.hypot(dx, dy) > DRAG_SLOP) { clearTimeout(DRAG.timer); DRAG.el = null; }
+    return;
+  }
+
+  DRAG.moved = true;
+  DRAG.px = ev.clientX;
+  DRAG.py = ev.clientY;
+  DRAG.el.style.transform = `translate(${dx}px, ${dy}px) scale(1.04)`;
+  aimAt(ev.clientX, ev.clientY);
+}, { passive: true });
+
+document.addEventListener('pointerup', ev => {
+  if (!DRAG.el || ev.pointerId !== DRAG.id) { return; }
+  const dragged = endDrag(true);
+  // Suppress the click that a pointerup produces, or letting go would also open
+  // the settings sheet for the tile you just moved.
+  if (dragged) {
+    const stop = e => { e.stopPropagation(); e.preventDefault(); };
+    document.addEventListener('click', stop, { capture: true, once: true });
+    setTimeout(() => document.removeEventListener('click', stop, true), 0);
+  }
+});
+document.addEventListener('pointercancel', () => endDrag(false));
+
+// ---------- edit a switch's bindings ----------
+function editLinks(swNode) {
+  const sw = state.switches.find(s => s.node === swNode);
+  const bound = new Set((state.bySwitch[String(swNode)] || []).map(e => e.node));
+  const lk = state.locks[String(swNode)] || {};
+  const isLock = lk.role === 1 || sw.role === 'lock';
+
+  // A lock does not control bulbs, it controls switches. Same editor, different
+  // list - and it leaves itself out, so it cannot lock itself.
+  const items = isLock
+    ? state.switches.filter(x => x.node !== swNode)
+    : (state.devices.bulbs || []);
+  const sheet = $('#sheet');
+
+  sheet.innerHTML = `<h2>bindings</h2>
+    <div class="who">${sw.name} &middot; node ${sw.node}</div>
+    <div class="series" id="rolepick">
+      <button data-role="0" class="${isLock ? '' : 'on'}">controls bulbs</button>
+      <button data-role="1" class="${isLock ? 'on' : ''}">lock</button>
+    </div>
+    <div class="pick">${renderPick(items, bound, sw.where,
+        isLock ? 'no other switch to lock' : 'no bulbs')}</div>
+    <button class="go">save</button>
+    <div class="note">${isLock ? `
+      Check the switches this lock locks. When pressed, it sends all of them its
+      own state &mdash; not a separate toggle for each, so they cannot drift
+      apart if one misses the command.<br><br>
+      The lock is not in the list: if it could lock itself, you would have no way
+      left to unlock the rest from the wall.` : `
+      Check every bulb the switch should control. For a lamp with several bulbs,
+      check them all &mdash; they come on together, with a single command.<br><br>
+      A bulb can be controlled by several switches.`}
+    </div>`;
+  $('#overlay').classList.add('on');
+
+  sheet.querySelectorAll('#rolepick button').forEach(b => b.onclick = async () => {
+    const role = Number(b.dataset.role);
+    if ((role === 1) === isLock) { return; }
+    b.disabled = true;
+    let j;
+    try {
+      j = await (await api('/api/role', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ switch: swNode, role })
+      })).json();
+    } catch (err) { j = { error: String(err) }; }
+    b.disabled = false;
+    if (j.error) { return setStatus('the role did not change: ' + j.error, 'err'); }
+    // The role changes both what the switch controls and what the editor lists,
+    // so we reload everything instead of patching the screen.
+    await load();
+    editLinks(swNode);
+  });
+
+  sheet.querySelector('.go').onclick = async (e) => {
+    const btn = e.target;
+    const want = [...sheet.querySelectorAll('.pick input:checked')]
+      .map(i => Number(i.value));
+    btn.disabled = true;
+    btn.textContent = 'writing...';
+
+    let j;
+    try {
+      j = await (await api('/api/bindings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ switch: swNode, bulbs: want })
+      })).json();
+    } catch (err) { j = { error: String(err) }; }
+
+    if (j.error || j.errors) {
+      sheet.innerHTML = `<h2>bindings</h2>
+        <div class="failed">${j.error || j.errors.join('<br>')}</div>`;
+      sheetOnClose = load;
+      return;
+    }
+    closeSheet();
+    load();
+  };
+}
+
+// ---------- add switch ----------
+// The switch is our own device: it has no printed code, we commission it with
+// the passcode + discriminator from the firmware. That is why the form has no
+// code field.
+function addSwitch() {
+  const sheet = $('#sheet');
+  sheet.innerHTML = `<h2>add switch</h2>
+    <div class="who">the module has to be next to the Raspberry Pi</div>
+    <label>name</label>
+    <input id="f-name" placeholder="Bedroom switch" autocomplete="off">
+    <label>room</label>
+    <div class="combo">
+      <input id="f-where" placeholder="search, or type a new one" autocomplete="off">
+      <div class="combo-list" id="f-where-list"></div>
+    </div>
+    <button class="go">commission</button>
+    <div class="note">
+      The module has to be flashed and rebooted. It has no printed code &mdash;
+      it uses the credentials from the firmware.<br><br>
+      Right after commissioning it does not control any bulb yet: you pick them
+      from <b>edit</b>, on its card.
+    </div>`;
+  $('#overlay').classList.add('on');
+  setupRoomCombo();
+  $('#f-name').focus();
+  sheet.querySelector('.go').onclick = (e) =>
+    submitCommission(e.target, sheet, 'switch');
+}
+
+// ---------- add bulb ----------
+/* Add anything.
+ *
+ * There is no "what kind is it?" field, and that is the point: the device is
+ * asked after it joins. A form that makes you classify a box before you have
+ * plugged it in gets it wrong, and then the panel believes the form. */
+/* One question instead of three buttons.
+ *
+ * "+ device", "+ switch" and "+ room" sat permanently across the top of a page
+ * whose subject is the rooms underneath them - and the difference between the
+ * first two is invisible to anybody who has not read the README. Asked once,
+ * each can say what it is and what it is for. */
+function addAnything() {
+  const sheet = $('#sheet');
+  sheet.innerHTML = `<h2>add</h2>
+    <div class="who">what is it?</div>
+    <div class="choices">
+      <button type="button" class="choice" data-go="device">
+        <b>a matter device</b>
+        <span>Any bulb, sensor or plug that speaks Thread &mdash; whoever made
+              it. It joins over Bluetooth, so it has to be next to the Pi and
+              factory-new.</span>
+      </button>
+      <button type="button" class="choice" data-go="switch">
+        <b>one of our switches</b>
+        <span>A Holyiot nRF54L15 running this project's own firmware. It talks
+              to the bulbs directly, with the Pi out of the way.</span>
+      </button>
+      <button type="button" class="choice" data-go="room">
+        <b>a room</b>
+        <span>Just a name to group things under. Nothing is commissioned and
+              nothing is touched on the network.</span>
+      </button>
+    </div>`;
+  $('#overlay').classList.add('on');
+  sheet.querySelectorAll('.choice').forEach(b => {
+    b.onclick = () => ({ device: addDevice, switch: addSwitch,
+                         room: () => editRoom(null) })[b.dataset.go]();
+  });
+}
+
+function addDevice() {
+  const sheet = $('#sheet');
+  sheet.innerHTML = `<h2>add a device</h2>
+    <div class="who">a bulb, a sensor, a plug &mdash; it has to be next to the Raspberry Pi</div>
+    <label>name</label>
+    <input id="f-name" placeholder="Air quality sensor" autocomplete="off">
+    <label>room</label>
+    <div class="combo">
+      <input id="f-where" placeholder="search, or type a new one" autocomplete="off">
+      <div class="combo-list" id="f-where-list"></div>
+    </div>
+    <label>pairing code</label>
+    <input id="f-code" placeholder="1234-567-8901 or MT:..." autocomplete="off">
+    <button class="go">commission</button>
+    <div class="note">
+      Any Matter device that speaks <b>Thread</b>. It joins over Bluetooth
+      first, so it has to be within Bluetooth range of the Pi, and it must be
+      factory-new or reset &mdash; a device already commissioned elsewhere will
+      refuse.<br><br>
+      Nothing is assumed about what it is &mdash; once it is on the fabric the
+      panel asks it. It is wired to nothing until you say so: pick a switch for
+      it from that switch's own sheet.
+    </div>`;
+  $('#overlay').classList.add('on');
+  setupRoomCombo();
+  $('#f-name').focus();
+
+  sheet.querySelector('.go').onclick = (e) =>
+    submitCommission(e.target, sheet, 'device');
+}
+
+async function submitCommission(btn, sheet, kind) {
+  const codeEl = $('#f-code');
+  const body = {
+    kind,
+    name: $('#f-name').value.trim(),
+    where: $('#f-where').value.trim(),
+    code: codeEl ? codeEl.value.trim() : ''
+  };
+  if (!body.name) { alert('the name is required'); return; }
+  if (kind !== 'switch' && !body.code) { alert('the pairing code is required'); return; }
+  // "bulb" is no longer something anybody asks for - the server works it out.
+  if (kind === 'bulb') { body.kind = 'device'; }
+
+  btn.disabled = true;
+  btn.textContent = 'commissioning...';
+
+  let j;
+  try {
+    j = await (await api('/api/commission', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })).json();
+  } catch (err) { j = { error: String(err) }; }
+
+  if (j.error) {
+    const title = { switch: 'add switch', bulb: 'add bulb' }[kind] || 'add a device';
+    sheet.innerHTML = `<h2>${title}</h2>
+      <div class="failed">${j.error}</div>`;
+    return;
+  }
+
+  const warn = [j.acl_error, j.bind_error].filter(Boolean).join('<br>');
+  // What it turned out to be, which nobody had to declare in advance - and, for
+  // anything that can be driven by a switch, the fact that nothing drives it
+  // yet. It used to say it had been "bound to the switch", which was true and
+  // was the bug: it bound itself to whichever switch was listed first, in any
+  // room, without being asked.
+  const article = w => (/^[aeiou]/i.test(String(w).trim()) ? 'an' : 'a');
+  const kindWord = j.kind || (j.unbound ? 'light' : 'device');
+  const next = kind === 'switch'
+    ? 'The switch is in the fabric. Pick which bulbs it controls from <b>bindings</b>.'
+    : j.unbound
+      ? `It says it is ${article(kindWord)} <b>${kindWord}</b>. Nothing controls it yet — `
+        + (j.switches
+            ? 'pick a switch for it from <b>bindings</b>.'
+            : 'add a switch first, then wire the two together from <b>bindings</b>.')
+      : `It is in the fabric, and it says it is ${article(kindWord)} <b>${kindWord}</b>.`;
+  sheet.innerHTML = `<h2>done</h2>
+    <div class="who">${j.name} &middot; node ${j.node}</div>
+    ${warn ? `<div class="failed">Commissioned, but:<br>${warn}</div>` : ''}
+    <div class="note">${next}<br><br>Make a backup:<br>
+      <code>./scripts/commission.sh backup</code></div>`;
+  sheetOnClose = load;
+}
+
+// Room combobox: searches among the existing ones and explicitly offers to
+// create a new one. Without it you end up with "bedroom" and "Bedroom" as two
+// separate rooms.
+function setupRoomCombo() {
+  const input = $('#f-where'), list = $('#f-where-list');
+  const rooms = (state.devices && state.devices.rooms) || [];
+  let idx = -1;
+
+  const norm = s => s.trim().toLowerCase();
+
+  function draw() {
+    const q = norm(input.value);
+    const hits = rooms.filter(r => norm(r).includes(q));
+    const exact = rooms.some(r => norm(r) === q);
+    list.innerHTML = '';
+
+    if (q && !exact) {
+      const el = document.createElement('div');
+      el.className = 'new';
+      el.innerHTML = `+ new room: <b>${input.value.trim()}</b>`;
+      el.onmousedown = e => { e.preventDefault(); close(); };
+      list.append(el);
+    }
+    hits.forEach(r => {
+      const el = document.createElement('div');
+      el.textContent = r;
+      el.onmousedown = e => { e.preventDefault(); input.value = r; close(); };
+      list.append(el);
+    });
+    if (!list.children.length) {
+      const el = document.createElement('div');
+      el.className = 'none';
+      el.textContent = 'no rooms yet';
+      list.append(el);
+    }
+    idx = -1;
+    list.classList.add('on');
+  }
+
+  function close() { list.classList.remove('on'); }
+
+  input.onfocus = draw;
+  input.oninput = draw;
+  input.onblur = () => setTimeout(close, 120);
+  input.onkeydown = e => {
+    const items = [...list.querySelectorAll('div:not(.none)')];
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!items.length) return;
+      idx = (idx + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      items.forEach((el, i) => el.classList.toggle('sel', i === idx));
+      items[idx].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      if (idx >= 0 && items[idx]) {
+        e.preventDefault();
+        items[idx].dispatchEvent(new MouseEvent('mousedown'));
+      } else { close(); }
+    } else if (e.key === 'Escape') { close(); }
+  };
+}
+
+// ---------- share to another ecosystem ----------
+let countdownTimer = null;
+
+/* Something a sheet wants done when it goes away, beyond going away.
+ *
+ * It exists because the close button moved into the corner and became one
+ * button shared by every sheet: the two or three sheets that used to reload the
+ * device list on the way out have nowhere of their own left to hang that on. */
+let sheetOnClose = null;
+
+function closeSheet() {
+  const after = sheetOnClose;
+  sheetOnClose = null;
+  $('#sheetwrap').classList.remove('wide');
+  clearInterval(countdownTimer);
+  clearInterval(SCHED.tick);
+  $('#overlay').classList.remove('on');
+  if (after) { after(); }
+}
+
+async function share(btn) {
+  const node = btn.dataset.node, name = btn.dataset.name;
+  const overlay = $('#overlay'), sheet = $('#sheet');
+
+  sheet.innerHTML = `<h2>share</h2>
+    <div class="who">${name} &middot; node ${node}</div>
+    <div class="working">opening the commissioning window&hellip;</div>`;
+  overlay.classList.add('on');
+
+  let j;
+  try {
+    j = await (await api('/api/share', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ node: Number(node), minutes: 10 })
+    })).json();
+  } catch (e) {
+    j = { error: String(e) };
+  }
+
+  if (j.error) {
+    sheet.innerHTML = `<h2>share</h2>
+      <div class="who">${name} &middot; node ${node}</div>
+      <div class="failed">${j.error}</div>`;
+    return;
+  }
+
+  sheet.innerHTML = `<h2>share</h2>
+    <div class="who">${name} &middot; node ${node}</div>
+    <div class="qr">${j.svg}</div>
+    <div class="manual"><small>or manual code</small>${j.manual}</div>
+    <div class="countdown" id="cd"></div>
+    <div class="note">
+      Scan this from Apple Home &rarr; Add Accessory. The bulb stays with us too
+      &mdash; Matter allows several ecosystems at once.<br><br>
+      Each ecosystem takes one fabric slot in the bulb (at least 5 per the spec).
+    </div>`;
+
+  let left = j.expires_in;
+  const cd = $('#cd');
+  const tick = () => {
+    const m = Math.floor(left / 60), s2 = String(left % 60).padStart(2, '0');
+    cd.textContent = `expires in ${m}:${s2}`;
+    cd.classList.toggle('low', left < 60);
+    if (left-- <= 0) { clearInterval(countdownTimer); cd.textContent = 'the window expired'; }
+  };
+  tick();
+  countdownTimer = setInterval(tick, 1000);
+}
+
+$('#overlay').onclick = e => { if (e.target.id === 'overlay') closeSheet(); };
+$('#sheet-x').onclick = closeSheet;
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+
+// ---------- lock ----------
+//
+// The state lives IN the switch, not here: if you lock them and the power
+// fails, you do not want them unlocking themselves when it comes back. The
+// panel only writes and reads back.
+async function sendLock(payload, btn) {
+  const original = btn ? btn.textContent.trim() : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'writing...'; }
+  let j;
+  try {
+    j = await (await api('/api/lock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })).json();
+  } catch (err) { j = { error: String(err) }; }
+  if (btn) { btn.disabled = false; btn.textContent = original; }
+
+  if (j.error) {
+    setStatus(j.error, 'err');
+    return false;
+  }
+  const bad = (j.results || []).filter(r => !r.ok);
+  if (bad.length) {
+    // We assume nothing about the ones that failed: we re-read everything, so
+    // the UI does not show "locked" for a switch that never got the command.
+    setStatus(`${bad.length} switch(es) did not answer`, 'warn');
+  }
+  const fresh = await (await api('/api/lock')).json();
+  state.locks = fresh.bySwitch || {};
+  render();
+  return !bad.length;
+}
+
+function toggleLock(node, btn) {
+  const cur = (state.locks[String(node)] || {}).locked;
+  return sendLock({ switches: [node], locked: !cur }, btn);
+}
+
+function setLockAll(locked, btn) {
+  return sendLock({ all: true, locked }, btn);
+}
+
+// ---------- what the bulbs are doing ----------
+//
+// Every other value the panel shows is one WE wrote, so it can be cached for
+// hours and re-read on a whim. A bulb's on/off is the exception: the switch
+// sends Toggle straight to the bulb over Thread and the Pi never sees it, so
+// our copy is wrong within a second of anybody pressing a switch. The tiles
+// show that state, so it has to be polled.
+//
+// Polling it forever would undo the work that got the Pi's idle load down: it
+// keeps chip-tool thawed for as long as a tab is open somewhere. So the poll is
+// tied to somebody ACTUALLY LOOKING, not to the page existing:
+//
+//   - the tab has to be visible;
+//   - and touched within IDLE_MS. A panel left open on a wall tablet goes quiet
+//     on its own, and wakes on the first touch with a forced read, so what you
+//     see when you walk up to it is current and not four hours old.
+//
+// The server coalesces on its own (a read newer than its TTL is served from
+// memory), so several browsers do not multiply the radio traffic.
+const BULBS = { timer: null, lastTouch: Date.now(), idle: false };
+const BULB_POLL_MS = 15000;
+const BULB_IDLE_MS = 3 * 60 * 1000;
+
+async function loadBulbs(fresh) {
+  const d = state.devices || {};
+  if (!(d.bulbs || []).length && !(d.devices || []).length) { return; }
+  try {
+    // Deliberately not through api(): a background read should not make the
+    // console's activity dot pulse. The dot means "you asked for something and
+    // it has not come back yet".
+    const j = await (await fetch('/api/bulbs' + (fresh ? '?fresh=1' : ''))).json();
+    state.bulbs = j.byNode || {};
+    render();
+  } catch (err) {
+    /* We try again on the next tick; a missed poll is not worth a red banner. */
+  }
+}
+
+function pollBulbs() {
+  clearTimeout(BULBS.timer);
+  BULBS.timer = setTimeout(() => {
+    const idle = document.hidden || (Date.now() - BULBS.lastTouch) > BULB_IDLE_MS;
+    BULBS.idle = idle;
+    if (!idle) { loadBulbs(); }
+    pollBulbs();
+  }, BULB_POLL_MS);
+}
+
+function touched() {
+  const wasIdle = BULBS.idle || document.hidden;
+  BULBS.lastTouch = Date.now();
+  // Coming back from idle, do not wait out a poll interval and do not accept
+  // the server's cache either: what is on screen has had time to go stale.
+  if (wasIdle) { BULBS.idle = false; loadBulbs(true); }
+}
+
+['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(ev =>
+  document.addEventListener(ev, touched, { passive: true }));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { touched(); } });
+window.addEventListener('focus', touched);
+pollBulbs();
+
+// ---------- console ----------
+//
+// The panel has no streaming channel to the browser, so progress is read by
+// polling a ring buffer on the server. While a command is in flight we ask
+// often, otherwise rarely - a panel left open on a tablet should not hammer the
+// Pi ten times a second for nothing.
+const CONSOLE = { since: 0, open: false, unseen: 0, busy: 0, timer: null };
+
+function markBusy(delta) {
+  CONSOLE.busy = Math.max(0, CONSOLE.busy + delta);
+  $('#console').classList.toggle('busy', CONSOLE.busy > 0);
+  scheduleLogPoll();
+}
+
+// Every fetch to the API goes through here, so the activity dot stays correct
+// without marking it by hand at every call.
+async function api(url, opts) {
+  markBusy(+1);
+  try {
+    return await fetch(url, opts);
+  } finally {
+    markBusy(-1);
+    pollLog();          // picks up whatever was logged during the call
+  }
+}
+
+function scheduleLogPoll() {
+  clearTimeout(CONSOLE.timer);
+  const every = CONSOLE.busy > 0 ? 900 : (CONSOLE.open ? 2500 : 8000);
+  CONSOLE.timer = setTimeout(pollLog, every);
+}
+
+async function pollLog() {
+  let j;
+  try {
+    j = await (await fetch('/api/log?since=' + CONSOLE.since)).json();
+  } catch (err) {
+    scheduleLogPoll();
+    return;
+  }
+  if (j.lines && j.lines.length) {
+    appendLog(j.lines);
+    CONSOLE.since = j.next;
+  }
+
+  // The server holds the device state and re-reads it in the background. We do
+  // not care THAT it read - only whether something came back different from
+  // what we are showing. The counter goes up only when a value actually
+  // differs, and it rides along on the log request, which happens anyway. Zero
+  // extra requests.
+  if (typeof j.rev === 'number') {
+    if (STATE_REV === null) {
+      STATE_REV = j.rev;
+    } else if (j.rev !== STATE_REV) {
+      STATE_REV = j.rev;
+      reloadState();
+    }
+  }
+  scheduleLogPoll();
+}
+
+// The last state revision we are showing. null = we have not seen one yet.
+let STATE_REV = null;
+
+async function reloadState() {
+  try {
+    const [b, l] = await Promise.all([
+      (await api('/api/bindings')).json(),
+      (await api('/api/lock')).json(),
+    ]);
+    state.bySwitch = b.bySwitch || {};
+    state.locks = l.bySwitch || {};
+    render();
+  } catch (err) {
+    /* We retry on the next revision; no reason to alarm anyone over this. */
+  }
+}
+
+function appendLog(lines) {
+  const body = $('#console .body');
+  const empty = body.querySelector('.empty-log');
+  if (empty) { empty.remove(); }
+
+  const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 30;
+  for (const l of lines) {
+    const d = document.createElement('div');
+    d.className = 'line ' + (l.level || 'info');
+    const t = new Date(l.t * 1000);
+    d.innerHTML = `<span class="ts">${String(t.getHours()).padStart(2, '0')}:` +
+                  `${String(t.getMinutes()).padStart(2, '0')}:` +
+                  `${String(t.getSeconds()).padStart(2, '0')}</span><span></span>`;
+    d.lastChild.textContent = l.msg;
+    body.append(d);
+  }
+  // Do not drag the user back down if they scrolled up to read something.
+  if (atBottom) { body.scrollTop = body.scrollHeight; }
+
+  while (body.children.length > 400) { body.firstChild.remove(); }
+
+  if (!CONSOLE.open) {
+    CONSOLE.unseen += lines.length;
+    $('#console .badge').textContent = CONSOLE.unseen + ' new lines';
+  }
+}
+
+$('#console .bar').onclick = () => {
+  CONSOLE.open = !CONSOLE.open;
+  $('#console').classList.toggle('open', CONSOLE.open);
+  if (CONSOLE.open) {
+    CONSOLE.unseen = 0;
+    $('#console .badge').textContent = '';
+    const body = $('#console .body');
+    body.scrollTop = body.scrollHeight;
+  }
+  scheduleLogPoll();
+};
+pollLog();
+
+// The theme selector. The applying itself lives in the script in <head>, which
+// runs before the first paint; here we only cycle and draw the icon.
+// The icon shows the PREFERENCE (auto included), not the effective theme -
+// otherwise on auto you would have no way to see that it is on auto.
+const THEME_CYCLE = [
+  { pref: 'auto',  name: 'auto, follows the computer' },
+  { pref: 'light', name: 'day' },
+  { pref: 'dark',  name: 'night' },
+];
+
+function paintTheme() {
+  const btn = $('#theme button');
+  let i = THEME_CYCLE.findIndex(t => t.pref === window.themePref());
+  if (i < 0) { i = 0; }
+  const next = THEME_CYCLE[(i + 1) % THEME_CYCLE.length];
+
+  btn.dataset.state = THEME_CYCLE[i].pref;
+  // No visible text, so the label has to say both the state and what comes next.
+  const label = `theme: ${THEME_CYCLE[i].name} — click for ${next.name}`;
+  btn.setAttribute('aria-label', label);
+  btn.title = label;
+}
+
+$('#go-home').onclick = goHome;
+$('#go-add').onclick = addAnything;
+$('#go-sched').onclick = () => editSchedule();
+
+$('#theme button').onclick = () => {
+  const i = THEME_CYCLE.findIndex(t => t.pref === window.themePref());
+  window.setThemePref(THEME_CYCLE[((i < 0 ? 0 : i) + 1) % THEME_CYCLE.length].pref);
+  paintTheme();
+  // The chart's gradients are baked into the svg when it is drawn, so a theme
+  // change under an open schedule would leave the old palette on screen.
+  if ($('#chart')) { drawChart(); }
+};
+paintTheme();
+
+load();
+</script>
+</body>
+</html>

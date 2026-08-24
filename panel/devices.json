@@ -1,0 +1,17 @@
+{
+  "_comment": [
+    "The panel's device registry.",
+    "'node' must be exactly the node ID used at commissioning.",
+    "'where' groups devices in the UI; 'rooms' keeps rooms even when empty.",
+    "'switches' takes several switches; each one has its own bindings.",
+    "Fill this in as devices are actually commissioned.",
+    "A device listed here but not commissioned shows up in the UI as if it",
+    "existed, and then never answers - so do not add it ahead of time."
+  ],
+  "rooms": [
+    "ground floor hallway",
+    "living room"
+  ],
+  "switches": [],
+  "bulbs": []
+}
