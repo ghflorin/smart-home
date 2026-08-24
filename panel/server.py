@@ -399,7 +399,22 @@ MEASURED = [
     (0x005B, 0x0000, "airquality",   "air quality",  "",         1),
     (0x0403, 0x0000, "pressure",     "pressure",     "hPa",      1),
     (0x0400, 0x0000, "illuminance",  "light",        "lx",       1),
+    # BooleanState. A contact sensor's whole output is this one bit, so without
+    # it the panel asked a door sensor for nine things it does not have, got
+    # nothing back, and showed a device that reads as unreachable.
+    (0x0045, 0x0000, "contact",      "contact",      "",         1),
 ]
+
+# Readings that are a state rather than a quantity. The index is the value:
+# False is 0, True is 1.
+#
+# The direction is checked against hardware, not against the spec: an IKEA
+# MYGGBETT with the two halves apart reports False. Guessing this wrong is worse
+# than not showing it at all - a door reported shut while it is open is the one
+# reading somebody would act on without looking.
+MEASURE_WORDS = {
+    "contact": ["open", "closed"],
+}
 
 AIR_QUALITY_WORDS = ["unknown", "good", "fair", "moderate",
                      "poor", "very poor", "extremely poor"]
@@ -1977,7 +1992,8 @@ class Handler(BaseHTTPRequestHandler):
             d["rooms"] = known_rooms(d)
             # What each measurement is called and in what unit, so the interface
             # does not need a second copy of the table.
-            d["measures"] = [{"key": k, "label": lab, "unit": u}
+            d["measures"] = [{"key": k, "label": lab, "unit": u,
+                              "words": MEASURE_WORDS.get(k)}
                              for _, _, k, lab, u, _ in MEASURED]
             d["airQualityWords"] = AIR_QUALITY_WORDS
             self._send(d)

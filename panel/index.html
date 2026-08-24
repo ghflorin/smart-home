@@ -2562,6 +2562,11 @@ function measureText(key, val) {
     return words[val] || ('level ' + val);
   }
   const m = ((state.devices || {}).measures || []).find(x => x.key === key);
+  // A reading that is a state, not a quantity: "closed" rather than "true".
+  if (m && m.words) {
+    const i = val === true ? 1 : val === false ? 0 : Number(val);
+    if (m.words[i] !== undefined) { return m.words[i]; }
+  }
   const unit = m && m.unit ? ' ' + m.unit : '';
   return (typeof val === 'number' ? val : String(val)) + unit;
 }
