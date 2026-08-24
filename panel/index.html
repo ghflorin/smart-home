@@ -881,12 +881,15 @@
   }
 
 
-  /* ---------- console ----------
-   * The switch has NO console in the production build (CONFIG_SERIAL is off so
-   * that two image slots fit for OTA), so this is the only place you can see
-   * what is happening: what the Pi sent and what the device answered.
+  /* ---------- logs ----------
+   * Called logs, not console: a console is something you type into, and this
+   * only ever shows what already happened.
+   *
+   * The switch has NO serial console in the production build (CONFIG_SERIAL is
+   * off so that two image slots fit for OTA), so this is the only place you can
+   * see what is happening: what the Pi sent and what the device answered.
    * Collapsed by default - you do not want a wall of log over the panel. */
-  #console {
+  #logs {
     position: fixed;
     left: 0; right: 0; bottom: 0;
     z-index: 20;
@@ -894,7 +897,7 @@
     border-top: 1px solid var(--line-hi);
     font-size: 11px;
   }
-  #console .bar {
+  #logs .bar {
     display: flex;
     align-items: center;
     gap: 10px;
@@ -906,14 +909,14 @@
     font-size: 10px;
     user-select: none;
   }
-  #console .bar:hover { color: var(--ink); }
-  #console .chev {
+  #logs .bar:hover { color: var(--ink); }
+  #logs .chev {
     transition: transform .2s;
     display: inline-block;
     font-size: 9px;
   }
-  #console.open .chev { transform: rotate(180deg); }
-  #console .badge {
+  #logs.open .chev { transform: rotate(180deg); }
+  #logs .badge {
     margin-left: auto;
     font-size: 9px;
     letter-spacing: .1em;
@@ -921,12 +924,12 @@
   }
   /* The dot pulses while a command is in flight, so you know nothing is stuck
      - the switch is sleepy and may take 15 seconds to answer. */
-  #console .live {
+  #logs .live {
     width: 6px; height: 6px;
     border-radius: 50%;
     background: var(--ink-faint);
   }
-  #console.busy .live {
+  #logs.busy .live {
     background: var(--amber);
     animation: livepulse 1s ease-in-out infinite;
   }
@@ -934,7 +937,7 @@
     0%, 100% { opacity: .3; }
     50%      { opacity: 1; }
   }
-  #console .body {
+  #logs .body {
     display: none;
     max-height: 480px;
     overflow-y: auto;
@@ -942,8 +945,8 @@
     border-top: 1px solid var(--line);
     background: var(--sunken);
   }
-  #console.open .body { display: block; }
-  #console .line {
+  #logs.open .body { display: block; }
+  #logs .line {
     display: flex;
     gap: 10px;
     padding: 2px 0;
@@ -951,21 +954,21 @@
     word-break: break-word;
     font-variant-ligatures: none;
   }
-  #console .line .ts { color: var(--ink-faint); flex: none; }
-  #console .line.cmd  { color: var(--ink); }
-  #console .line.ok   { color: var(--link); }
-  #console .line.err  { color: var(--bad); }
-  #console .line.warn { color: var(--amber); }
-  #console .line.step { color: var(--amber); }
-  #console .line.info { color: var(--ink-dim); }
-  #console .empty-log { color: var(--ink-faint); padding: 8px 0; }
+  #logs .line .ts { color: var(--ink-faint); flex: none; }
+  #logs .line.cmd  { color: var(--ink); }
+  #logs .line.ok   { color: var(--link); }
+  #logs .line.err  { color: var(--bad); }
+  #logs .line.warn { color: var(--amber); }
+  #logs .line.step { color: var(--amber); }
+  #logs .line.info { color: var(--ink-dim); }
+  #logs .empty-log { color: var(--ink-faint); padding: 8px 0; }
 
   /* Room for the bottom bar, so the last card does not sit underneath it. */
   .wrap { padding-bottom: 120px; }
 
-  /* On short screens, 480px of console would cover the whole page. */
+  /* On short screens, 480px of log would cover the whole page. */
   @media (max-height: 760px) {
-    #console .body { max-height: 55vh; }
+    #logs .body { max-height: 55vh; }
   }
 
   /* ---------- a bulb's own controls ----------
@@ -1939,11 +1942,11 @@
 </div>
 
 
-<div id="console">
+<div id="logs">
   <div class="bar">
     <span class="live"></span>
     <span class="chev">&#9650;</span>
-    <span>console</span>
+    <span>logs</span>
     <span class="badge"></span>
   </div>
   <div class="body"><div class="empty-log">nothing yet</div></div>
@@ -5070,7 +5073,7 @@ async function loadBulbs(fresh) {
   if (!(d.bulbs || []).length && !(d.devices || []).length) { return; }
   try {
     // Deliberately not through api(): a background read should not make the
-    // console's activity dot pulse. The dot means "you asked for something and
+    // logs' activity dot pulse. The dot means "you asked for something and
     // it has not come back yet".
     const j = await (await fetch('/api/bulbs' + (fresh ? '?fresh=1' : ''))).json();
     state.bulbs = j.byNode || {};
@@ -5104,17 +5107,17 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) { to
 window.addEventListener('focus', touched);
 pollBulbs();
 
-// ---------- console ----------
+// ---------- logs ----------
 //
 // The panel has no streaming channel to the browser, so progress is read by
 // polling a ring buffer on the server. While a command is in flight we ask
 // often, otherwise rarely - a panel left open on a tablet should not hammer the
 // Pi ten times a second for nothing.
-const CONSOLE = { since: 0, open: false, unseen: 0, busy: 0, timer: null };
+const LOGS = { since: 0, open: false, unseen: 0, busy: 0, timer: null };
 
 function markBusy(delta) {
-  CONSOLE.busy = Math.max(0, CONSOLE.busy + delta);
-  $('#console').classList.toggle('busy', CONSOLE.busy > 0);
+  LOGS.busy = Math.max(0, LOGS.busy + delta);
+  $('#logs').classList.toggle('busy', LOGS.busy > 0);
   scheduleLogPoll();
 }
 
@@ -5131,22 +5134,22 @@ async function api(url, opts) {
 }
 
 function scheduleLogPoll() {
-  clearTimeout(CONSOLE.timer);
-  const every = CONSOLE.busy > 0 ? 900 : (CONSOLE.open ? 2500 : 8000);
-  CONSOLE.timer = setTimeout(pollLog, every);
+  clearTimeout(LOGS.timer);
+  const every = LOGS.busy > 0 ? 900 : (LOGS.open ? 2500 : 8000);
+  LOGS.timer = setTimeout(pollLog, every);
 }
 
 async function pollLog() {
   let j;
   try {
-    j = await (await fetch('/api/log?since=' + CONSOLE.since)).json();
+    j = await (await fetch('/api/log?since=' + LOGS.since)).json();
   } catch (err) {
     scheduleLogPoll();
     return;
   }
   if (j.lines && j.lines.length) {
     appendLog(j.lines);
-    CONSOLE.since = j.next;
+    LOGS.since = j.next;
   }
 
   // The server holds the device state and re-reads it in the background. We do
@@ -5183,7 +5186,7 @@ async function reloadState() {
 }
 
 function appendLog(lines) {
-  const body = $('#console .body');
+  const body = $('#logs .body');
   const empty = body.querySelector('.empty-log');
   if (empty) { empty.remove(); }
 
@@ -5203,19 +5206,19 @@ function appendLog(lines) {
 
   while (body.children.length > 400) { body.firstChild.remove(); }
 
-  if (!CONSOLE.open) {
-    CONSOLE.unseen += lines.length;
-    $('#console .badge').textContent = CONSOLE.unseen + ' new lines';
+  if (!LOGS.open) {
+    LOGS.unseen += lines.length;
+    $('#logs .badge').textContent = LOGS.unseen + ' new lines';
   }
 }
 
-$('#console .bar').onclick = () => {
-  CONSOLE.open = !CONSOLE.open;
-  $('#console').classList.toggle('open', CONSOLE.open);
-  if (CONSOLE.open) {
-    CONSOLE.unseen = 0;
-    $('#console .badge').textContent = '';
-    const body = $('#console .body');
+$('#logs .bar').onclick = () => {
+  LOGS.open = !LOGS.open;
+  $('#logs').classList.toggle('open', LOGS.open);
+  if (LOGS.open) {
+    LOGS.unseen = 0;
+    $('#logs .badge').textContent = '';
+    const body = $('#logs .body');
     body.scrollTop = body.scrollHeight;
   }
   scheduleLogPoll();

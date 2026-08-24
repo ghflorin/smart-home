@@ -2849,29 +2849,39 @@ class Handler(BaseHTTPRequestHandler):
             bulb = next((b for b in devices.get("bulbs", []) if b["node"] == node),
                         {"node": node, "endpoint": endpoint})
 
-            # Let it settle first. On and Off do not land the instant the
-            # command is acknowledged: the bulb has to apply OnLevel to
-            # CurrentLevel, and reading in that gap returns the level it is
-            # LEAVING. For an On that is the off value - 1 - so the panel put
-            # "on" and "4%" on screen together and stood by it, because a
-            # read-back is the one number here that is supposed to be beyond
-            # doubt.
-            if action:
+            # Let it settle first - after ANY write, not just on and off.
+            #
+            # A command is acknowledged before the bulb has finished applying
+            # it, so a read in that gap returns the value the bulb is LEAVING.
+            # This guard only covered on/off, which left the commonest case of
+            # all uncovered: a brightness change carries no action, so it got no
+            # settle and the read-back reported the PREVIOUS brightness. The
+            # panel believed it - it is a read-back, the one number here that is
+            # meant to be beyond doubt - and the sheet showed the value you set
+            # a gesture ago. Measured: asked 144, reply said 1; asked 8, reply
+            # said 144.
+            if action or level is not None or mireds is not None:
                 time.sleep(0.35)
             try:
                 refresh_bulb(bulb)
             except Exception as exc:  # noqa: BLE001
                 log(f"bulb {node}: read-back failed: {exc}", "warn")
 
-            # And if it still looks like the gap, read once more rather than
-            # publish it. A bulb that is ON at its floor while OnLevel says
-            # otherwise has not finished; a bulb genuinely dimmed to 1 by hand
-            # has an OnLevel of 1 to match, so this cannot fire on a real value.
+            # And if the answer still disagrees with what we just wrote, we
+            # caught it mid-change. Read once more rather than publish it.
             st = state_of(node)
-            if (action in ("on", "toggle") and st.get("on") is True
+            asked = None if level is None else max(1, min(254, int(level)))
+            stale = (
+                # a brightness we asked for that the bulb is not reporting
+                (asked is not None and st.get("on") is not False
+                 and st.get("level") != asked)
+                # or an On sitting at the floor while OnLevel says otherwise - a
+                # bulb genuinely dimmed to 1 by hand has an OnLevel of 1 to match
+                or (action in ("on", "toggle") and st.get("on") is True
                     and (st.get("level") or 0) <= 1
-                    and (st.get("onlevel") or 0) > 1):
-                log(f"bulb {node}: read back mid-transition, looking again", "warn")
+                    and (st.get("onlevel") or 0) > 1))
+            if stale:
+                log(f"bulb {node}: read back mid-change, looking again", "warn")
                 time.sleep(0.6)
                 try:
                     refresh_bulb(bulb)
