@@ -1580,6 +1580,16 @@
     text-transform: uppercase;
     margin-bottom: 22px;
   }
+  /* The identity line doubles as the one place the panel explains itself. It
+     crossfades to the message and back, so nothing moves and nothing is added -
+     the line you were already reading simply says something else for a moment.
+     Amber while it does, because that is what the schedule is everywhere here. */
+  .sheet .who { transition: opacity .26s ease; }
+  .sheet .who.gone { opacity: 0; }
+  .sheet .who.said { color: var(--amber); }
+  @media (prefers-reduced-motion: reduce) {
+    .sheet .who { transition: none; }
+  }
   /* QR on white - scans far more reliably than inverted */
   .qr {
     background: #fff;
@@ -2711,6 +2721,32 @@ async function setLight(node, endpoint, action) {
  * answering, precisely because a confirmed command is not proof the bulb
  * obeyed - and with a bulb you are looking straight at, showing the value you
  * asked for instead of the one you got is the expensive kind of wrong. */
+/* Why the light moved on its own.
+ *
+ * A change by hand holds the bulb until the light is switched off. After that
+ * the schedule has it back, so the next time it comes on it is the curve's
+ * value and not yours. That is the rule working exactly as intended, and from
+ * in front of the lamp it is indistinguishable from the panel changing its own
+ * mind. The only thing missing was somebody saying so.
+ *
+ * Watched as a transition rather than a state, because "held" being false tells
+ * you nothing on its own - almost every bulb is not held almost all the time.
+ * It also catches the two other ways a hold can end, the three-hour ceiling and
+ * a schedule save, which are just as puzzling from the front. */
+const TOOKOVER = {};
+const TOOKOVER_MS = 12000;
+let tookoverTimer = null;
+// The repaint of whichever sheet is open, so a poll can keep it honest.
+let SHEET_LIVE = null;
+
+function noteReleases(prev, next) {
+  for (const [node, b] of Object.entries(next || {})) {
+    if ((prev[node] || {}).held === true && b && b.held === false) {
+      TOOKOVER[node] = Date.now();
+    }
+  }
+}
+
 function adoptBulb(node, j) {
   const cur = state.bulbs[String(node)] || {};
   const next = { ...cur, ok: true };
@@ -2721,6 +2757,7 @@ function adoptBulb(node, j) {
   if (typeof j.ctMin === 'number' && j.ctMin) { next.ctMin = j.ctMin; }
   if (typeof j.ctMax === 'number' && j.ctMax) { next.ctMax = j.ctMax; }
   if (typeof j.held === 'boolean') { next.held = j.held; }
+  if (cur.held === true && next.held === false) { TOOKOVER[String(node)] = Date.now(); }
   state.bulbs[String(node)] = next;
 }
 
@@ -2939,7 +2976,35 @@ function openBulb(b) {
     return Math.min(ctHi(), Math.max(ctLo(), cur.mireds || 370));
   };
 
+  /* Said in the line that names the bulb, because that is where the eye
+   * already is, and because a line that swaps its own contents is noticed
+   * where a new box appearing lower down is not. It fades out, says its piece
+   * for three seconds, and fades back to the identity - so it interrupts
+   * without costing anything permanent. */
+  const whoBox = sheet.querySelector(".who");
+  const whoIs = `bulb · node ${b.node}` + (b.where ? ` · ${b.where}` : "");
+  let saidIt = 0;
+
+  const fadeWho = (text, amber, then) => {
+    whoBox.classList.add("gone");
+    clearTimeout(tookoverTimer);
+    tookoverTimer = setTimeout(() => {
+      whoBox.textContent = text;
+      whoBox.classList.toggle("said", !!amber);
+      whoBox.classList.remove("gone");
+      if (then) { tookoverTimer = setTimeout(then, 3000); }
+    }, 260);
+  };
+
+  const paintTookover = () => {
+    const at = TOOKOVER[String(b.node)] || 0;
+    if (!at || at === saidIt) { return; }
+    saidIt = at;
+    fadeWho("the schedule has it again", true, () => fadeWho(whoIs, false));
+  };
+
   const paintCtl = () => {
+    paintTookover();
     const cur = state.bulbs[String(b.node)] || {};
     const on = cur.on === true;
     const v = Math.max(0, Math.min(1, shownNorm()));
@@ -2970,6 +3035,7 @@ function openBulb(b) {
     capC.title = ctWord(mir);
   };
   paintCtl();
+  SHEET_LIVE = paintCtl;
 
   const send = async payload => {
     const box = sheet.querySelector('.hk');
@@ -4941,6 +5007,8 @@ let sheetOnClose = null;
 function closeSheet() {
   const after = sheetOnClose;
   sheetOnClose = null;
+  SHEET_LIVE = null;
+  clearTimeout(tookoverTimer);
   $('#sheetwrap').classList.remove('wide');
   clearInterval(countdownTimer);
   clearInterval(SCHED.tick);
@@ -5076,8 +5144,13 @@ async function loadBulbs(fresh) {
     // logs' activity dot pulse. The dot means "you asked for something and
     // it has not come back yet".
     const j = await (await fetch('/api/bulbs' + (fresh ? '?fresh=1' : ''))).json();
+    noteReleases(state.bulbs || {}, j.byNode || {});
     state.bulbs = j.byNode || {};
     render();
+    // An open sheet used to be a snapshot: it only ever redrew from its own
+    // commands, so a bulb changing underneath it - by the schedule, by the wall
+    // switch - was invisible until you closed and opened it again.
+    if (SHEET_LIVE) { SHEET_LIVE(); }
   } catch (err) {
     /* We try again on the next tick; a missed poll is not worth a red banner. */
   }
