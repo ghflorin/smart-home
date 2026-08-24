@@ -62,6 +62,7 @@ add Apple/Google later as secondary admins through multi-admin.
 | locking the switches | `src/lock_cluster.cpp` | our own cluster on dynamic endpoint 2 |
 | the status LED says what is going on | `src/status_led.cpp` | blinks only while waiting to be commissioned; dark otherwise |
 | everything on the Raspberry Pi, no laptop | [`deploy/`](deploy/) | systemd units for the panel and chip-tool |
+| which devices are known to work | [`docs/devices.md`](docs/devices.md) | every device actually commissioned here, with what worked and what did not |
 
 ### Details that matter
 

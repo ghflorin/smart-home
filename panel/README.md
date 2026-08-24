@@ -280,6 +280,14 @@ to be listed first. The moment that stopped, a newly added lamp sat outside the
 schedule entirely — you pressed *save globally*, it said it had saved, and that
 one bulb never moved.
 
+**Adding a kind of device is a line, not a branch.** Nothing is hardcoded per
+product: the panel reads a device's Descriptor on commissioning and decides from
+the device type. A new measurement is one row in `MEASURED`; a reading that is a
+state rather than a quantity — a contact, an occupancy — adds a row in
+`MEASURE_WORDS` so it renders as a word instead of `true`. What has actually
+been driven from here, and what each one got wrong, is in
+[`../docs/devices.md`](../docs/devices.md).
+
 **A save touches only the bulbs the saved schedule governs.** Writing the house
 curve into a bulb that has its own would undo the override for a minute, which is
 the sort of thing you see once and never trust again.
