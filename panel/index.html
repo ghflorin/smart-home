@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Smart Home</title>
+<title>Smarthome</title>
 <script>
 /* The theme is resolved BEFORE the first paint, otherwise you get a flash of
  * the wrong theme on every load. That is why this script is inline in the head
@@ -716,6 +716,16 @@
     transition: background .12s, color .12s;
   }
   .link-row.go .nm { color: var(--link); }
+  /* Quieter than the name and louder than the capability list: it is how you
+     tell two lamps apart, not what you came to read. */
+  .link-row .rm {
+    color: var(--ink-faint);
+    font-size: 11px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .link-row .rm:empty { display: none; }
   .link-row.go .cl { margin-left: auto; }
   .link-row.go:hover { background: color-mix(in srgb, var(--link) 10%, transparent); }
   .link-row.go:focus-visible {
@@ -1441,12 +1451,23 @@
     .hk-ct { width: 54px; height: 240px; }
   }
 
+  /* Two halves of one question, so they get equal halves of the width. Sized
+     to their own text they read as two unrelated buttons, and the longer label
+     looks like the important one. */
   .series {
     display: flex;
     gap: 8px;
     justify-content: center;
     margin-bottom: 4px;
   }
+  .series button { flex: 1 1 0; }
+  /* Both halves are the same button. They differ in one thing only - which of
+     them is true - so anything else that differs between them is noise, and
+     size is the loudest kind. The LOCKED half used to borrow `danger`, the
+     class belonging to the delete-room button; same specificity, defined
+     later, so it won and brought `padding: 11px` and `margin-top: 8px` with
+     it. One half of a segmented control sat lower and shorter than the other,
+     and was red whether or not it was in force. */
   .series button {
     font-family: inherit;
     font-size: 10px;
@@ -1454,23 +1475,40 @@
     text-transform: uppercase;
     color: var(--ink-faint);
     background: transparent;
-    border: 1px solid var(--line-hi);
+    border: 1px solid var(--line);
     padding: 7px 13px;
+    margin: 0;
     cursor: pointer;
+    transition: color .15s, background .15s, border-color .15s;
   }
+  .series button:not(.on):hover:not(:disabled) { color: var(--ink-dim); border-color: var(--line-hi); }
+  /* Colour is what says "this is the one". The half that is not in force is
+     monochrome, so there is nothing to compare it against. */
   .series button.on {
     color: var(--link);
-    background: color-mix(in srgb, var(--link) 13%, transparent);
+    background: color-mix(in srgb, var(--link) 16%, transparent);
     border-color: var(--link);
   }
   .series button:disabled { opacity: .45; cursor: default; }
+  /* Waiting on the device, not on us. The pulse is the only thing that says the
+     difference between "thinking" and "broken". */
+  .series.busy { animation: segwait 1.1s ease-in-out infinite; }
+  @keyframes segwait { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+  @media (prefers-reduced-motion: reduce) { .series.busy { animation: none; } }
+  .rolehdr { margin-top: 4px; }
   /* The primary control of a sheet, not a tab strip: full width, and big enough
      to hit without aiming. */
   .series.big { gap: 8px; margin: 18px 0 14px; }
   .series.big button { flex: 1; padding: 12px 10px; font-size: 11px; }
+  /* Louder than the specificity of anything that might collide with it again.
+     A segmented control whose halves are different sizes is a bug you see
+     before you read a word of it. */
+  .sheet .series.big button { padding: 12px 10px; margin: 0; width: auto; }
   /* Locked is a state you want to see from across the room, so it is red and
-     filled - the same reasoning as the old lock button it replaces. */
-  .series button.on.danger {
+     filled - the same reasoning as the old lock button it replaces. Off, it is
+     as grey as its neighbour: a red outline on the half you have NOT chosen
+     says the lock is on when it is not. */
+  .series button.on.locked {
     color: var(--on-amber);
     background: var(--bad);
     border-color: var(--bad);
@@ -1855,7 +1893,7 @@
           <path class="lgline"
                 d="M12 2.2 21.8 10.4 V19 a2 2 0 0 1-2 2 H4.2 a2 2 0 0 1-2-2 V10.4 Z"/>
         </svg>
-        <span>Smart Home<span class="dot">.</span></span>
+        <span>Smarthome<span class="dot">.</span></span>
       </button></h1>
       <span id="status">connecting</span>
     </div>
@@ -1997,15 +2035,20 @@ async function load() {
  * not come here for. Making the name dead text meant reading it, closing the
  * sheet, finding the tile and opening that - four steps to follow a link the
  * page had already drawn for you. */
-function linkRow(name, open, tail) {
+function linkRow(name, open, tail, where) {
   const row = document.createElement('div');
   row.className = 'link-row go';
   row.setAttribute('role', 'button');
   row.tabIndex = 0;
-  row.title = 'open ' + name;
+  row.title = 'open ' + name + (where ? ' \u2014 ' + where : '');
+  // The room, because a name is not an identifier. Two lamps called "Light 1"
+  // in different rooms is the normal case, not an edge case, and a list of
+  // them tells you nothing about which one this switch is wired to.
   row.innerHTML = '<span class="arrow">&rarr;</span><span class="nm"></span>' +
+                  '<span class="rm"></span>' +
                   (tail ? `<span class="cl">${tail}</span>` : '');
   row.querySelector('.nm').textContent = name;
+  row.querySelector('.rm').textContent = where || '';
   row.onclick = open;
   row.onkeydown = ev => {
     if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
@@ -3051,7 +3094,8 @@ function openBulb(b) {
   const list = sheet.querySelector('#drivers');
   list.innerHTML = '<div class="hdr">controlled by</div>';
   if (drivers.length) {
-    drivers.forEach(sw => list.append(linkRow(sw.name, () => openSwitch(sw))));
+    drivers.forEach(sw => list.append(
+      linkRow(sw.name, () => openSwitch(sw), '', sw.where)));
   } else {
     list.insertAdjacentHTML('beforeend',
       '<div class="empty">no switch is bound to this bulb</div>');
@@ -3170,13 +3214,15 @@ function openSwitch(sw) {
         const dead = document.createElement('div');
         dead.className = 'link-row';
         dead.innerHTML = `<span class="arrow">&rarr;</span><span class="nm"></span>
+                          <span class="rm"></span>
                           <span class="cl">${tail}</span>`;
         dead.querySelector('.nm').textContent = name;
         list.append(dead);
         continue;
       }
       list.append(linkRow(name,
-        () => (isLock ? openSwitch(target) : openBulb(target)), tail));
+        () => (isLock ? openSwitch(target) : openBulb(target)),
+        tail, target.where));
     }
   } else {
     list.insertAdjacentHTML('beforeend',
@@ -3191,7 +3237,7 @@ function openSwitch(sw) {
       seg.querySelectorAll('button').forEach(x => {
         const want = x.dataset.lock === '1';
         x.classList.toggle('on', cur === want);
-        x.classList.toggle('danger', want);
+        x.classList.toggle('locked', want);
         x.disabled = cur === null || cur === undefined;
       });
     };
@@ -4584,6 +4630,7 @@ function editLinks(swNode) {
 
   sheet.innerHTML = `<h2>bindings</h2>
     <div class="who">${sw.name} &middot; node ${sw.node}</div>
+    <div class="hdr rolehdr">what this switch is</div>
     <div class="series" id="rolepick">
       <button data-role="0" class="${isLock ? '' : 'on'}">controls bulbs</button>
       <button data-role="1" class="${isLock ? 'on' : ''}">lock</button>
@@ -4606,7 +4653,15 @@ function editLinks(swNode) {
   sheet.querySelectorAll('#rolepick button').forEach(b => b.onclick = async () => {
     const role = Number(b.dataset.role);
     if ((role === 1) === isLock) { return; }
-    b.disabled = true;
+    // This is not a tab. It rewrites the switch's role ON THE DEVICE, and a
+    // switch is a sleepy end device - it answers when it next wakes, which is
+    // seconds away. Styled like the segmented control above it and given no
+    // busy state, the only thing it did for those seconds was look frozen.
+    const seg = sheet.querySelector('#rolepick');
+    seg.classList.add('busy');
+    seg.querySelectorAll('button').forEach(x => x.disabled = true);
+    setStatus('changing what this switch is \u2014 it sleeps between presses, '
+              + 'so it answers in a few seconds', 'warn');
     let j;
     try {
       j = await (await api('/api/role', {
@@ -4615,8 +4670,10 @@ function editLinks(swNode) {
         body: JSON.stringify({ switch: swNode, role })
       })).json();
     } catch (err) { j = { error: String(err) }; }
-    b.disabled = false;
+    seg.classList.remove('busy');
+    seg.querySelectorAll('button').forEach(x => x.disabled = false);
     if (j.error) { return setStatus('the role did not change: ' + j.error, 'err'); }
+    setStatus(role === 1 ? 'it is a lock now' : 'it controls bulbs now', 'ok');
     // The role changes both what the switch controls and what the editor lists,
     // so we reload everything instead of patching the screen.
     await load();
