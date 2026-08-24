@@ -22,7 +22,8 @@ The identity fields come from each device's own Basic Information cluster
 
 Works: on/off, brightness, colour temperature, the daylight schedule, binding to
 a switch so the wall button drives it with the Pi asleep, `OnLevel` so it comes
-back at the right brightness after a power cut.
+back at the right brightness after a power cut. Identify works both ways — it
+accepts `Identify` and also `TriggerEffect` (Blink).
 
 **It is a full RGB bulb and this project drives it as tunable white.** Its
 ColorControl `FeatureMap` is `31` — hue/saturation, enhanced hue, colour loop,
@@ -68,21 +69,19 @@ without going to look.
   polling interval is therefore a floor we cannot get under, and a read can
   simply fail — the panel shows `ok: false` and keeps the last known value.
   End to end, a change can take tens of seconds to appear on a tile.
-- **Polling is the wrong mechanism for it.** A window sensor exists to report
-  the instant something opens. Matter's answer is a *subscription*: the device
-  pushes on change. A subscription to its BooleanState has been established
-  successfully against this device from the Pi, and the panel's other traffic
-  continued normally while it was held — so this is a change worth making, not a
-  blocked one. The panel does not do it yet.
-- **A subscription owns the device's session.** While one was held, direct reads
-  of that same node returned `ok: false`. Anything subscribing has to stop
-  polling the same device.
-- **Identify is accepted but no LED has been seen.** Sending `Identify` makes
-  `IdentifyTime` count down on the device, which proves the command landed, and
-  the device reports `IdentifyType = 2` (VisibleIndicator) — it says it has one.
-  The LED does blink from IKEA's own app, so the likely difference is that the
-  app sends `TriggerEffect` (`0x40`, Blink) rather than plain `Identify`
-  (`0x00`). Untested here.
+- **So the panel subscribes to it instead of polling it.** `BooleanState` is in
+  `SUB_KEYS`, so a `watcher` thread holds a subscription on a connection of its
+  own and the poller skips the node entirely. Set `PANEL_SUBSCRIBE=0` to go back
+  to polling.
+- **A subscription owns the device's session.** While one is held, a direct read
+  of that same node comes back empty — which is why the poller has to skip it,
+  or the device would flap between "reporting" and "not answering".
+- **Identify is accepted; the LED has not been seen here.** `Identify` lands —
+  `IdentifyTime` counts down on the device afterwards — and the device reports
+  `IdentifyType = 2`, VisibleIndicator. **`TriggerEffect` is not implemented at
+  all**: it answers `UNSUPPORTED_COMMAND`. So plain `Identify` is the only
+  mechanism this device has, which means IKEA's app must use it too, and the LED
+  it blinks is the one this ought to blink. Unresolved.
 
 ## Our own hardware
 
@@ -121,4 +120,12 @@ Descriptor cluster and decides from that:
 
 Adding a new kind of reading is one line in `MEASURED` in `panel/server.py`.
 Readings that are a state rather than a quantity — a contact, an occupancy — add
-a second line in `MEASURE_WORDS` so they render as words instead of `true`.
+a second line in `MEASURE_WORDS` so they render as words instead of `true`, and
+a third in `SUB_KEYS` if the reading is an *event* that should arrive the moment
+it happens rather than on the next poll.
+
+Identify sends `Identify` and then `TriggerEffect` (Blink). Devices differ about
+which one lights the lamp: the KAJPLATS bulb takes both, the MYGGBETT sensor
+answers `UNSUPPORTED_COMMAND` to the effect and only has the duration. The effect
+failing is logged and never fails the request, because by then the identify has
+already succeeded.

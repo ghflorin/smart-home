@@ -1242,6 +1242,158 @@ def refresh_bulb(bulb: dict) -> list:
                      meta={"readAt": time.time(), "ok": True, "err": None})
 
 
+# ---------------------------------------------------------------- subscriptions
+#
+# Polling is the wrong shape for a battery sensor and no amount of tuning fixes
+# it. A read does not wake the device: it queues at its Thread parent and is
+# delivered when the device next polls, so OUR interval is a floor we cannot get
+# under, and a read that arrives while it is asleep simply fails. A door sensor
+# whose whole job is to report the instant a window opens was arriving tens of
+# seconds late, or not at all.
+#
+# Matter's answer is a subscription: the device reports when the value changes,
+# on its own schedule, and stays quiet otherwise. It is both faster and kinder to
+# the battery than any polling.
+#
+# Held on a connection of its own. `chip()` opens a socket per command and closes
+# it; a subscription has to stay open to receive reports, so it cannot share
+# that path. Verified against the real device that the panel's ordinary traffic
+# continues normally while this connection is held.
+SUBSCRIBE = os.environ.get("PANEL_SUBSCRIBE", "1").lower() not in ("0", "no", "off")
+# min 0: report the moment it changes. max: the keep-alive ceiling, the longest
+# the device may stay silent before saying it is still there.
+SUB_MIN = int(os.environ.get("PANEL_SUB_MIN", "0"))
+SUB_MAX = int(os.environ.get("PANEL_SUB_MAX", "600"))
+
+# Which readings are worth subscribing to rather than polling: the ones that are
+# an EVENT. A temperature that drifts is fine on a poll; a door is not.
+SUB_KEYS = {"contact"}
+
+_subscribed = set()          # nodes currently covered by a live subscription
+_sub_lock = threading.Lock()
+
+
+def subscribed(node) -> bool:
+    with _sub_lock:
+        return int(node) in _subscribed
+
+
+def sub_paths(devices: dict) -> list:
+    """(node, cluster, attr, endpoint, key, scale) for everything worth watching."""
+    out = []
+    for dev in devices.get("devices", []):
+        desc = dev.get("desc") or {}
+        for ep, info in (desc.get("endpoints") or {}).items():
+            have = set(info.get("clusters") or [])
+            for cluster, attr, key, _lab, _unit, scale in MEASURED:
+                if key in SUB_KEYS and cluster in have:
+                    out.append((dev["node"], cluster, attr, int(ep), key, scale))
+    return out
+
+
+def watcher():
+    """Keep a subscription open for every device that deserves one.
+
+    One connection, reconnecting with backoff. Everything it learns goes through
+    state_put, exactly as a poll would, so nothing downstream has to know where a
+    value came from.
+    """
+    if not SUBSCRIBE:
+        log("subscriptions are off (PANEL_SUBSCRIBE=0); sensors are polled", "info")
+        return
+
+    backoff = 5
+    while True:
+        paths = []
+        try:
+            paths = sub_paths(load_devices())
+        except (OSError, ValueError):
+            pass
+        if not paths:
+            time.sleep(30)
+            continue
+
+        try:
+            _run_subscriptions(paths)
+            backoff = 5          # it worked for a while; start over cheaply
+        except Exception as exc:  # noqa: BLE001
+            log(f"subscription dropped: {exc}", "warn")
+        finally:
+            with _sub_lock:
+                _subscribed.clear()
+        time.sleep(backoff)
+        backoff = min(120, backoff * 2)
+
+
+def _run_subscriptions(paths: list):
+    """Open one socket, subscribe every path on it, then read reports for ever."""
+    chip_thaw()
+    conn = ws_connect(CHIP_TOOL_WS, open_timeout=10, ping_interval=None)
+    try:
+        by_path = {}
+        for node, cluster, attr, ep, key, scale in paths:
+            cmd = (f"any subscribe-by-id 0x{cluster:X} 0x{attr:X} "
+                   f"{SUB_MIN} {SUB_MAX} {node} {ep}")
+            log(f"$ {cmd}", "cmd")
+            conn.send(cmd)
+            by_path[(int(node), cluster, ep, attr)] = (key, scale)
+            with _sub_lock:
+                _subscribed.add(int(node))
+
+        log(f"watching {len(paths)} attribute(s) by subscription", "ok")
+        while True:
+            # No timeout: a subscription is allowed to be silent for as long as
+            # SUB_MAX, and a silent door is the normal case.
+            raw = conn.recv()
+            _absorb_report(raw, by_path)
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _absorb_report(raw, by_path: dict):
+    """Turn one streamed report into state, if that is what it is."""
+    if not isinstance(raw, str) or not raw.lstrip().startswith("{"):
+        return
+    try:
+        msg = json.loads(raw)
+    except ValueError:
+        return
+    for res in msg.get("results", []):
+        if "clusterId" not in res or "value" not in res:
+            continue
+        try:
+            key = (int(res.get("nodeId", 0)) or None, int(res["clusterId"]),
+                   int(res["endpointId"]), int(res["attributeId"]))
+        except (TypeError, ValueError):
+            continue
+        # chip-tool does not always echo the node on a report, so fall back to
+        # the only subscription that matches the rest of the path.
+        hit = by_path.get(key)
+        if hit is None:
+            for (n, c, e, a), v in by_path.items():
+                if (c, e, a) == key[1:]:
+                    key = (n, c, e, a)
+                    hit = v
+                    break
+        if hit is None:
+            continue
+        name, scale = hit
+        val = res["value"]
+        val = round(val * scale, 2) if isinstance(val, (int, float)) and scale != 1 else val
+        node = key[0]
+        cur = dict(state_of(node).get("measured") or {})
+        if cur.get(name) == val:
+            state_put(node, meta={"readAt": time.time(), "ok": True, "err": None})
+            continue
+        cur[name] = val
+        log(f"node {node}: {name} -> {val}", "step")
+        state_put(node, values={"measured": cur},
+                  meta={"readAt": time.time(), "ok": True, "err": None})
+
+
 def refresh_device(dev: dict) -> list:
     """A generic device's readings, in one request."""
     try:
@@ -1275,6 +1427,12 @@ def refresh_bulbs(force: bool = False) -> dict:
     now = time.time()
     with _bulb_lock:
         for kind, dev in watched:
+            # A subscribed device is not polled. Its value arrives on its own,
+            # and a direct read of a node while a subscription owns its session
+            # comes back empty - which would flap it between "reporting" and
+            # "not answering" for no reason.
+            if subscribed(dev["node"]):
+                continue
             st = state_of(dev["node"])
             age = now - float(st.get("readAt") or 0)
             if not force:
@@ -2961,8 +3119,31 @@ class Handler(BaseHTTPRequestHandler):
             log(f"--- identify on node {node}, {seconds} s ---", "step")
             if node is None:
                 return self._send({"error": "'node' is missing"}, status=400)
-            # identify identify <IdentifyTime> <destination-node> <endpoint>
-            return self._send(chip(f"identify identify {seconds} {node} {endpoint}"))
+            # Two commands on the same cluster, because devices disagree about
+            # which one lights the lamp.
+            #
+            # `Identify` sets IdentifyTime and lets the device decide what to do
+            # with it. A bulb blinks. An IKEA MYGGBETT accepts it - IdentifyTime
+            # counts down, so the command certainly lands - and shows nothing,
+            # even though it reports IdentifyType 2, VisibleIndicator, and does
+            # blink from IKEA's own app. The difference is TriggerEffect: a
+            # discrete "blink now" rather than a duration to interpret.
+            #
+            # So: the duration first, then the effect. A device that does not
+            # implement TriggerEffect answers with an error and is otherwise
+            # unaffected, which is why that error is logged and not returned -
+            # the identify itself already succeeded.
+            r = chip(f"identify identify {seconds} {node} {endpoint}")
+            err = chip_error(r)
+            if err:
+                return self._send({"error": err}, status=502)
+
+            # EffectIdentifier 0 = Blink, EffectVariant 0 = default.
+            eff = chip(f"identify trigger-effect 0 0 {node} {endpoint}", timeout=20.0)
+            e2 = chip_error(eff)
+            if e2:
+                log(f"node {node}: no TriggerEffect ({e2}) - Identify alone", "info")
+            return self._send({**r, "effect": not e2})
 
         self._send({"error": "not found"}, status=404)
 
@@ -2981,5 +3162,6 @@ if __name__ == "__main__":
         signal.signal(sig, lambda *_: (chip_thaw(True), os._exit(0)))
 
     threading.Thread(target=refresher, name="refresher", daemon=True).start()
+    threading.Thread(target=watcher, name="watcher", daemon=True).start()
     threading.Thread(target=freezer, name="freezer", daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PANEL_PORT), Handler).serve_forever()
