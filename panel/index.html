@@ -1593,6 +1593,28 @@
   /* The bindings list reads as a list, so it stays left aligned inside a sheet
      that is otherwise centered. */
   .sheet .links { text-align: left; margin-top: 18px; }
+  /* Every list in a sheet reads as a list: rows in a bordered box, separated,
+     and capped so a long one scrolls rather than pushing the buttons off the
+     bottom. The header and its hint stay above the box, so they do not scroll
+     away with the rows. The cap is ~4.5 rows - enough that the next one is
+     visibly cut off, which is what says "there is more" without a scrollbar
+     having to appear. */
+  .sheet .links .rows {
+    border: 1px solid var(--line-hi);
+    border-radius: 12px;
+    max-height: 208px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .sheet .links .rows .link-row {
+    margin: 0;
+    border-radius: 0;
+    padding: 10px 13px;
+  }
+  .sheet .links .rows .link-row + .link-row { border-top: 1px solid var(--line); }
+  .sheet .links .rows .link-row.go:hover {
+    background: color-mix(in srgb, var(--link) 9%, transparent);
+  }
 
   /* A device the panel reads rather than commands: its sheet is a list of
      numbers, so they get a column each and line up down the page. */
@@ -2150,6 +2172,27 @@ async function load() {
  * not come here for. Making the name dead text meant reading it, closing the
  * sheet, finding the tile and opening that - four steps to follow a link the
  * page had already drawn for you. */
+/* Every list inside a sheet, built the same way.
+ *
+ * A header that stays put, an optional line of explanation, and a bordered box
+ * of rows that scrolls once there are more than fit. Without the box the rows
+ * ran together - two lamps read as one paragraph - and a switch driving eight
+ * of them would have pushed the buttons off the bottom of the sheet.
+ *
+ * Returns the rows container. Callers that end up with nothing to put in it
+ * drop it, so an empty list is a sentence rather than an empty frame. */
+function sheetList(box, header, hint) {
+  box.innerHTML = `<div class="hdr">${header}</div>`
+                + (hint ? `<div class="hint">${hint}</div>` : '')
+                + '<div class="rows"></div>';
+  return box.querySelector('.rows');
+}
+
+function sheetListDone(box) {
+  const rows = box.querySelector('.rows');
+  if (rows && !rows.children.length) { rows.remove(); }
+}
+
 /* The title is the name, so the title is where you rename it.
  *
  * Not a fifth button in a row of four: the name is already on screen, and the
@@ -3365,27 +3408,29 @@ function openBulb(b) {
     try { d = await (await api('/api/schedule')).json(); } catch (err) { return; }
     if (d.error) { return; }
     const gov = (d.governed || []).find(g => g.node === b.node);
-    schedBox.innerHTML = '<div class="hdr">affected by schedule</div>';
+    const schedRows = sheetList(schedBox, 'affected by schedule');
     if (!gov) {
       // Only reachable now if the bulb has just been removed from under us -
       // every bulb the panel knows about is on the schedule, bound or not.
+      schedRows.remove();
       schedBox.insertAdjacentHTML('beforeend',
         '<div class="empty">no schedule reaches this bulb</div>');
       return;
     }
-    schedBox.append(linkRow(gov.own ? 'its own schedule' : 'the house schedule',
-                            () => editSchedule({ nodes: [b.node] })));
+    schedRows.append(linkRow(gov.own ? 'its own schedule' : 'the house schedule',
+                             () => editSchedule({ nodes: [b.node] })));
   })();
 
   const list = sheet.querySelector('#drivers');
-  list.innerHTML = '<div class="hdr">controlled by</div>';
+  const driverRows = sheetList(list, 'controlled by');
   if (drivers.length) {
-    drivers.forEach(sw => list.append(
+    drivers.forEach(sw => driverRows.append(
       linkRow(sw.name, () => openSwitch(sw), '', sw.where)));
   } else {
     list.insertAdjacentHTML('beforeend',
       '<div class="empty">no switch is bound to this bulb</div>');
   }
+  sheetListDone(list);
 
   wireActions(sheet, b);
   $('#overlay').classList.add('on');
@@ -3488,10 +3533,9 @@ function openSwitch(sw) {
   // brightness and colour are the long press, which sets full brightness at
   // 4000 K once (automation.cpp, OnButtonLongPress). Listing all three with
   // nothing to separate them read as "this switch dims", which it does not.
-  list.innerHTML = `<div class="hdr">${isLock ? 'locks these switches'
-                                              : 'controls directly'}</div>`
-    + (isLock ? '' : `<div class="hint">a press toggles &middot; hold for full
-         brightness at 4000&nbsp;K</div>`);
+  const rows = sheetList(list,
+    isLock ? 'locks these switches' : 'controls directly',
+    isLock ? '' : 'a press toggles &middot; hold for full brightness at 4000&nbsp;K');
   if (Object.keys(byNode).length) {
     for (const [node, clusters] of Object.entries(byNode)) {
       const tail = clusters.map(c => CLUSTER_NAMES[c] || ('cluster ' + c)).join(' · ');
@@ -3511,10 +3555,10 @@ function openSwitch(sw) {
                           <span class="rm"></span></span>
                           <span class="cl">${tail}</span>`;
         dead.querySelector('.nm').textContent = name;
-        list.append(dead);
+        rows.append(dead);
         continue;
       }
-      list.append(linkRow(name,
+      rows.append(linkRow(name,
         () => (isLock ? openSwitch(target) : openBulb(target)),
         tail, target.where));
     }
@@ -3523,6 +3567,7 @@ function openSwitch(sw) {
       `<div class="empty">no bindings &mdash; this ${isLock ? 'lock locks nothing'
                                                             : 'switch controls no bulb'}</div>`);
   }
+  sheetListDone(list);
 
   const seg = sheet.querySelector('#lockpick');
   if (seg) {
