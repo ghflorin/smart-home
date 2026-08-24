@@ -1051,6 +1051,17 @@
     font-variant-numeric: tabular-nums;
   }
   .hk-lvl.off .hk-ico, .hk-lvl.off .hk-pct { opacity: .4; }
+  /* Off is a state worth seeing from across the room, so the whole pair drains
+     of colour rather than merely dimming. The gradient keeps its shape - you can
+     still see where the knob sits and drag it - it just stops claiming the lamp
+     is doing anything. */
+  .hk-lvl.off, .hk-ct.off { filter: grayscale(1); }
+  .hk-ct.off { opacity: .45; }
+  .hk-lvl, .hk-ct { transition: filter .3s ease, opacity .3s ease; }
+  .hk.off .hk-cap { opacity: .55; }
+  @media (prefers-reduced-motion: reduce) {
+    .hk-lvl, .hk-ct { transition: none; }
+  }
 
   /* The colour handle is a bar across the strip and not a dot, so it reads
      against a gradient that is pale at one end and saturated at the other. */
@@ -2729,22 +2740,40 @@ async function setLight(node, endpoint, action) {
  * in front of the lamp it is indistinguishable from the panel changing its own
  * mind. The only thing missing was somebody saying so.
  *
- * Watched as a transition rather than a state, because "held" being false tells
- * you nothing on its own - almost every bulb is not held almost all the time.
- * It also catches the two other ways a hold can end, the three-hour ceiling and
- * a schedule save, which are just as puzzling from the front. */
+ * It is remembered at the release and SAID AT THE NEXT POWER-ON, immediately
+ * before the controls jump. Said at the release it explained nothing: the lamp
+ * was going dark, nothing moved, and by the time anything did the message was
+ * long gone. The movement and its explanation have to arrive together, in that
+ * order.
+ *
+ * The release is watched as a transition rather than a state, because "held"
+ * being false tells you nothing on its own - almost every bulb is unheld almost
+ * all the time. That also catches the two other ways a hold can end, the
+ * three-hour ceiling and a schedule save, which are just as puzzling. */
 const TOOKOVER = {};
-const TOOKOVER_MS = 12000;
 let tookoverTimer = null;
-// The repaint of whichever sheet is open, so a poll can keep it honest.
+
+function noteHeld(node, was, now) {
+  const k = String(node);
+  if (was === true && now === false) { TOOKOVER[k] = true; }
+  // A fresh hold means they have taken the light back; nothing to explain.
+  if (now === true) { delete TOOKOVER[k]; }
+}
+// The repaint of whichever sheet is open, so a poll can keep it honest, and
+// the way to make it explain itself when the light comes on from the wall.
 let SHEET_LIVE = null;
+let SHEET_SAY = null;
 
 function noteReleases(prev, next) {
   for (const [node, b] of Object.entries(next || {})) {
-    if ((prev[node] || {}).held === true && b && b.held === false) {
-      TOOKOVER[node] = Date.now();
-    }
+    if (b) { noteHeld(node, (prev[node] || {}).held, b.held); }
   }
+}
+
+// "The schedule took this light while it was off, and it has just come on."
+function tookoverNow(node, on) {
+  const cur = state.bulbs[String(node)] || {};
+  return !!TOOKOVER[String(node)] && cur.on === false && on === true;
 }
 
 function adoptBulb(node, j) {
@@ -2757,7 +2786,7 @@ function adoptBulb(node, j) {
   if (typeof j.ctMin === 'number' && j.ctMin) { next.ctMin = j.ctMin; }
   if (typeof j.ctMax === 'number' && j.ctMax) { next.ctMax = j.ctMax; }
   if (typeof j.held === 'boolean') { next.held = j.held; }
-  if (cur.held === true && next.held === false) { TOOKOVER[String(node)] = Date.now(); }
+  noteHeld(node, cur.held, next.held);
   state.bulbs[String(node)] = next;
 }
 
@@ -2983,7 +3012,6 @@ function openBulb(b) {
    * without costing anything permanent. */
   const whoBox = sheet.querySelector(".who");
   const whoIs = `bulb · node ${b.node}` + (b.where ? ` · ${b.where}` : "");
-  let saidIt = 0;
 
   const fadeWho = (text, amber, then) => {
     whoBox.classList.add("gone");
@@ -2996,21 +3024,29 @@ function openBulb(b) {
     }, 260);
   };
 
-  const paintTookover = () => {
-    const at = TOOKOVER[String(b.node)] || 0;
-    if (!at || at === saidIt) { return; }
-    saidIt = at;
-    fadeWho("the schedule has it again", true, () => fadeWho(whoIs, false));
-  };
+  // Resolves once the message is fully IN - a crossfade is 260ms out and 260ms
+  // back, so resolving at 300 handed the controls back while the message was
+  // still arriving and they moved together. It has to be legible first, then
+  // they move. The identity returns three seconds later, by which time the
+  // sliders are long since settled.
+  const SAY_LEAD = 540;
+  const sayTookover = () => new Promise(resolve => {
+    fadeWho("values updated by the schedule", true, () => fadeWho(whoIs, false));
+    setTimeout(resolve, SAY_LEAD);
+  });
 
   const paintCtl = () => {
-    paintTookover();
     const cur = state.bulbs[String(b.node)] || {};
     const on = cur.on === true;
     const v = Math.max(0, Math.min(1, shownNorm()));
     const mir = shownMireds();
 
+    // Both controls, not just the brightness one. A dark lamp showing a full
+    // blue-to-amber colour strip reads as live equipment - the one control
+    // still in colour is the one the eye goes to, which is exactly backwards.
     lvlBox.classList.toggle('off', !on);
+    ctBox.classList.toggle('off', !on);
+    sheet.querySelector('.hk').classList.toggle('off', !on);
     fill.style.height = (v * 100).toFixed(1) + '%';
     fill.classList.toggle('full', v >= 0.995);
     pct.textContent = Math.round(v * 100) + '%';
@@ -3036,6 +3072,7 @@ function openBulb(b) {
   };
   paintCtl();
   SHEET_LIVE = paintCtl;
+  SHEET_SAY = { node: b.node, say: sayTookover };
 
   const send = async payload => {
     const box = sheet.querySelector('.hk');
@@ -3052,6 +3089,12 @@ function openBulb(b) {
     dragLvl = null;
     dragCt = null;
     if (j.error) { paintCtl(); return setStatus(j.error, 'err'); }
+    // The explanation goes first. Adopting the new state repaints the controls,
+    // and the whole point is that the message is already there when they move.
+    if (tookoverNow(b.node, j.on)) {
+      delete TOOKOVER[String(b.node)];
+      await sayTookover();
+    }
     adoptBulb(b.node, j);
     paintStrip();
     paintCtl();
@@ -5008,6 +5051,7 @@ function closeSheet() {
   const after = sheetOnClose;
   sheetOnClose = null;
   SHEET_LIVE = null;
+  SHEET_SAY = null;
   clearTimeout(tookoverTimer);
   $('#sheetwrap').classList.remove('wide');
   clearInterval(countdownTimer);
@@ -5144,8 +5188,14 @@ async function loadBulbs(fresh) {
     // logs' activity dot pulse. The dot means "you asked for something and
     // it has not come back yet".
     const j = await (await fetch('/api/bulbs' + (fresh ? '?fresh=1' : ''))).json();
-    noteReleases(state.bulbs || {}, j.byNode || {});
-    state.bulbs = j.byNode || {};
+    const fresh_ = j.byNode || {};
+    // Asked before the new state lands, because it is a comparison against the
+    // old one. This is the wall-switch path: nobody pressed anything here.
+    const say = SHEET_SAY
+      && tookoverNow(SHEET_SAY.node, (fresh_[String(SHEET_SAY.node)] || {}).on);
+    noteReleases(state.bulbs || {}, fresh_);
+    if (say) { delete TOOKOVER[String(SHEET_SAY.node)]; SHEET_SAY.say(); }
+    state.bulbs = fresh_;
     render();
     // An open sheet used to be a snapshot: it only ever redrew from its own
     // commands, so a bulb changing underneath it - by the schedule, by the wall
