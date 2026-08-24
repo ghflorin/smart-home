@@ -441,10 +441,13 @@ def describe_device(node: int) -> dict:
     device rather than from whoever typed the form.
     """
     out = {"types": [], "endpoints": {}}
-    parts = chip(f"any read-by-id 0x{DESCRIPTOR_CLUSTER:X} "
-                 f"0x{DESC_PARTS_LIST_ATTR:X} {node} 0", timeout=30.0)
-    eps = _first_attr(parts)
-    eps = [int(e) for e in eps] if isinstance(eps, list) else []
+    # One cache read covers the whole device. This used to be one round trip for
+    # PartsList and then another PER ENDPOINT, each of which had to reach the
+    # device - up to nine waits on a sleepy one, which is why adding a battery
+    # device took the best part of a minute and sometimes gave up half-described.
+    attrs, _err = m_attrs(node, timeout=30.0)
+    parts = m_get(attrs, 0, DESCRIPTOR_CLUSTER, DESC_PARTS_LIST_ATTR)
+    eps = [int(e) for e in parts] if isinstance(parts, list) else []
     # Endpoint 0 is the node itself and holds no application device type worth
     # showing; if PartsList came back empty we still try endpoint 1, which is
     # where a single-function device puts everything.
@@ -452,12 +455,8 @@ def describe_device(node: int) -> dict:
         eps = [1]
 
     for ep in eps[:8]:          # a sensor with more than eight parts is not a
-        r = chip(f"any read-by-id 0x{DESCRIPTOR_CLUSTER:X},0x{DESCRIPTOR_CLUSTER:X} "
-                 f"0x{DESC_DEVICE_TYPE_ATTR:X},0x{DESC_SERVER_LIST_ATTR:X} "
-                 f"{node} {ep},{ep}", timeout=30.0)   # thing this panel handles
-        idx = attr_index(r)
-        types = idx.get((DESCRIPTOR_CLUSTER, ep, DESC_DEVICE_TYPE_ATTR), {}).get("value")
-        servers = idx.get((DESCRIPTOR_CLUSTER, ep, DESC_SERVER_LIST_ATTR), {}).get("value")
+        types = m_get(attrs, ep, DESCRIPTOR_CLUSTER, DESC_DEVICE_TYPE_ATTR)
+        servers = m_get(attrs, ep, DESCRIPTOR_CLUSTER, DESC_SERVER_LIST_ATTR)
         ids = []
         for t in (types or []):
             # DeviceTypeStruct: "deviceType" named, or field 0 by id.
@@ -501,17 +500,11 @@ def read_measurements(dev: dict) -> dict:
     if not paths:
         return {}
 
-    clusters = ",".join(f"0x{c:X}" for c, _, _, _, _ in paths)
-    attrs = ",".join(f"0x{a:X}" for _, a, _, _, _ in paths)
-    eps = ",".join(str(e) for _, _, e, _, _ in paths)
-    resp = chip(f"any read-by-id {clusters} {attrs} {dev['node']} {eps}",
-                timeout=BULB_READ_TIMEOUT)
-    idx = attr_index(resp)
+    held, _err = m_attrs(dev["node"])
 
     out = {}
     for cluster, attr, ep, key, scale in paths:
-        entry = idx.get((cluster, ep, attr), {})
-        val = entry.get("value")
+        val = m_get(held, ep, cluster, attr)
         if val is None:
             continue
         out[key] = round(val * scale, 2) if scale != 1 else val
@@ -544,29 +537,16 @@ def detect_caps(node: int, endpoint: int = 1) -> dict:
     We read the FeatureMap on ColorControl. If the bulb does not have the
     cluster the request fails - and that failure is the answer.
     """
-    r = chip(f"colorcontrol read feature-map {node} {endpoint}", timeout=45.0)
-    if chip_error(r):
+    attrs, err = m_attrs(node)
+    fmap = m_get(attrs, endpoint, COLOR_CLUSTER_ID, 0xFFFC)
+    if err or fmap is None:
         # Unknown, not "the bulb is plain white". The difference matters: a bulb
         # with color temperature reported as white loses half the schedule.
         return {"ct": None, "color": None}
 
-    fm = None
-    def walk(o):
-        nonlocal fm
-        if fm is not None:
-            return
-        if isinstance(o, dict):
-            for k, v in o.items():
-                if k.lower() in ("value", "featuremap") and isinstance(v, int):
-                    fm = v
-                    return
-                walk(v)
-        elif isinstance(o, list):
-            for x in o:
-                walk(x)
-    walk(r)
-    if fm is None:
-        return {"ct": False, "color": False}
+    # chip-tool answered in nested JSON that had to be walked for the number;
+    # here the attribute IS the number.
+    fm = int(fmap)
     return {"ct": bool(fm & CC_COLOR_TEMP),
             "color": bool(fm & (CC_HUE_SAT | CC_XY)),
             "featureMap": fm}
@@ -589,7 +569,7 @@ def binding_entries(switch: dict, bulbs: list) -> list:
     entries = []
     for b in bulbs:
         for cluster in clusters_for(b):
-            entries.append({"fabricIndex": 1, "node": b["node"],
+            entries.append({"node": b["node"],
                             "endpoint": b.get("endpoint", 1),
                             "cluster": cluster})
     return entries
@@ -598,6 +578,42 @@ def binding_entries(switch: dict, bulbs: list) -> list:
 def binding_for(switch: dict, bulbs: list) -> str:
     return (f"binding write binding '{json.dumps(binding_entries(switch, bulbs))}' "
             f"{switch['node']} {switch.get('endpoint', 1)}")
+
+
+def verhoeff(number: str) -> int:
+    """The check digit a Matter manual pairing code ends with."""
+    d = [[0,1,2,3,4,5,6,7,8,9],[1,2,3,4,0,6,7,8,9,5],[2,3,4,0,1,7,8,9,5,6],
+         [3,4,0,1,2,8,9,5,6,7],[4,0,1,2,3,9,5,6,7,8],[5,9,8,7,6,0,4,3,2,1],
+         [6,5,9,8,7,1,0,4,3,2],[7,6,5,9,8,2,1,0,4,3],[8,7,6,5,9,3,2,1,0,4],
+         [9,8,7,6,5,4,3,2,1,0]]
+    perm = [[0,1,2,3,4,5,6,7,8,9],[1,5,7,6,2,8,3,0,9,4],[5,8,0,3,7,9,6,1,4,2],
+            [8,9,1,6,0,4,3,5,2,7],[9,4,5,3,1,2,6,8,7,0],[4,2,8,6,5,7,3,9,0,1],
+            [2,7,9,3,8,0,6,4,1,5],[7,0,4,6,9,1,3,2,5,8]]
+    inverse = [0,4,3,2,1,5,6,7,8,9]
+    c = 0
+    for i, ch in enumerate(reversed(number)):
+        c = d[c][perm[(i + 1) % 8][int(ch)]]
+    return inverse[c]
+
+
+def manual_code(passcode: int, discriminator: int) -> str:
+    """The 11-digit code for a passcode and discriminator, per Matter 5.1.4.1.
+
+    chip-tool took the two numbers separately on its command line. matter-server
+    takes a pairing code, the way a phone would, so the panel has to produce one
+    for the switch - whose credentials are compiled into the firmware and never
+    printed on a label.
+
+    Checked against the published CHIP test vector: passcode 20202021 with
+    discriminator 3840 gives 34970112332. Worth checking rather than trusting,
+    because a wrong Verhoeff digit produces a code that is rejected with no hint
+    as to which of the two numbers was wrong.
+    """
+    top = (discriminator >> 10) & 0x03
+    middle = ((discriminator & 0x300) << 6) | (passcode & 0x3FFF)
+    tail = (passcode >> 14) & 0x1FFF
+    body = f"{top:01d}{middle:05d}{tail:04d}"
+    return body + str(verhoeff(body))
 
 
 ADMIN_NODE = int(os.environ.get("ADMIN_NODE", "112233"))
@@ -886,23 +902,20 @@ ROLE_NAMES = {ROLE_LIGHT: "light", ROLE_LOCK: "lock"}
 
 def set_lock(node: int, locked: bool) -> dict:
     log(f"node {node}: {'locking' if locked else 'unlocking'}", "step")
-    # true/false, not 1/0: the attribute is BOOLEAN in the firmware
-    # (DECLARE_DYNAMIC_ATTRIBUTE(kLockedAttr, BOOLEAN, ...)), and chip-tool
-    # encodes 1/0 as an integer, which the device refuses with
-    # CONSTRAINT_ERROR. Verified on hardware: with "1" it fails every time,
-    # with "true" it goes through and reads back as True.
-    r = chip(f"any write-by-id {SCHED_CLUSTER} {LOCK_ATTR} "
-             f"{'true' if locked else 'false'} "
-             f"{node} {SCHED_ENDPOINT}", timeout=60.0)
-    e = chip_error(r)
+    # A real bool, not 1/0: the attribute is BOOLEAN in the firmware
+    # (DECLARE_DYNAMIC_ATTRIBUTE(kLockedAttr, BOOLEAN, ...)) and the device
+    # refuses an integer with CONSTRAINT_ERROR. It cost an afternoon on the old
+    # path, where the value went over the wire as whatever chip-tool made of the
+    # word on its command line.
+    e = m_write(node, SCHED_ENDPOINT, SCHED_CLUSTER_ID, _ATTRS["locked"],
+                bool(locked), timeout=60.0)
     if e:
         return {"node": node, "ok": False, "error": e}
 
     # Read it back. A confirmed write does not guarantee the value landed, and
     # the mistake is expensive here: you would believe you locked and you did
     # not.
-    back = _first_attr(chip(f"any read-by-id {SCHED_CLUSTER} {LOCK_ATTR} "
-                             f"{node} {SCHED_ENDPOINT}"))
+    back, _ = m_read(node, SCHED_ENDPOINT, SCHED_CLUSTER_ID, _ATTRS["locked"])
     if back is not None and bool(back) != locked:
         log(f"node {node}: the write went through but the value reads back as "
             f"{back} - it is NOT locked", "err")
@@ -917,9 +930,8 @@ def set_lock(node: int, locked: bool) -> dict:
 
 def set_role(node: int, role: int) -> dict:
     log(f"node {node}: role -> {ROLE_NAMES.get(role, role)}", "step")
-    r = chip(f"any write-by-id {SCHED_CLUSTER} {ROLE_ATTR} {role} "
-             f"{node} {SCHED_ENDPOINT}", timeout=60.0)
-    e = chip_error(r)
+    e = m_write(node, SCHED_ENDPOINT, SCHED_CLUSTER_ID, _ATTRS["role"],
+                int(role), timeout=60.0)
     if e:
         return {"node": node, "ok": False, "error": e}
     state_put(node, values={"role": role},
@@ -1112,21 +1124,16 @@ def read_switch_state(node: int, endpoint: int = 1) -> dict:
     """A switch's entire state in a SINGLE request.
 
     Three paths: the binding table on endpoint 1, plus locked and role from our
-    cluster on endpoint 2. chip-tool pairs the cluster, attribute and endpoint
-    lists position by position, not as a cross product, so all three have to be
-    the same length.
+    cluster on endpoint 2.
 
-    Being a single request is the point: sequential reads do not land on the
-    same wake-up, because the switch's active window is far shorter than its
-    poll interval. Three reads = three wake-ups = ~45 s; one read = ~15 s.
+    Batching them mattered a great deal on the old path, and matters not at all
+    on this one. Through chip-tool these were three reads that had to reach a
+    sleepy switch, and sequential reads do not land on the same wake-up - three
+    wake-ups is ~45 s against ~15 s for one. Here every value is already in
+    matter-server's cache, kept current by its subscription, so none of them
+    touches the radio and the whole read returns in milliseconds.
     """
-    paths = [(BINDING_CLUSTER_ID, 0x0000, endpoint)]
-    paths += [(SCHED_CLUSTER_ID, _ATTRS[k], SCHED_ENDPOINT)
-              for k in ("locked", "role")]
-    clusters = ",".join(f"0x{c:X}" for c, _, _ in paths)
-    attrs = ",".join(f"0x{a:X}" for _, a, _ in paths)
-    eps = ",".join(str(e) for _, _, e in paths)
-    return chip(f"any read-by-id {clusters} {attrs} {node} {eps}", timeout=45.0)
+    return m_attrs(node, timeout=30.0)
 
 
 def refresh_switch(sw: dict) -> list:
@@ -1134,31 +1141,25 @@ def refresh_switch(sw: dict) -> list:
     global _chip_ok
     node = sw["node"]
     endpoint = sw.get("endpoint", 1)
-    resp = read_switch_state(node, endpoint)
+    attrs, err = read_switch_state(node, endpoint)
 
-    if resp.get("transport"):
+    if attrs is None:
         _chip_ok = False
-        state_put(node, meta={"readAt": time.time(), "ok": False,
-                              "err": resp.get("error")})
+        state_put(node, meta={"readAt": time.time(), "ok": False, "err": err})
         return []
     _chip_ok = True
 
-    idx = attr_index(resp)
-
-    def path(cluster, ep, attr):
-        """None = we did not find out. Different from [] or false, which are
-        answers."""
-        entry = idx.get((cluster, ep, attr))
-        if not entry or "value" not in entry:
-            return None
-        return entry["value"]
-
-    binding_raw = path(BINDING_CLUSTER_ID, endpoint, 0x0000)
-    locked_raw = path(SCHED_CLUSTER_ID, SCHED_ENDPOINT, _ATTRS["locked"])
-    role_raw = path(SCHED_CLUSTER_ID, SCHED_ENDPOINT, _ATTRS["role"])
+    # None = we did not find out. Different from [] or false, which are answers.
+    binding_raw = m_get(attrs, endpoint, BINDING_CLUSTER_ID, 0x0000)
+    locked_raw = m_get(attrs, SCHED_ENDPOINT, SCHED_CLUSTER_ID, _ATTRS["locked"])
+    role_raw = m_get(attrs, SCHED_ENDPOINT, SCHED_CLUSTER_ID, _ATTRS["role"])
     values = {}
     if binding_raw is not None:
-        values["binding"] = extract_bindings({"results": [{"value": binding_raw}]})
+        # Translated back into our numbering. The device answers in the node ids
+        # of the fabric that asked, so an untranslated table would compare
+        # against devices.json and match nothing - a bound switch reported as
+        # controlling no bulbs at all.
+        values["binding"] = translate_binding(binding_raw)
     if locked_raw is not None:
         values["locked"] = bool(locked_raw)
     if isinstance(role_raw, int):
@@ -1226,30 +1227,20 @@ def refresh_bulb(bulb: dict) -> list:
     """
     node = bulb["node"]
     endpoint = int(bulb.get("endpoint", 1))
-    cl = [ONOFF_CLUSTER_ID, LEVEL_CLUSTER_ID, LEVEL_CLUSTER_ID,
-          COLOR_CLUSTER_ID, COLOR_CLUSTER_ID, COLOR_CLUSTER_ID]
-    at = [0x0, 0x0, LEVEL_ONLEVEL_ATTR,
-          COLOR_TEMP_ATTR, COLOR_CT_MIN_ATTR, COLOR_CT_MAX_ATTR]
-    resp = chip(
-        "any read-by-id " + ",".join(f"0x{c:X}" for c in cl) + " "
-        + ",".join(f"0x{a:X}" for a in at) + f" {node} "
-        + ",".join(str(endpoint) for _ in cl),
-        timeout=BULB_READ_TIMEOUT)
-
-    idx = attr_index(resp)
-    on = idx.get((ONOFF_CLUSTER_ID, endpoint, 0), {}).get("value")
-    level = idx.get((LEVEL_CLUSTER_ID, endpoint, 0), {}).get("value")
-    onlevel = idx.get((LEVEL_CLUSTER_ID, endpoint, LEVEL_ONLEVEL_ATTR), {}).get("value")
-    mireds = idx.get((COLOR_CLUSTER_ID, endpoint, COLOR_TEMP_ATTR), {}).get("value")
-    ct_min = idx.get((COLOR_CLUSTER_ID, endpoint, COLOR_CT_MIN_ATTR), {}).get("value")
-    ct_max = idx.get((COLOR_CLUSTER_ID, endpoint, COLOR_CT_MAX_ATTR), {}).get("value")
+    attrs, err = m_attrs(node)
+    on = m_get(attrs, endpoint, ONOFF_CLUSTER_ID, 0)
+    level = m_get(attrs, endpoint, LEVEL_CLUSTER_ID, 0)
+    onlevel = m_get(attrs, endpoint, LEVEL_CLUSTER_ID, LEVEL_ONLEVEL_ATTR)
+    mireds = m_get(attrs, endpoint, COLOR_CLUSTER_ID, COLOR_TEMP_ATTR)
+    ct_min = m_get(attrs, endpoint, COLOR_CLUSTER_ID, COLOR_CT_MIN_ATTR)
+    ct_max = m_get(attrs, endpoint, COLOR_CLUSTER_ID, COLOR_CT_MAX_ATTR)
 
     if on is None:
         # No answer. We keep the last value rather than showing "off" for a bulb
         # that is merely out of range - "stale" is honest, "off" is a lie you
         # would act on.
         return state_put(node, meta={"readAt": time.time(), "ok": False,
-                                     "err": chip_error(resp) or "no response"})
+                                     "err": err or "no response"})
 
     values = {"on": bool(on)}
     if isinstance(level, int):
@@ -1461,6 +1452,146 @@ def m_write(node, endpoint, cluster, attr, value, timeout=45.0):
         return None
     except MatterError as exc:
         return str(exc)
+
+
+# Which fabric matter-server is on, as the DEVICE numbers them. chip-tool
+# commissioned everything first and took index 1; matter-server joined second
+# and is 2. It matters because Binding and ACL are both fabric-scoped: an entry
+# written under one fabric index is invisible to - and unusable by - the other.
+# That is not a detail, it is the whole shape of this migration. The switch's
+# existing bindings live on fabric 1 and read back as an EMPTY table here, which
+# is exactly what a switch that controls nothing also looks like.
+MS_FABRIC = int(os.environ.get("MS_FABRIC_INDEX", "2"))
+
+
+def our_of(ms_node) -> int | None:
+    """matter-server's node id -> ours. The inverse of ms_of.
+
+    Needed because a binding table read back from a device is expressed in the
+    node ids of the fabric that read it. Everything else in the panel - the
+    schedule, devices.json, the UI - speaks our ids, so the translation happens
+    here rather than being scattered through the comparisons.
+    """
+    for dev in all_devices(load_devices()):
+        if dev.get("msNode") is not None and int(dev["msNode"]) == int(ms_node):
+            return int(dev["node"])
+    return None
+
+
+def write_acl(node, subject_nodes, timeout=60.0):
+    """Who may drive this device: the admin, plus the listed switches.
+
+    Manage (4), not Operate (3). On/off would work with Operate, but writing
+    StartUpOnOff and OnLevel needs Manage, and a switch that can turn a lamp on
+    but cannot say what brightness it comes up at is half a switch.
+
+    The whole attribute is replaced, so the admin entry has to be restated every
+    time. Leaving it out removes our own access to the device, and the only way
+    back from that is a factory reset.
+    """
+    ms = ms_of(node)
+    if ms is None:
+        return f"node {node} is not on matter-server"
+    subjects = [m for m in (ms_of(n) for n in subject_nodes) if m is not None]
+    entries = [{"privilege": 5, "authMode": 2, "subjects": [ADMIN_NODE],
+                "targets": None, "fabricIndex": MS_FABRIC}]
+    if subjects:
+        entries.append({"privilege": 4, "authMode": 2, "subjects": subjects,
+                        "targets": None, "fabricIndex": MS_FABRIC})
+    try:
+        MS.call("set_acl_entry", {"node_id": ms, "entry": entries}, timeout=timeout)
+        return None
+    except MatterError as exc:
+        return str(exc)
+
+
+def write_binding(switch, entries, timeout=60.0):
+    """A switch's binding table. Always the complete table - this replaces it."""
+    ms = ms_of(switch["node"])
+    if ms is None:
+        return f"node {switch['node']} is not on matter-server"
+    targets = []
+    for e in entries:
+        target = ms_of(e["node"])
+        if target is None:
+            return f"binding target {e['node']} is not on matter-server"
+        targets.append({"node": target, "group": None,
+                        "endpoint": int(e.get("endpoint", 1)),
+                        "cluster": int(e["cluster"]), "fabricIndex": MS_FABRIC})
+    try:
+        MS.call("set_node_binding",
+                {"node_id": ms, "endpoint": int(switch.get("endpoint", 1)),
+                 "bindings": targets}, timeout=timeout)
+        return None
+    except MatterError as exc:
+        return str(exc)
+
+
+def translate_binding(raw) -> list:
+    """A raw binding table in matter-server's node ids -> ours."""
+    out = []
+    for e in raw or []:
+        # By field id, which is how the cache holds a struct: 1=node,
+        # 3=endpoint, 4=cluster.
+        target = e.get("node", e.get("1"))
+        ours = our_of(target) if target is not None else None
+        out.append({"node": ours if ours is not None else target,
+                    "endpoint": e.get("endpoint", e.get("3", 1)),
+                    "cluster": e.get("cluster", e.get("4"))})
+    return out
+
+
+def read_binding(node, endpoint=1):
+    """A switch's binding table, in OUR node ids. [] means it is bound to nothing."""
+    attrs, err = m_attrs(node)
+    if attrs is None:
+        return None, err
+    raw = m_get(attrs, endpoint, BINDING_CLUSTER_ID, 0x0000)
+    if raw is None:
+        return None, "no binding table"
+    return translate_binding(raw), None
+
+
+def m_attrs(node, timeout=20.0):
+    """Everything matter-server currently knows about a node.
+
+    This is a CACHE READ, and that is the whole point of it. matter-server holds
+    a subscription to every attribute on every commissioned node - 265 of them
+    on a bulb here - and keeps them current from the device's own reports. So
+    this costs no radio traffic, cannot fail because the device was asleep, and
+    returns in milliseconds.
+
+    Against the old path the difference is not a tuning improvement. Reading a
+    sleepy switch through chip-tool meant queuing the request at its Thread
+    parent and waiting up to a full 15 s poll interval for it to be collected -
+    and the read simply failed if it landed wrong. Here the switch's values are
+    already in hand before anyone asks.
+
+    Returns (attributes, error). Attribute keys are "endpoint/cluster/attribute",
+    all decimal.
+    """
+    ms = ms_of(node)
+    if ms is None:
+        return None, f"node {node} is not on matter-server"
+    try:
+        r = MS.call("get_node", {"node_id": ms}, timeout=timeout)
+    except MatterError as exc:
+        return None, str(exc)
+    if not r:
+        return None, "no such node"
+    if not r.get("available"):
+        # Known, but not reachable. Distinct from "no answer to this read",
+        # which is what the poller used to report for a sleeping device.
+        return None, "node is not reachable"
+    return r.get("attributes") or {}, None
+
+
+def m_get(attrs, endpoint, cluster, attr, default=None):
+    """One attribute out of an m_attrs() dict."""
+    if not attrs:
+        return default
+    v = attrs.get(f"{int(endpoint)}/{int(cluster)}/{int(attr)}")
+    return default if v is None else v
 
 
 def m_read(node, endpoint, cluster, attr, timeout=45.0):
@@ -2823,12 +2954,15 @@ class Handler(BaseHTTPRequestHandler):
                 log(f"lock: binding switch {sw_node} to {len(targets)} switches", "step")
                 errors = []
                 for t in targets:
-                    r = chip(acl_for_switch(t["node"], [sw_node]), timeout=60.0)
-                    e = chip_error(r)
+                    e = write_acl(t["node"], [sw_node])
                     if e:
                         errors.append(f"ACL {t['node']}: {e}")
-                r = chip(lock_binding_for(sw, targets), timeout=60.0)
-                e = chip_error(r)
+                # A lock targets endpoint 2 and our own cluster, not endpoint 1
+                # and OnOff: it does not turn anything on, it writes a state.
+                e = write_binding(sw, [{"node": t["node"],
+                                        "endpoint": SCHED_ENDPOINT,
+                                        "cluster": int(SCHED_CLUSTER, 16)}
+                                       for t in targets])
                 if e:
                     errors.append(f"binding {sw_node}: {e}")
                 if errors:
@@ -2868,10 +3002,10 @@ class Handler(BaseHTTPRequestHandler):
                 if s2["node"] == sw_node:
                     desired[s2["node"]] = set(want)
                 else:
-                    r = chip(f"binding read binding {s2['node']} "
-                             f"{s2.get('entry_endpoint', s2.get('endpoint', 1))}")
-                    desired[s2["node"]] = {e["node"]
-                                           for e in extract_bindings(r)}
+                    table, _e = read_binding(
+                        s2["node"],
+                        s2.get("entry_endpoint", s2.get("endpoint", 1)))
+                    desired[s2["node"]] = {e["node"] for e in (table or [])}
 
             # One ACL per bulb: every switch that controls it. A bulb can be
             # controlled by several switches at once.
@@ -2886,8 +3020,7 @@ class Handler(BaseHTTPRequestHandler):
                                  if b["node"] in s3)
                 log(f"bulb {b['node']} ({b.get('name', '?')}): controlled by "
                     f"{', '.join(str(x) for x in allowed) or 'no switch'}", "info")
-                r = chip(acl_for(b["node"], allowed), timeout=60.0)
-                e = chip_error(r)
+                e = write_acl(b["node"], allowed)
                 if e:
                     errors.append(f"ACL {b['node']}: {e}")
 
@@ -2897,8 +3030,7 @@ class Handler(BaseHTTPRequestHandler):
                 f"complete list is sent, not just the difference.", "step")
             log(f"the switch is sleepy with a 15 s poll - it may take a few "
                 f"seconds to answer", "step")
-            r = chip(binding_for(sw, bulbs), timeout=60.0)
-            e = chip_error(r)
+            e = write_binding(sw, binding_entries(sw, bulbs))
             if e:
                 errors.append(f"binding {sw_node}: {e}")
 
@@ -2971,35 +3103,50 @@ class Handler(BaseHTTPRequestHandler):
                                   status=400)
 
             # Commissioning takes a while: BLE, then joining Thread, then CASE.
+            #
+            # A switch is a brand-new device with no radio yet, so it is reached
+            # over BLE and handed the Thread credentials. Everything else is
+            # already on Thread by the time we see it - a bulb joins through
+            # whatever ecosystem set it up, and gives us a code to join too.
             if kind == "switch":
-                cmd = (f"pairing ble-thread {node} hex:{dataset} "
-                       f"{SWITCH_PASSCODE} {SWITCH_DISCRIMINATOR}")
+                # Compiled into the firmware, so there is no label to read.
+                pair_code = manual_code(int(SWITCH_PASSCODE),
+                                        int(SWITCH_DISCRIMINATOR))
+                network_only = False
+                # matter-server needs the network before it can hand it over.
+                try:
+                    MS.call("set_thread_dataset", {"dataset": dataset},
+                            timeout=30.0)
+                except MatterError as exc:
+                    log(f"could not give matter-server the Thread dataset: "
+                        f"{exc}", "err")
+                    return self._send({"error": str(exc)}, status=502)
             else:
-                cmd = f"pairing code-thread {node} hex:{dataset} {code}"
+                pair_code = code
+                network_only = True
+
             if BYPASS_ATTESTATION:
                 # Logged on EVERY commissioning, on purpose: a security
                 # weakening that is visible nowhere gets forgotten, and six
                 # months later nobody knows why any device gets through.
                 log("attestation certificate verification is DISABLED "
-                    "(PANEL_BYPASS_ATTESTATION). Anything that answers gets "
-                    "commissioned.", "warn")
-                cmd += " --bypass-attestation-verifier true"
-            # The log position BEFORE the command: the real reason for a failure
-            # is written to chip-tool's stdout, not into the WebSocket response,
-            # which only says "FAILURE".
-            try:
-                log_pos = CHIP_TOOL_LOG.stat().st_size
-            except OSError:
-                log_pos = 0
+                    "(PANEL_BYPASS_ATTESTATION)", "warn")
 
-            resp = chip(cmd, timeout=180.0)
-            err = chip_error(resp)
-            if err:
-                reason = commissioning_reason(log_pos)
-                message = f"{err}: {reason}" if reason else str(err)
-                log(f"commissioning failed - {message}", "err")
-                return self._send({"error": message, "step": reason or None,
-                                   "raw": resp}, status=502)
+            try:
+                resp = MS.call("commission_with_code",
+                               {"code": pair_code, "network_only": network_only},
+                               timeout=300.0)
+            except MatterError as exc:
+                log(f"commissioning failed - {exc}", "err")
+                return self._send({"error": str(exc)}, status=502)
+
+            # matter-server picks the node id on its own fabric; ours stays ours,
+            # and msNode is the only thing tying the two together.
+            ms_node_id = (resp or {}).get("node_id")
+            if ms_node_id is None:
+                return self._send({"error": "commissioned, but no node id came "
+                                            "back"}, status=502)
+            log(f"commissioned as matter-server node {ms_node_id}", "ok")
 
             # If the room is new we remember it - otherwise it disappears when
             # you delete the last bulb in it, and comes back spelled differently
@@ -3009,7 +3156,12 @@ class Handler(BaseHTTPRequestHandler):
                 rooms.append(where)
                 rooms.sort(key=str.casefold)
 
-            entry = {"node": node, "endpoint": 1, "name": name, "where": where}
+            # msNode is written at the same moment the device is created, not
+            # patched in afterwards: without it nothing can address the device
+            # at all, since every read and every command goes by matter-server's
+            # numbering.
+            entry = {"node": node, "endpoint": 1, "name": name, "where": where,
+                     "msNode": int(ms_node_id)}
 
             if kind == "switch":
                 sws.append(entry)
@@ -3147,14 +3299,14 @@ class Handler(BaseHTTPRequestHandler):
                 if sw["node"] == node:
                     continue
                 ep = sw.get("entry_endpoint", sw.get("endpoint", 1))
-                have = {e["node"] for e in
-                        extract_bindings(chip(f"binding read binding {sw['node']} {ep}"))}
+                table, _e = read_binding(sw["node"], ep)
+                have = {e["node"] for e in (table or [])}
                 if node not in have:
                     continue
                 keep = [b for b in devices.get("bulbs", [])
                         if b["node"] in have and b["node"] != node]
                 log(f"unbinding it from {sw.get('name', sw['node'])}", "step")
-                err = chip_error(chip(binding_for(sw, keep), timeout=60.0))
+                err = write_binding(sw, binding_entries(sw, keep))
                 if err:
                     warnings.append(f"unbinding from {sw['node']}: {err}")
 
@@ -3168,15 +3320,23 @@ class Handler(BaseHTTPRequestHandler):
                     for s2 in others:
                         ep2 = next((y.get("entry_endpoint", y.get("endpoint", 1))
                                     for y in switches(devices) if y["node"] == s2), 1)
-                        if b["node"] in {e["node"] for e in extract_bindings(
-                                chip(f"binding read binding {s2} {ep2}"))}:
+                        table, _e = read_binding(s2, ep2)
+                        if b["node"] in {e["node"] for e in (table or [])}:
                             allowed.append(s2)
-                    err = chip_error(chip(acl_for(b["node"], sorted(allowed)), timeout=60.0))
+                    err = write_acl(b["node"], sorted(allowed))
                     if err:
                         warnings.append(f"ACL {b['node']}: {err}")
 
             # 3. off the fabric
-            err = chip_error(chip(f"pairing unpair {node}", timeout=90.0))
+            err = None
+            ms = ms_of(node)
+            if ms is None:
+                err = "not on matter-server"
+            else:
+                try:
+                    MS.call("remove_node", {"node_id": ms}, timeout=90.0)
+                except MatterError as exc:
+                    err = str(exc)
             if err:
                 warnings.append(f"unpair: {err}")
                 log(f"could not unpair {node}: {err} - removing it here anyway. "
@@ -3217,54 +3377,32 @@ class Handler(BaseHTTPRequestHandler):
             if node is None:
                 return self._send({"error": "'node' is missing"}, status=400)
 
-            # The spec caps the window at 900 s.
-            seconds = max(60, min(900, minutes * 60))
-            # Option 1 = Enhanced Commissioning Method: a NEW, temporary code is
-            # generated. Option 0 would reuse the factory code, which is no
-            # longer valid on an already commissioned device.
-            discriminator = random.randint(0, 4095)
-            iteration = 1000  # the spec's minimum for PBKDF2
+            # 180 s is the floor for an Enhanced Commissioning Window, not 60.
+            # Below it the device answers INVALID_COMMAND - which reads like a
+            # malformed request and sends you looking at the wrong things
+            # entirely. The spec caps it at 900 s.
+            seconds = max(180, min(900, minutes * 60))
 
+            ms = ms_of(node)
+            if ms is None:
+                return self._send({"error": f"node {node} is not on "
+                                            f"matter-server"}, status=400)
             try:
-                pos = CHIP_TOOL_LOG.stat().st_size
-            except OSError:
-                pos = 0
+                res = MS.call("open_commissioning_window",
+                              {"node_id": ms, "timeout": seconds}, timeout=90.0)
+            except MatterError as exc:
+                return self._send({"error": str(exc)}, status=502)
 
-            open_window = (f"pairing open-commissioning-window {node} 1 "
-                           f"{seconds} {iteration} {discriminator}")
-            resp = chip(open_window)
-            err = chip_error(resp)
-
-            if err:
-                # "Busy" means the device ALREADY has a window open - typically
-                # a freshly factory-reset bulb, which is waiting to be added
-                # anyway. The cluster-specific status (0x02 = kBusy) does not
-                # make it into the JSON, only a bare "FAILURE", so we infer it
-                # by reading the window status.
-                st = _first_attr(chip(f"administratorcommissioning read "
-                                      f"window-status {node} 0", timeout=45.0))
-                if isinstance(st, int) and st != 0:
-                    log(f"node {node}: already has a window open "
-                        f"(status {st}) - revoking it and reopening with a new "
-                        f"code", "warn")
-                    chip(f"administratorcommissioning revoke-commissioning {node} 0 "
-                         f"--timedInteractionTimeoutMs 3000", timeout=45.0)
-                    try:
-                        pos = CHIP_TOOL_LOG.stat().st_size
-                    except OSError:
-                        pos = 0
-                    resp = chip(open_window)
-                    err = chip_error(resp)
-
-            if err:
-                return self._send({"error": err, "raw": resp}, status=502)
-
-            codes = read_pairing_codes(pos)
+            # The codes come back as the RESULT of the command. They used to be
+            # scraped out of chip-tool's stdout log, because its WebSocket reply
+            # did not carry them - which meant the whole feature depended on log
+            # rotation not having happened at the wrong moment.
+            codes = {"manual": (res or {}).get("setup_manual_code"),
+                     "qr": (res or {}).get("setup_qr_code")}
             if not codes.get("qr"):
                 return self._send({
-                    "error": "the window opened, but the codes were not in "
-                             "chip-tool's log. Check CHIP_TOOL_LOG.",
-                    "raw": resp,
+                    "error": "the window opened, but no codes came back",
+                    "raw": res,
                 }, status=500)
 
             return self._send({
@@ -3377,33 +3515,49 @@ class Handler(BaseHTTPRequestHandler):
             # meant to be beyond doubt - and the sheet showed the value you set
             # a gesture ago. Measured: asked 144, reply said 1; asked 8, reply
             # said 144.
-            if action or level is not None or mireds is not None:
-                time.sleep(0.35)
-            try:
-                refresh_bulb(bulb)
-            except Exception as exc:  # noqa: BLE001
-                log(f"bulb {node}: read-back failed: {exc}", "warn")
-
-            # And if the answer still disagrees with what we just wrote, we
-            # caught it mid-change. Read once more rather than publish it.
-            st = state_of(node)
+            # We now WAIT FOR THE DEVICE TO SAY SO, rather than sleeping a
+            # guessed interval and reading whatever is there.
+            #
+            # The read-back no longer reaches the bulb: it comes out of
+            # matter-server's cache, which is filled by the bulb's own reports.
+            # That is faster and cheaper, but it changes the failure: a fixed
+            # 0.35 s sleep used to be enough for a round trip to complete, and
+            # is now simply a bet on the report having arrived. Lost bets showed
+            # as "asked for 120, reply says 7" - the value the bulb was leaving,
+            # which is exactly the bug this settle was written to prevent.
+            #
+            # So poll our own cache until it agrees, and give up after a short
+            # deadline rather than block the request for ever. A bulb that never
+            # reports the value it was given is a real thing to know about, and
+            # falling through with the honest current reading says it.
             asked = None if level is None else max(1, min(254, int(level)))
-            stale = (
-                # a brightness we asked for that the bulb is not reporting
-                (asked is not None and st.get("on") is not False
-                 and st.get("level") != asked)
-                # or an On sitting at the floor while OnLevel says otherwise - a
-                # bulb genuinely dimmed to 1 by hand has an OnLevel of 1 to match
-                or (action in ("on", "toggle") and st.get("on") is True
-                    and (st.get("level") or 0) <= 1
-                    and (st.get("onlevel") or 0) > 1))
-            if stale:
-                log(f"bulb {node}: read back mid-change, looking again", "warn")
-                time.sleep(0.6)
+            asked_ct = None if mireds is None else max(100, min(700, int(mireds)))
+            want_on = {"on": True, "off": False}.get(action)
+            deadline = time.time() + 1.5
+            while True:
                 try:
                     refresh_bulb(bulb)
                 except Exception as exc:  # noqa: BLE001
-                    log(f"bulb {node}: second read failed: {exc}", "warn")
+                    log(f"bulb {node}: read-back failed: {exc}", "warn")
+                    break
+                st = state_of(node)
+                settled = (
+                    (want_on is None or st.get("on") is want_on)
+                    and (asked is None or st.get("on") is False
+                         or st.get("level") == asked)
+                    and (asked_ct is None or st.get("mireds") == asked_ct)
+                    # An On sitting at the floor while OnLevel says otherwise is
+                    # a bulb still on its way up - one genuinely dimmed to 1 by
+                    # hand has an OnLevel of 1 to match.
+                    and not (action in ("on", "toggle") and st.get("on") is True
+                             and (st.get("level") or 0) <= 1
+                             and (st.get("onlevel") or 0) > 1))
+                if settled or time.time() >= deadline:
+                    if not settled:
+                        log(f"bulb {node}: did not report the new value within "
+                            f"1.5 s - showing what it last said", "warn")
+                    break
+                time.sleep(0.05)
             # The hold is not released here any more. refresh_bulb above
             # does it, along with every other place an off is observed - the
             # wall switch included, which this handler never hears about.
