@@ -30,6 +30,7 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
@@ -1020,8 +1021,32 @@ def state_of(node) -> dict:
         return dict(_state["nodes"].get(str(node), {}))
 
 
+# Woken whenever a value actually changes. It is what lets the browser wait for
+# news instead of asking for it on a timer: a poll interval is a floor on how
+# late you can be, and picking one is choosing between traffic and lag. Waiting
+# costs neither.
+_state_bump = threading.Condition(_state_lock)
+
+
 def state_rev() -> int:
     with _state_lock:
+        return _state["rev"]
+
+
+def wait_for_change(since: int, timeout: float) -> int:
+    """Block until the state moves past `since`, or the timeout runs out.
+
+    Returns either way; the caller sends whatever is current. A long poll that
+    times out is not a failure, it is "nothing happened", and the browser simply
+    asks again.
+    """
+    end = time.monotonic() + timeout
+    with _state_bump:
+        while _state["rev"] <= since:
+            left = end - time.monotonic()
+            if left <= 0:
+                break
+            _state_bump.wait(left)
         return _state["rev"]
 
 
@@ -1046,6 +1071,7 @@ def state_put(node, values: dict = None, meta: dict = None) -> list:
         cur.update(meta or {})
         if changed:
             _state["rev"] += 1
+            _state_bump.notify_all()
     if changed:
         log(f"node {node}: {', '.join(changed)} changed", "ok")
     state_save()
@@ -1422,7 +1448,7 @@ def matter_watch():
     if not MATTER_LINK:
         log("matter-server link is off (PANEL_MATTER_LINK=0)", "info")
         return
-    link = MatterLink(MATTER_WS, matter_value, sub_heard, log)
+    link = MatterLink(MATTER_WS, matter_value, log)
 
     def remap():
         while True:
@@ -2304,6 +2330,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # Nothing here is cacheable, and one case makes that urgent rather than
+        # tidy: a long poll asks the same URL every time, so a browser that is
+        # allowed to cache answers it instantly from the last response and never
+        # reaches us. The poll looks like it is running - same requests, same
+        # rate - and learns nothing, for ever.
+        self.send_header("Cache-Control", "no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(body)
 
@@ -2356,6 +2388,16 @@ class Handler(BaseHTTPRequestHandler):
             # now". `fresh=1` skips the coalescing window, for right after a
             # command when you want the tile to catch up at once.
             fresh = "fresh=1" in self.path
+            # A long poll, when the browser asks for one. It says which revision
+            # it already has; if that is still the current one we hold the
+            # request open until something changes, and answer the moment it
+            # does. The tile then moves when the LIGHT moves, rather than on the
+            # next tick of whatever interval we picked.
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            wait = float(q.get("wait", [0])[0] or 0)
+            since = int(q.get("since", [-1])[0] or -1)
+            if wait > 0 and since >= 0:
+                wait_for_change(since, min(wait, 30.0))
             self._send({"byNode": refresh_bulbs(force=fresh), "rev": state_rev()})
 
         elif self.path.startswith("/api/log"):

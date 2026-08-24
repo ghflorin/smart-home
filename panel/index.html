@@ -5509,15 +5509,11 @@ function setLockAll(locked, btn) {
 //
 // The server coalesces on its own (a read newer than its TTL is served from
 // memory), so several browsers do not multiply the radio traffic.
-const BULBS = { timer: null, lastTouch: Date.now(), idle: false };
-// Fast, because these answers are already sitting on the Pi.
-//
-// /api/bulbs is served from the server's own cache; it only reaches for the
-// radio when a value is older than its TTL, and the Pi keeps event sensors warm
-// on its own loop. So asking often costs an HTTP round trip on the LAN and
-// nothing on the Thread network - and a door that opened is on screen in
-// seconds instead of on the next lazy poll.
-const BULB_POLL_MS = 5000;
+const BULBS = { timer: null, lastTouch: Date.now(), idle: false, rev: -1 };
+// Only the gap between long polls, not the rate anything is learned at: the
+// request itself waits for news. This is what is left over for the case where
+// the server answered "nothing changed" and we go straight round again.
+const BULB_POLL_MS = 250;
 const BULB_IDLE_MS = 3 * 60 * 1000;
 
 async function loadBulbs(fresh) {
@@ -5527,7 +5523,14 @@ async function loadBulbs(fresh) {
     // Deliberately not through api(): a background read should not make the
     // logs' activity dot pulse. The dot means "you asked for something and
     // it has not come back yet".
-    const j = await (await fetch('/api/bulbs' + (fresh ? '?fresh=1' : ''))).json();
+    // A long poll: we say which revision we have, and the server holds the
+    // request open until something is different. So a tile moves when the LIGHT
+    // moves - not on the next tick of an interval, which is only ever a choice
+    // between how much traffic and how late.
+    const q = fresh ? '?fresh=1'
+      : (BULBS.rev >= 0 ? `?since=${BULBS.rev}&wait=25` : '');
+    const j = await (await fetch('/api/bulbs' + q)).json();
+    if (typeof j.rev === 'number') { BULBS.rev = j.rev; }
     const fresh_ = j.byNode || {};
     // Asked before the new state lands, because it is a comparison against the
     // old one. This is the wall-switch path: nobody pressed anything here.
@@ -5549,16 +5552,15 @@ async function loadBulbs(fresh) {
 function pollBulbs() {
   clearTimeout(BULBS.timer);
   BULBS.idle = (Date.now() - BULBS.lastTouch) > BULB_IDLE_MS;
-  BULBS.timer = setTimeout(() => {
-    // Idle is no longer a reason to slow down, only to stop reaching for the
-    // radio - and this request does not reach for it anyway. Being untouched
-    // for three minutes used to mean asking once a minute, which made the one
-    // case that matters - somebody standing in front of the panel watching a
-    // door - the slowest case there was.
+  BULBS.timer = setTimeout(async () => {
+    // AWAITED, and that is the whole point now the request is a long poll. Left
+    // un-awaited this re-armed 250 ms after STARTING the previous one, so with
+    // a 25-second poll it stacked about a hundred open requests against a Pi -
+    // measured at 45 in twenty seconds before this line grew its await.
     //
-    // Hidden is still a reason to stop: nobody can see it, and coming back
-    // fires touched(), which refreshes at once.
-    if (!document.hidden) { loadBulbs(); }
+    // Hidden is still a reason to stop entirely: nobody can see it, and coming
+    // back fires touched(), which refreshes at once.
+    if (!document.hidden) { await loadBulbs(); }
     pollBulbs();
   }, BULB_POLL_MS);
 }

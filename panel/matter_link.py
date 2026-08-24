@@ -48,10 +48,9 @@ class MatterLink:
     that the lights depend on.
     """
 
-    def __init__(self, url, on_value, on_alive, log):
+    def __init__(self, url, on_value, log):
         self._url = url
         self._on_value = on_value      # (our_node, cluster, attribute, value)
-        self._on_alive = on_alive      # (our_node) - "still linked", for liveness
         self._log = log
         # matter-server assigns its own node ids on its own fabric, so 1004 here
         # is 1 there. devices.json carries the mapping.
@@ -90,22 +89,32 @@ class MatterLink:
             conn.send(json.dumps({"message_id": "listen",
                                   "command": "start_listening"}))
 
-            last_ping = time.time()
+            last_sweep = time.time()
             while True:
-                raw = conn.recv(timeout=30)
-                self._absorb(raw)
-                # Liveness is the LINK being up, not the door being busy: a
-                # quiet door is the normal case and must not look like a dead
-                # subscription, or the poller would take these nodes back.
-                if time.time() - last_ping > 20:
-                    last_ping = time.time()
-                    with self._lock:
-                        ours = list(self._theirs_to_ours.values())
-                    for node in ours:
-                        self._on_alive(node)
-        except TimeoutError:
-            # Nothing said anything for 30 s. Normal; keep the socket and loop.
-            return
+                # A quiet door is the normal case, so a recv timeout is not an
+                # event - it certainly is not a reason to drop the socket. The
+                # first version returned here, which reconnected every 30 s and
+                # re-fetched on each reconnect: an accidental 40-second poller,
+                # slower than the one it replaced, and it looked exactly like a
+                # sensor stuck on its last value.
+                try:
+                    raw = conn.recv(timeout=5)
+                except TimeoutError:
+                    raw = None
+                if raw is not None:
+                    self._absorb(raw)
+
+                # A cheap correctness backstop, every minute. This does not
+                # touch the device: matter-server answers from the cache its own
+                # subscription keeps current. It exists so that a subscription
+                # dying quietly on ITS side cannot strand a value here - and,
+                # because liveness is fed only by data actually arriving, a
+                # matter-server that stops answering hands the node back to the
+                # ordinary poller instead of freezing it.
+                if time.time() - last_sweep > 60:
+                    last_sweep = time.time()
+                    conn.send(json.dumps({"message_id": "nodes",
+                                          "command": "get_nodes"}))
         finally:
             try:
                 conn.close()
