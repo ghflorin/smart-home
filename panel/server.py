@@ -40,6 +40,9 @@ except ImportError:
         "  pip install websockets\n"
     )
 
+# Beside this file, so it shares the panel's dependencies and nothing else.
+from matter_link import MatterLink
+
 try:
     import segno
 except ImportError:
@@ -1370,6 +1373,67 @@ def event_watch():
         except Exception as exc:  # noqa: BLE001 - one bad read does not stop the loop
             log(f"event watch: {exc}", "warn")
         time.sleep(EVENT_POLL_SEC)
+
+
+# ------------------------------------------------------- python-matter-server
+#
+# The read path for devices that must not be polled. See matter_link.py for why
+# polling cannot be prompt for a battery sensor, and panel/README.md for the
+# shape of the migration - chip-tool still does everything else.
+MATTER_WS = os.environ.get("MATTER_WS", "ws://127.0.0.1:5580/ws")
+MATTER_LINK = os.environ.get("PANEL_MATTER_LINK", "1").lower() not in ("0", "no", "off")
+
+
+def matter_map(devices: dict) -> dict:
+    """matter-server's node id -> ours, from devices.json.
+
+    Two fabrics means two sets of node ids for the same hardware: the sensor is
+    1004 to chip-tool and 1 to matter-server. `msNode` on the device entry is
+    the only thing that ties them together.
+    """
+    out = {}
+    for dev in all_devices(devices):
+        if dev.get("msNode") is not None:
+            out[int(dev["msNode"])] = int(dev["node"])
+    return out
+
+
+def matter_value(node, cluster, attr, val):
+    """One pushed reading, folded into state exactly as a poll would be."""
+    for c, a, key, _lab, _unit, scale in MEASURED:
+        if c != cluster or a != attr:
+            continue
+        v = round(val * scale, 2) if isinstance(val, (int, float)) and scale != 1 else val
+        cur = dict(state_of(node).get("measured") or {})
+        sub_heard(node)
+        if cur.get(key) == v:
+            state_put(node, meta={"readAt": time.time(), "okAt": time.time(),
+                                  "ok": True, "err": None})
+            return
+        cur[key] = v
+        log(f"node {node}: {key} -> {v}", "step")
+        state_put(node, values={"measured": cur},
+                  meta={"readAt": time.time(), "okAt": time.time(),
+                        "ok": True, "err": None})
+        return
+
+
+def matter_watch():
+    if not MATTER_LINK:
+        log("matter-server link is off (PANEL_MATTER_LINK=0)", "info")
+        return
+    link = MatterLink(MATTER_WS, matter_value, sub_heard, log)
+
+    def remap():
+        while True:
+            try:
+                link.set_map(matter_map(load_devices()))
+            except (OSError, ValueError):
+                pass
+            time.sleep(30)
+
+    threading.Thread(target=remap, name="matter-map", daemon=True).start()
+    link.run()
 
 
 def watcher():
@@ -3268,5 +3332,6 @@ if __name__ == "__main__":
     threading.Thread(target=refresher, name="refresher", daemon=True).start()
     threading.Thread(target=watcher, name="watcher", daemon=True).start()
     threading.Thread(target=event_watch, name="events", daemon=True).start()
+    threading.Thread(target=matter_watch, name="matter", daemon=True).start()
     threading.Thread(target=freezer, name="freezer", daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PANEL_PORT), Handler).serve_forever()

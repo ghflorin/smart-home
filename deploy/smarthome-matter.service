@@ -1,0 +1,55 @@
+[Unit]
+# python-matter-server: the Matter client the panel talks to.
+#
+# It replaces chip-tool, and the reason is not taste. chip-tool's interactive
+# server cannot hold an attribute subscription - subscribe-by-id there behaves
+# as a one-shot read - so every sensor had to be polled, and a battery device
+# only reads its mailbox every 15 seconds. Polling can never be prompt; a
+# subscription is, because the device transmits the moment the value changes
+# instead of waiting to be asked.
+#
+# It is also five times cheaper. Measured on this Pi 3B+, both idle:
+#
+#     chip-tool       83.2% CPU    45 MB
+#     matter-server   15.4% CPU   128 MB
+#
+# chip-tool's 83% is connectedhomeip#29971 - libwebsockets inverts the POSIX
+# convention for a negative timeout, so its event loop spins. The whole
+# SIGSTOP/SIGCONT freezer in panel/server.py exists only to work around that,
+# and goes away with it.
+#
+# Standalone. Nothing here involves Home Assistant, whatever the package names
+# suggest: it is a daemon with a WebSocket API and no HA dependency.
+Description=smarthome - Matter server
+After=network-online.target otbr-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The account that owns /opt/smarthome. Change it in EVERY unit if you change
+# it here: systemd fails with status=217/USER and does not say which unit.
+User=pi
+Group=pi
+WorkingDirectory=/opt/smarthome
+
+# The CHIP stack hardcodes /data/chip_factory.ini - it is built to run in a
+# container, where /data is a mount. On bare metal that directory has to exist
+# and be writable, or the stack dies at startup with
+# "CHIP Error 0x000000AD: Open file failed" and a traceback that names neither
+# the path nor the reason. See deploy/README.md.
+ExecStartPre=/usr/bin/install -d -o pi -g pi /data
+
+ExecStart=/opt/smarthome/.venv-matter/bin/matter-server \
+    --storage-path /opt/smarthome/ota/state/matter-server \
+    --port 5580 \
+    --log-level info
+
+Restart=on-failure
+RestartSec=10
+
+# The CHIP stack takes its time coming up on a Pi 3B+ - fetching the vendor
+# list and initialising the controller ran to about 13 seconds here.
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
