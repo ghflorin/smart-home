@@ -65,10 +65,24 @@ without going to look.
 **Caveats, and they are the interesting part:**
 
 - **It is battery powered, so it sleeps.** A read does not wake it; the request
-  queues at its Thread parent and is delivered when the device next polls. Our
-  polling interval is therefore a floor we cannot get under, and a read can
-  simply fail — the panel shows `ok: false` and keeps the last known value.
-  End to end, a change can take tens of seconds to appear on a tile.
+  waits at its Thread parent and is picked up on the poll the device was going
+  to make anyway. Answers come back in **0.4–6.5 s**, and sometimes not at all —
+  a read landing in the wrong moment simply fails.
+- **A missed read used to cost five minutes.** `BULB_COLD_SEC` exists so an
+  unplugged bulb does not burn a full timeout on every page load: one failed
+  read and the device is not tried again for 300 s. For a sleepy sensor, which
+  misses reads as a matter of course, that was ruinous — a magnet took two
+  minutes to register because the sensor kept falling into a cold shoulder
+  longer than anyone would stand there watching. Event devices are exempt now.
+- **They are polled on their own loop, server side.** `event_watch` asks every
+  `PANEL_EVENT_POLL_SEC` (5 s) regardless of whether any browser is open, so the
+  Pi is always current and the page only decides how fast it draws what the Pi
+  already knows. Measured end to end: a read every **~11 s** on average, which
+  is 5 s of loop plus the device's own 4–7 s to answer. That last part is the
+  floor; polling faster does not get answers faster.
+- **The trade-off is battery.** The read costs the device a transmission each
+  time. It does not add wakeups — it rides the poll it was making anyway — but
+  answering every 11 s for ever is not free. `PANEL_EVENT_POLL_SEC` is the dial.
 - **Subscribing to it does not work through chip-tool, and the failure is
   silent.** `subscribe-by-id` on chip-tool's interactive server behaves like a
   one-shot read: the command returns the current value as its result and the

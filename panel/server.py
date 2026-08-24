@@ -1328,6 +1328,50 @@ def sub_paths(devices: dict) -> list:
     return out
 
 
+# How often to ask a device whose reading is an EVENT. Not the same question as
+# how often to ask a thermometer: a door that opened two minutes ago is news
+# nobody can use.
+#
+# Cheap in practice. The read does not wake the device - it waits at its Thread
+# parent and is picked up on the poll the device was going to make anyway - so
+# this buys latency rather than spending battery. Measured on the MYGGBETT,
+# answers come back in 0.4-6.5 s, which is the real floor here.
+EVENT_POLL_SEC = int(os.environ.get("PANEL_EVENT_POLL_SEC", "5"))
+
+
+def is_event_device(dev: dict) -> bool:
+    """Does this device report anything that is an event rather than a level?"""
+    desc = dev.get("desc") or {}
+    for info in (desc.get("endpoints") or {}).values():
+        have = set(info.get("clusters") or [])
+        for cluster, _attr, key, _lab, _unit, _scale in MEASURED:
+            if key in SUB_KEYS and cluster in have:
+                return True
+    return False
+
+
+def event_watch():
+    """Poll event sensors on a tight loop, in the background.
+
+    Server side on purpose. It used to depend entirely on a browser asking, and
+    a browser that nobody has touched for three minutes asks slowly - so the one
+    case that matters, somebody standing in front of the panel watching a door,
+    was the case that updated slowest. Now the Pi keeps these current whether
+    anything is looking or not, and the page only decides how quickly it draws
+    what the Pi already knows.
+    """
+    while True:
+        try:
+            for dev in load_devices().get("devices", []):
+                if not is_event_device(dev) or subscribed(dev["node"]):
+                    continue
+                with _bulb_lock:
+                    refresh_device(dev)
+        except Exception as exc:  # noqa: BLE001 - one bad read does not stop the loop
+            log(f"event watch: {exc}", "warn")
+        time.sleep(EVENT_POLL_SEC)
+
+
 def watcher():
     """Keep a subscription open for every device that deserves one.
 
@@ -1481,7 +1525,15 @@ def refresh_bulbs(force: bool = False) -> dict:
                     continue
                 # Cold: it did not answer last time. Do not spend a full timeout
                 # on it every time somebody opens the page.
-                if st.get("ok") is False and age < BULB_COLD_SEC:
+                #
+                # Except for a device whose readings are events. A sleepy sensor
+                # misses reads as a matter of course, and one miss used to put it
+                # in a FIVE MINUTE cold shoulder - so a door sensor that failed
+                # once went quiet for longer than anybody would keep watching.
+                # That, not the poll interval, is what made a magnet take two
+                # minutes to register.
+                if (st.get("ok") is False and age < BULB_COLD_SEC
+                        and not is_event_device(dev)):
                     continue
             try:
                 (refresh_bulb if kind == "bulb" else refresh_device)(dev)
@@ -3215,5 +3267,6 @@ if __name__ == "__main__":
 
     threading.Thread(target=refresher, name="refresher", daemon=True).start()
     threading.Thread(target=watcher, name="watcher", daemon=True).start()
+    threading.Thread(target=event_watch, name="events", daemon=True).start()
     threading.Thread(target=freezer, name="freezer", daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PANEL_PORT), Handler).serve_forever()

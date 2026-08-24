@@ -5510,9 +5510,14 @@ function setLockAll(locked, btn) {
 // The server coalesces on its own (a read newer than its TTL is served from
 // memory), so several browsers do not multiply the radio traffic.
 const BULBS = { timer: null, lastTouch: Date.now(), idle: false };
-const BULB_POLL_MS = 15000;
-// Idle is slower, never silent. See pollBulbs.
-const BULB_IDLE_POLL_MS = 60000;
+// Fast, because these answers are already sitting on the Pi.
+//
+// /api/bulbs is served from the server's own cache; it only reaches for the
+// radio when a value is older than its TTL, and the Pi keeps event sensors warm
+// on its own loop. So asking often costs an HTTP round trip on the LAN and
+// nothing on the Thread network - and a door that opened is on screen in
+// seconds instead of on the next lazy poll.
+const BULB_POLL_MS = 5000;
 const BULB_IDLE_MS = 3 * 60 * 1000;
 
 async function loadBulbs(fresh) {
@@ -5543,20 +5548,19 @@ async function loadBulbs(fresh) {
 
 function pollBulbs() {
   clearTimeout(BULBS.timer);
-  const idle = document.hidden || (Date.now() - BULBS.lastTouch) > BULB_IDLE_MS;
-  BULBS.idle = idle;
+  BULBS.idle = (Date.now() - BULBS.lastTouch) > BULB_IDLE_MS;
   BULBS.timer = setTimeout(() => {
-    // Idle used to mean SILENT: three minutes without touching the page and it
-    // stopped asking for anything at all. That is right for a lamp you are not
-    // using and wrong for a sensor, whose entire job is to change while nobody
-    // is touching anything - you stand there watching a door sensor and the
-    // panel has quietly stopped listening.
+    // Idle is no longer a reason to slow down, only to stop reaching for the
+    // radio - and this request does not reach for it anyway. Being untouched
+    // for three minutes used to mean asking once a minute, which made the one
+    // case that matters - somebody standing in front of the panel watching a
+    // door - the slowest case there was.
     //
-    // Hidden is the one case where stopping is still correct: nobody can see
-    // it, and coming back fires touched(), which refreshes at once.
+    // Hidden is still a reason to stop: nobody can see it, and coming back
+    // fires touched(), which refreshes at once.
     if (!document.hidden) { loadBulbs(); }
     pollBulbs();
-  }, idle ? BULB_IDLE_POLL_MS : BULB_POLL_MS);
+  }, BULB_POLL_MS);
 }
 
 function touched() {
