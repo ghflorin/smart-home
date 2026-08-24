@@ -69,10 +69,23 @@ without going to look.
   polling interval is therefore a floor we cannot get under, and a read can
   simply fail — the panel shows `ok: false` and keeps the last known value.
   End to end, a change can take tens of seconds to appear on a tile.
-- **So the panel subscribes to it instead of polling it.** `BooleanState` is in
-  `SUB_KEYS`, so a `watcher` thread holds a subscription on a connection of its
-  own and the poller skips the node entirely. Set `PANEL_SUBSCRIBE=0` to go back
-  to polling.
+- **Subscribing to it does not work through chip-tool, and the failure is
+  silent.** `subscribe-by-id` on chip-tool's interactive server behaves like a
+  one-shot read: the command returns the current value as its result and the
+  subscription goes with it. That priming value is indistinguishable from a
+  subscription working — and nothing ever follows. Confirmed in chip-tool's own
+  log, where the last traffic with the node is an unrelated command and no
+  `ReportData` arrives.
+
+  It is worse than polling, not merely no better: a node believed to be
+  subscribed is not polled, so its value freezes at the priming report for ever.
+  A door sensor stuck on `closed` is precisely the reading somebody acts on
+  without looking. The code is kept and **off** (`PANEL_SUBSCRIBE`), because the
+  approach is right and only the transport is wrong — a chip-tool build that
+  streams reports, or a different Matter client, makes it work. If it is ever
+  turned on, `PANEL_SUB_SILENCE` hands a node back to the poller once its
+  subscription has been quiet for too long, so a silent failure cannot strand a
+  value again.
 - **A subscription owns the device's session.** While one is held, a direct read
   of that same node comes back empty — which is why the poller has to skip it,
   or the device would flap between "reporting" and "not answering".

@@ -2326,6 +2326,18 @@ const ICONS = {
     <path d="M8.5 10.3V7.5a3.5 3.5 0 0 1 6.8-1.2"/>
     <circle cx="12" cy="15.5" r="1.25"/></svg>`,
 
+  // A beacon: something in the middle, and a signal going out from it. The
+  // quick button on a sensor identifies it, and a dial - which is what sat there
+  // - describes the device instead of what pressing it does. Same mistake the
+  // switch tile made with its padlock.
+  beacon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/>
+    <path d="M7.7 7.7a6 6 0 0 0 0 8.6"/>
+    <path d="M16.3 16.3a6 6 0 0 0 0-8.6"/>
+    <path d="M4.9 4.9a10 10 0 0 0 0 14.2"/>
+    <path d="M19.1 19.1a10 10 0 0 0 0-14.2"/></svg>`,
+
   pencil: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
     stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z"/>
@@ -2594,7 +2606,9 @@ function deviceOpts(d) {
 
   return {
     node: d.node,
-    icon: ICONS.sensor,
+    // The button identifies, so it shows a beacon rather than a dial. The dial
+    // said what the device IS on a control that does something to it.
+    icon: ICONS.beacon,
     cls: st && st.ok === false ? 'unknown' : '',
     name: d.name,
     state: text,

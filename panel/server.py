@@ -1259,7 +1259,23 @@ def refresh_bulb(bulb: dict) -> list:
 # it; a subscription has to stay open to receive reports, so it cannot share
 # that path. Verified against the real device that the panel's ordinary traffic
 # continues normally while this connection is held.
-SUBSCRIBE = os.environ.get("PANEL_SUBSCRIBE", "1").lower() not in ("0", "no", "off")
+# OFF by default, because it does not work through chip-tool's interactive
+# server and the failure is silent and dangerous.
+#
+# `subscribe-by-id` there behaves like a one-shot read: the command returns the
+# current value as its result and the subscription is torn down with it. The
+# priming report looks exactly like a subscription working. Nothing follows it -
+# confirmed in chip-tool's own log, where the last traffic with the node is the
+# identify command and no ReportData ever arrives.
+#
+# That is worse than polling rather than merely no better: a node believed to be
+# subscribed is not polled, so its value freezes at whatever the priming report
+# said and never moves again. A door sensor stuck on "closed" is exactly the
+# reading somebody would act on.
+#
+# Kept, off, because the approach is right and only the transport is wrong -
+# a chip-tool that streams reports, or another Matter client, makes this work.
+SUBSCRIBE = os.environ.get("PANEL_SUBSCRIBE", "0").lower() not in ("0", "no", "off")
 # min 0: report the moment it changes. max: the keep-alive ceiling, the longest
 # the device may stay silent before saying it is still there.
 SUB_MIN = int(os.environ.get("PANEL_SUB_MIN", "0"))
@@ -1269,13 +1285,27 @@ SUB_MAX = int(os.environ.get("PANEL_SUB_MAX", "600"))
 # an EVENT. A temperature that drifts is fine on a poll; a door is not.
 SUB_KEYS = {"contact"}
 
-_subscribed = set()          # nodes currently covered by a live subscription
+# node -> when it last told us something. Not a flag: a subscription that has
+# gone quiet has to hand the node back to the poller, or a silent failure
+# freezes the value for ever.
+_subscribed = {}
 _sub_lock = threading.Lock()
+# How long a subscription may say nothing before we stop trusting it. Twice the
+# keep-alive: a healthy one reports at least that often even when nothing
+# changes.
+SUB_SILENCE = int(os.environ.get("PANEL_SUB_SILENCE", str(2 * 600)))
 
 
 def subscribed(node) -> bool:
+    """Is this node covered by a subscription that is still talking?"""
     with _sub_lock:
-        return int(node) in _subscribed
+        last = _subscribed.get(int(node))
+    return last is not None and (time.time() - last) < SUB_SILENCE
+
+
+def sub_heard(node):
+    with _sub_lock:
+        _subscribed[int(node)] = time.time()
 
 
 def sub_paths(devices: dict) -> list:
@@ -1337,8 +1367,7 @@ def _run_subscriptions(paths: list):
             log(f"$ {cmd}", "cmd")
             conn.send(cmd)
             by_path[(int(node), cluster, ep, attr)] = (key, scale)
-            with _sub_lock:
-                _subscribed.add(int(node))
+            sub_heard(node)
 
         log(f"watching {len(paths)} attribute(s) by subscription", "ok")
         while True:
@@ -1386,9 +1415,11 @@ def _absorb_report(raw, by_path: dict):
         node = key[0]
         cur = dict(state_of(node).get("measured") or {})
         if cur.get(name) == val:
+            sub_heard(node)
             state_put(node, meta={"readAt": time.time(), "ok": True, "err": None})
             continue
         cur[name] = val
+        sub_heard(node)
         log(f"node {node}: {name} -> {val}", "step")
         state_put(node, values={"measured": cur},
                   meta={"readAt": time.time(), "ok": True, "err": None})
