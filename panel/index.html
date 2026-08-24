@@ -1058,15 +1058,20 @@
      holds in both themes instead of being a light-mode guess. The brightness
      panel keeps its number readable: with the lamp dark that number is OnLevel,
      which is the one thing worth knowing about a light that is off. */
+  /* Two knobs, named, because this is the kind of thing that gets tuned by eye
+     several times: how much colour is drained, and how far the whole thing is
+     pulled toward the sheet. Fully grey and fully blended read as broken rather
+     than as off - the lamp should look asleep, not absent. */
+  .hk { --off-grey: .55; --off-blend: 22%; }
   .hk-lvl.off, .hk-ct.off {
-    filter: grayscale(1);
-    border-color: color-mix(in srgb, var(--line-hi) 40%, var(--panel-hi));
+    filter: grayscale(var(--off-grey));
+    border-color: color-mix(in srgb, var(--line-hi) 65%, var(--panel-hi));
   }
   .hk-lvl.off {
-    background: color-mix(in srgb, var(--sunken) 28%, var(--panel-hi));
+    background: color-mix(in srgb, var(--panel-hi) var(--off-blend), var(--sunken));
   }
-  .hk-lvl.off .hk-fill { opacity: .12; }
-  .hk-ct.off { opacity: .3; }
+  .hk-lvl.off .hk-fill { opacity: .3; }
+  .hk-ct.off { opacity: .55; }
   .hk-lvl, .hk-ct { transition: filter .3s ease, opacity .3s ease; }
   .hk.off .hk-cap { opacity: .55; }
   @media (prefers-reduced-motion: reduce) {
