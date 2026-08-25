@@ -238,9 +238,22 @@ and costs nothing to notice, while sampling ambient light continuously would
 not be. `Tolerance` is `UnsupportedAttribute`, so the device does not say what
 change it considers reportable.
 
-**Occupancy holds for about a minute, and the hold is not adjustable.**
-Measured clear-to-motion-to-clear cycles ran 22-74 s. Matter defines four ways
-to configure that delay and this device implements none of them:
+**Occupancy clears about 23 s after the LAST movement, and the hold is not
+adjustable.**
+
+Read the intervals carefully, because they are easy to misread — as they were
+here at first. Observed detected-to-clear spans were 23, 31, 167 and 221 s,
+which looks like a wildly variable hold. It is not. The sensor reports only the
+*transition* to occupied; while movement continues it stays at 1 and sends
+nothing further, so a long span means somebody was still in the room, re-arming
+the timer. The true hold is the shortest span: **~23 s of quiet**.
+
+Two useful consequences: a sustained `detected` really does mean continued
+presence rather than a stuck flag, and anything built on this has an off-delay
+floor of about twenty seconds, not a minute.
+
+Matter defines four ways to configure that delay and this device implements
+none of them:
 
 ```
 AttributeList = [0, 1, 2, 65528, 65529, 65531, 65532, 65533]
@@ -256,8 +269,9 @@ the moment you stopped moving would switch off every time you sat still.
 Covering the sensor does not shortcut it either — to the sensor that is simply
 "no new motion", so it waits out the same minute.
 
-The practical shape, for anything built on it: **on immediately, off after about
-a minute.** Logic in the panel can only ever make that delay longer.
+The practical shape, for anything built on it: **on immediately, off about
+twenty seconds after the room goes quiet.** Logic in the panel can only ever
+make that delay longer.
 
 **Illuminance is logarithmic.** `MeasuredValue = 10000 x log10(lux) + 1`, so a
 raw 10414 is 11 lux and not 10414 of anything. The device confirms its own

@@ -4067,6 +4067,19 @@ function openDevice(d) {
   };
   paintReads();
 
+  /* And keep repainting them for as long as the sheet is open.
+   *
+   * Only the bulb sheet did this, so a sensor's readings froze at whatever they
+   * were when you opened it: the panel had the new value within a second of the
+   * device sending it, the tile behind the sheet moved, and the sheet in front
+   * of you did not. Closing and reopening "fixed" it, which is the tell - the
+   * data was never stale, only the drawing was.
+   *
+   * paintReads writes into the existing rows rather than rebuilding the sheet,
+   * so this is safe to call on every update: the buttons underneath are not
+   * touched and nothing flickers under the pointer. */
+  SHEET_LIVE = paintReads;
+
   wireActions(sheet, d, () => openDevice(d));
   $('#overlay').classList.add('on');
 
