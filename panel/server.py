@@ -1267,6 +1267,86 @@ def read_binding(node, endpoint=1):
     return translate_binding(raw), None
 
 
+# Cluster and attribute names, generated from the Matter SDK by
+# scripts/gen-matter-names.py. 140 clusters and 1854 attributes: hand-writing
+# that would be wrong within a release, and the SDK already knows all of it.
+# Absent, the inspector still works and simply shows numbers.
+NAMES_FILE = HERE / "matter_names.json"
+try:
+    MATTER_NAMES = json.loads(NAMES_FILE.read_text())
+except (OSError, ValueError):
+    MATTER_NAMES = {}
+
+
+# The attribute ids every cluster carries. They are noise in an inspector that
+# is trying to show what a device DOES, so they go last and are marked.
+GLOBAL_ATTRS = {0xFFF8, 0xFFF9, 0xFFFA, 0xFFFB, 0xFFFC, 0xFFFD}
+
+
+def inspect_node(node) -> dict:
+    """Everything a device exposes, decoded: endpoints, clusters, attributes.
+
+    Read from matter-server's cache, so it costs no radio traffic and cannot
+    fail because the device is asleep - which matters most for exactly the
+    devices you want to inspect.
+    """
+    attrs, err = m_attrs(node, timeout=30.0)
+    if attrs is None:
+        return {"node": node, "error": err or "no answer", "endpoints": []}
+
+    eps = {}
+    for path, val in attrs.items():
+        bits = path.split("/")
+        if len(bits) != 3:
+            continue
+        try:
+            ep, cluster, attr = (int(b) for b in bits)
+        except ValueError:
+            continue
+        info = MATTER_NAMES.get(str(cluster)) or {}
+        cl = eps.setdefault(ep, {}).setdefault(cluster, {
+            "id": cluster,
+            "name": info.get("name") or f"cluster 0x{cluster:04X}",
+            "attributes": [],
+        })
+        # A read that FAILED is cached as an object describing the failure, not
+        # as a value, and rendering it as one would put
+        # "InteractionModelError: UnsupportedAttribute" in a table of readings
+        # as though the device had said it. Whether a device refuses an
+        # attribute is worth showing - it is half of what an inspector is for -
+        # but it has to be shown as a refusal.
+        why = None
+        if isinstance(val, dict) and "Reason" in val and "TLVValue" in val:
+            why = str(val.get("Reason") or "").split(":")[-1].strip() or "unsupported"
+            val = None
+        cl["attributes"].append({
+            "id": attr,
+            "name": (info.get("attributes") or {}).get(str(attr))
+                    or f"attribute 0x{attr:04X}",
+            "value": val,
+            "unsupported": why,
+            "global": attr in GLOBAL_ATTRS,
+        })
+
+    out = []
+    for ep in sorted(eps):
+        clusters = []
+        for cid in sorted(eps[ep]):
+            cl = eps[ep][cid]
+            # A cluster whose every attribute refused is not on the device at
+            # all - it is the residue of somebody having asked. Drop it, or the
+            # inspector invents capabilities.
+            if all(a["unsupported"] for a in cl["attributes"]):
+                continue
+            # Named attributes first and in id order; the global ones after,
+            # because they are the same on every cluster in the house.
+            cl["attributes"].sort(key=lambda a: (a["global"], a["id"]))
+            cl["count"] = sum(1 for a in cl["attributes"] if not a["global"])
+            clusters.append(cl)
+        out.append({"endpoint": ep, "clusters": clusters})
+    return {"node": node, "endpoints": out}
+
+
 def m_attrs(node, timeout=20.0):
     """Everything matter-server currently knows about a node.
 
@@ -2323,6 +2403,21 @@ class Handler(BaseHTTPRequestHandler):
                              for _, _, k, lab, u, _ in MEASURED]
             d["airQualityWords"] = AIR_QUALITY_WORDS
             self._send(d)
+
+        elif self.path.startswith("/api/inspect"):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                node = int((q.get("node") or ["0"])[0])
+            except ValueError:
+                node = 0
+            dev = next((d for d in all_devices(load_devices())
+                        if int(d.get("node", 0)) == node), None)
+            if dev is None:
+                return self._send({"error": f"unknown device: {node}"}, status=404)
+            out = inspect_node(node)
+            out["name"] = dev.get("name")
+            out["kind"] = dev.get("kind")
+            self._send(out)
 
         elif self.path == "/api/bindings":
             # From the state held on the Pi, so it is instant. Reading from the

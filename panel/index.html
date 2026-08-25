@@ -572,6 +572,125 @@
     .tile .batt.critical { animation: none; }
   }
 
+  /* ---------- the property inspector ---------- */
+
+  /* Full screen, because this is a reference view: 232 attributes on one sensor,
+     and reading them in a 420px column is scrolling, not reading.
+     `.wide` is declared further down the sheet and would otherwise win the
+     max-width, so this names both classes rather than relying on order. */
+  .sheetwrap.wide.full { max-width: none; }
+  .sheetwrap.full { width: 100%; height: calc(100vh - 24px); }
+  .sheetwrap.full .sheet {
+    height: 100%;
+    max-height: 100%;
+    border-radius: 16px;
+    /* The sheet centres its content everywhere else, which is right for a form
+       and wrong for a table - centred rows have no left edge for the eye to
+       come back to, so a column of names reads as scattered. */
+    text-align: left;
+    padding: 0 var(--pad) var(--pad);
+  }
+
+  /* Stays put while 232 rows go past underneath, so "which device is this" and
+     the way out are never scrolled off. */
+  .insp-head {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 18px 0 14px;
+    margin-bottom: 4px;
+    background: var(--panel-hi);
+    border-bottom: 1px solid var(--line);
+  }
+  /* Qualified with .sheet on purpose. `.sheet h2` is a centring flex row - it
+     has a rename pencil to place - and carries the same specificity as a bare
+     `.insp-head h2`, so with the inspector's rules declared earlier in the
+     sheet it would win on order alone and the title would stay centred. */
+  .sheet .insp-head h2 {
+    margin: 0;
+    text-align: left;
+    justify-content: flex-start;
+  }
+  .sheet .insp-head .who { text-align: left; margin: 2px 0 0; }
+  .insp-title { min-width: 0; }
+
+  .insp-ep { margin-top: 22px; }
+  .insp-ephead {
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    padding-bottom: 8px;
+  }
+  /* Clusters side by side on a wide screen. Sixteen tables in one column is a
+     very long page for what is mostly short tables. */
+  .insp-grid {
+    display: grid;
+    /* 360px is about where a 232px name column plus a readable value column
+       stops being cramped, so this gives two columns on a laptop and one on a
+       phone without a breakpoint. */
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 10px 28px;
+    align-items: start;
+  }
+
+  table.insp {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 6px 0 14px;
+  }
+  table.insp caption {
+    text-align: left;
+    font-weight: 600;
+    font-size: 13px;
+    padding: 6px 0 5px;
+    color: var(--ink);
+    border-bottom: 1px solid var(--line-hi);
+  }
+  table.insp .hex {
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--ink-faint);
+    margin-left: 6px;
+  }
+  table.insp td {
+    border-top: 1px solid var(--line);
+    padding: 5px 0;
+    vertical-align: top;
+    font-size: 12.5px;
+    text-align: left;
+  }
+  /* A fixed name column with a rule down it, so the two halves are a label and
+     a value rather than two things that happen to be near each other. The width
+     is fixed rather than a percentage: on a full-screen table a percentage
+     column grows with the window and drags the values away from their names. */
+  table.insp td.an {
+    width: 232px;
+    color: var(--ink-dim);
+    border-right: 1px solid var(--line);
+    padding-right: 14px;
+  }
+  /* The values are the reason for the table. Monospace so digits line up, and
+     wrapping rather than truncating - a sixty-entry Thread diagnostic is long
+     and cutting it off would defeat the point of the view. */
+  table.insp td.av {
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    color: var(--ink);
+    word-break: break-word;
+    padding-left: 14px;
+  }
+  /* The six ids every cluster carries. Present because "absolutely everything"
+     means everything, recessed because they are identical house-wide. */
+  table.insp tr.gl td.an, table.insp tr.gl td.av { color: var(--ink-faint); }
+  table.insp .unsup { color: var(--ink-faint); font-style: italic; }
+  /* A refusal is a finding, not a gap: "the device does not implement this" is
+     often exactly the answer you opened this view to get. */
+  table.insp .unsup::before { content: '\2014 '; }
+
   /* Unknown is not off. A bulb that did not answer must not look like a bulb
    * that is switched off - you would walk over and press a switch that is
    * already in the right position. */
@@ -2478,6 +2597,13 @@ const ICONS = {
     <path d="M4.9 4.9a10 10 0 0 0 0 14.2"/>
     <path d="M19.1 19.1a10 10 0 0 0 0-14.2"/></svg>`,
 
+  // Rows with values beside them: what the inspector shows, drawn as itself.
+  table: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect x="3.5" y="5" width="17" height="14" rx="2"/>
+    <path d="M3.5 9.5h17"/><path d="M13 9.5V19"/>
+    <path d="M6.5 12.8h3.2"/><path d="M6.5 15.8h3.2"/></svg>`,
+
   pencil: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
     stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z"/>
@@ -3329,6 +3455,7 @@ function sheetActions(dev, extra) {
   // read at a glance, and these are the four you reach for most.
   return `<div class="actions">${extra || ''}
     <button class="id">${ICONS.beacon}identify</button>
+    <button class="inspect" type="button">${ICONS.table}properties</button>
     <button class="share">${ICONS.share}share</button>
     <button class="forget" type="button">${ICONS.trash}remove</button>
   </div>
@@ -3396,7 +3523,104 @@ function wireForget(sheet, dev) {
   };
 }
 
-function wireActions(sheet, dev) {
+/* Text into HTML. Attribute values come from the DEVICE and names come from
+ * whatever somebody typed, so neither may be interpolated into markup raw. */
+function esc(v) {
+  return String(v).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/* Everything a device exposes, as it exposes it.
+ *
+ * The panel is opinionated everywhere else - it decides that a device is a
+ * bulb, that a reading is worth a tile, that a level is a percentage. This is
+ * the one view that is not: endpoints, clusters and attributes exactly as the
+ * device reports them, with the names the Matter SDK gives them and the raw ids
+ * beside those, so what you see here can be looked up in the specification.
+ *
+ * It is a cache read, so it costs no radio traffic and works on a sleeping
+ * battery device - which is the one you most want to interrogate.
+ */
+async function openInspector(dev, back) {
+  const sheet = $('#sheet');
+  $('#sheetwrap').classList.add('wide', 'full');
+  sheet.innerHTML = `<h2>${esc(dev.name || 'device')} \u00b7 properties</h2>
+    <div class="who">reading everything it exposes\u2026</div>`;
+  $('#overlay').classList.add('on');
+
+  let j;
+  try {
+    j = await (await fetch('/api/inspect?node=' + encodeURIComponent(dev.node))).json();
+  } catch (err) { j = { error: String(err) }; }
+
+  const head = sub => `
+    <div class="insp-head">
+      ${back ? '<button class="ghost" id="insp-back">\u2190 back</button>' : ''}
+      <div class="insp-title">
+        <h2>${esc(dev.name || 'device')} \u00b7 properties</h2>
+        <div class="who">${sub}</div>
+      </div>
+    </div>`;
+
+  if (j.error) {
+    sheet.innerHTML = head(`node ${dev.node}`) +
+      `<div class="empty">${esc(j.error)}</div>`;
+  } else {
+    // Counted from what came back rather than stated, so the summary cannot
+    // drift from the table under it.
+    let nCl = 0, nAt = 0;
+    for (const ep of j.endpoints) {
+      nCl += ep.clusters.length;
+      for (const c of ep.clusters) { nAt += c.attributes.length; }
+    }
+    const body = j.endpoints.map(ep => `
+      <div class="insp-ep">
+        <div class="insp-ephead">endpoint ${ep.endpoint}${
+          ep.endpoint === 0 ? ' \u00b7 the node itself' : ''}</div>
+        <div class="insp-grid">
+        ${ep.clusters.map(c => `
+          <table class="insp">
+            <caption>${esc(c.name)}
+              <span class="hex">0x${c.id.toString(16).toUpperCase().padStart(4, '0')}</span>
+            </caption>
+            <tbody>${c.attributes.map(a => `
+              <tr class="${a.global ? 'gl' : ''}">
+                <td class="an">${esc(a.name)}
+                  <span class="hex">0x${a.id.toString(16).toUpperCase().padStart(4, '0')}</span>
+                </td>
+                <td class="av">${a.unsupported
+                  ? `<span class="unsup">${esc(a.unsupported)}</span>`
+                  : esc(fmtVal(a.value))}</td>
+              </tr>`).join('')}</tbody>
+          </table>`).join('')}
+        </div>
+      </div>`).join('');
+    sheet.innerHTML = head(`node ${dev.node} \u00b7 ${j.endpoints.length} endpoint${
+      j.endpoints.length === 1 ? '' : 's'} \u00b7 ${nCl} clusters \u00b7 ${nAt} attributes`)
+      + body;
+  }
+  const bb = sheet.querySelector('#insp-back');
+  if (bb) {
+    bb.onclick = () => {
+      $('#sheetwrap').classList.remove('wide', 'full');
+      back();
+    };
+  }
+}
+
+/* A value as the device gave it. Long lists and structs are the norm here -
+ * ThreadNetworkDiagnostics alone has sixty attributes - so they are shown
+ * whole rather than truncated: the point of this view is that nothing is
+ * hidden. */
+function fmtVal(v) {
+  if (v === null || v === undefined) { return 'null'; }
+  if (typeof v === 'boolean') { return v ? 'true' : 'false'; }
+  if (typeof v === 'number') { return String(v); }
+  if (typeof v === 'string') { return v === '' ? '""' : v; }
+  try { return JSON.stringify(v); } catch (err) { return String(v); }
+}
+
+function wireActions(sheet, dev, back) {
   const idb = sheet.querySelector('.id');
   idb.dataset.node = dev.node;
   idb.dataset.endpoint = dev.endpoint ?? 1;
@@ -3406,6 +3630,9 @@ function wireActions(sheet, dev) {
   shb.dataset.node = dev.node;
   shb.dataset.name = dev.name;
   shb.onclick = () => share(shb);
+
+  const ins = sheet.querySelector('.inspect');
+  if (ins) { ins.onclick = () => openInspector(dev, back); }
 
   wireForget(sheet, dev);
 }
@@ -3718,7 +3945,7 @@ function openBulb(b) {
   }
   sheetListDone(list);
 
-  wireActions(sheet, b);
+  wireActions(sheet, b, () => openBulb(b));
   $('#overlay').classList.add('on');
 }
 
@@ -3780,7 +4007,7 @@ function openDevice(d) {
   };
   paintReads();
 
-  wireActions(sheet, d);
+  wireActions(sheet, d, () => openDevice(d));
   $('#overlay').classList.add('on');
 
   // ONE fresh read, and only the numbers are repainted with it. A sheet that is
@@ -3885,7 +4112,7 @@ function openSwitch(sw) {
   // an arbitrary subset, and it silently fell back to the whole house whenever
   // the switch drove nothing. The schedule lives in the header, and on the
   // sheet of each bulb it actually affects.
-  wireActions(sheet, sw);
+  wireActions(sheet, sw, () => openSwitch(sw));
   $('#overlay').classList.add('on');
 }
 
