@@ -211,6 +211,14 @@ MEASURED = [
     (0x042E, 0x0000, "voc",          "VOC",          "",         1),
     (0x005B, 0x0000, "airquality",   "air quality",  "",         1),
     (0x0403, 0x0000, "pressure",     "pressure",     "hPa",      1),
+    # OccupancySensing. The attribute is a BITMAP, not a boolean - bit 0 is
+    # "occupied" - so a device that ever sets another bit would read as a
+    # number here rather than a word, which is the honest failure.
+    #
+    # Above illuminance on purpose: this table's order decides which reading
+    # headlines a tile, and a device that senses both is a motion sensor with a
+    # light meter in it. "light 11 lx" is not what you look at it to find out.
+    (0x0406, 0x0000, "occupancy",    "motion",       "",         1),
     (0x0400, 0x0000, "illuminance",  "light",        "lx",       1),
     # BooleanState - ONE cluster, several completely different meanings.
     #
@@ -261,8 +269,37 @@ MEASURED = [
 # to hide nothing.
 MEASURE_HIDDEN = {"batteryState", "batteryVolts"}
 
+
+def lux_from_measured(v):
+    """Matter stores illuminance LOGARITHMICALLY, and it is easy to miss.
+
+    MeasuredValue = 10000 x log10(lux) + 1, so a reading of 10414 is about
+    11 lux and not 10414 of anything. Shown raw it looked like bright daylight
+    in a room that was dim - a number too large to question rather than
+    obviously broken.
+
+    The device confirms the encoding itself: this sensor reports
+    MinMeasuredValue 1 and MaxMeasuredValue 40001, which decode to 1 lux and
+    10000 lux - a sane range for a light sensor, where 1..40001 lux would not be.
+
+    0 is the spec's "too dark to measure", not "no reading".
+    """
+    if not isinstance(v, (int, float)) or v <= 0:
+        return 0
+    return round(10 ** ((v - 1) / 10000), 1)
+
+
+# Readings that need more than a multiplier to become the thing they claim to
+# be. Applied after `scale`, and only where the wire format is not the unit.
+MEASURE_FN = {
+    "illuminance": lux_from_measured,
+}
+
 MEASURE_WORDS = {
     "contact": ["open", "closed"],
+    # Motion is not an emergency, so it is not shouted the way a leak is. And
+    # the words are not the label repeated - "motion: motion" says nothing.
+    "occupancy": ["clear", "detected"],
     # For these three, `true` is the thing you did not want to happen, so the
     # word is shouted. The panel is quiet everywhere else; this is the one place
     # a reading is an emergency.
@@ -325,6 +362,14 @@ def describe_device(node: int, ms=None) -> dict:
     return out
 
 
+# When a device declares several application types, this is the order we name
+# it by. A device is called after what it is FOR: the MYGGSPRAY carries a light
+# sensor on endpoint 1 and an occupancy sensor on endpoint 2, and calling it a
+# "light sensor" because that endpoint came first describes the accessory rather
+# than the product somebody bought.
+TYPE_PRIORITY = (0x0107, 0x0015, 0x0043, 0x0041, 0x0044, 0x0076, 0x002C)
+
+
 def device_type_name(desc: dict) -> str:
     """One phrase for what this is, for a tile that has no icon of its own.
 
@@ -333,6 +378,8 @@ def device_type_name(desc: dict) -> str:
     id it does not know, because a confident wrong label is worse than a number.
     """
     types = desc.get("types") or []
+    types = sorted(types, key=lambda t: (TYPE_PRIORITY.index(t)
+                                         if t in TYPE_PRIORITY else len(TYPE_PRIORITY)))
     for t in types:
         name = DEVICE_TYPE_NAMES.get(t) or MATTER_DEVICE_TYPES.get(str(t))
         if name:
@@ -389,7 +436,9 @@ def read_measurements(dev: dict) -> dict:
         key, scale = hit
         if key in out:
             continue
-        out[key] = round(val * scale, 2) if scale != 1 else val
+        val = round(val * scale, 2) if scale != 1 else val
+        fn = MEASURE_FN.get(key)
+        out[key] = fn(val) if fn else val
     return out
 
 
@@ -1074,7 +1123,7 @@ def refresh_bulb(bulb: dict) -> list:
 
 # Which readings are an EVENT rather than a quantity. A temperature that drifts
 # is fine on a poll; a door is not, and a flood certainly is not.
-SUB_KEYS = {"contact", "leak", "freeze", "rain"}
+SUB_KEYS = {"contact", "leak", "freeze", "rain", "occupancy"}
 
 # BooleanState's meaning, by the device type that carries it. Matter device
 # types, from the Device Library.
@@ -1585,6 +1634,9 @@ def matter_value(node, cluster, attr, val, pushed=True):
                 return
             key = boolean_kind(dev)
         v = round(val * scale, 2) if isinstance(val, (int, float)) and scale != 1 else val
+        fn = MEASURE_FN.get(key)
+        if fn:
+            v = fn(v)
         cur = dict(state_of(node).get("measured") or {})
         if pushed:
             sub_heard(node)
