@@ -591,7 +591,15 @@
   }
   .fw .fwv b { font-weight: 600; color: var(--ink-dim); }
   .fw .fwv b.new { color: var(--link); }
-  .fw .fwv.busy { color: var(--link); }
+  /* Something is happening, and the row should look like it even in the
+     stretches where the device reports no percentage at all. */
+  .fw .fwv.busy { color: var(--link); animation: fwpulse 1.6s ease-in-out infinite; }
+  .fw .fwv.bad  { color: var(--bad); }
+  .fw .fwv.good { color: var(--good); }
+  @keyframes fwpulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+  @media (prefers-reduced-motion: reduce) {
+    .fw .fwv.busy { animation: none; }
+  }
   .fw .fwgo {
     font-family: inherit;
     font-size: 10px;
@@ -3732,94 +3740,83 @@ function fmtVal(v) {
  * DCL over the internet, and a sheet that waits on the internet to open is a
  * sheet that feels broken every time the line is slow.
  */
-const OTA_WORDS = { 0: 'unknown', 1: 'idle', 2: 'checking', 3: 'waiting to download',
-                    4: 'downloading', 5: 'applying', 6: 'waiting to apply',
-                    7: 'rolling back', 8: 'waiting for consent' };
-
 function firmwareBox(sheet, dev) {
   const box = document.createElement('div');
   box.className = 'fw';
   box.innerHTML = '<span class="fwv">checking for firmware\u2026</span>';
   sheet.append(box);
 
-  const paint = fw => {
-    if (!box.isConnected) { return; }
-    const st = (state.bulbs[String(dev.node)] || {});
-    // Two sources, and BOTH have to be quiet before the button may return.
-    // `otaBusy` is the Pi's own record that it is running an update; otaState is
-    // the device's. The device stays `idle` for the first stretch - the image
-    // has to be fetched before it is even offered to it - and drawing the button
-    // during that gap invited a second press on an update already under way.
-    const busy = st.otaBusy || (typeof st.otaState === 'number' && st.otaState > 1);
-
-    if (busy) {
-      // The DEVICE's account of what it is doing wherever it has one, and
-      // otherwise the honest "preparing" rather than a fabricated percentage.
-      const pct = typeof st.otaProgress === 'number' ? ' ' + st.otaProgress + '%' : '';
-      const word = (typeof st.otaState === 'number' && st.otaState > 1)
-        ? (OTA_WORDS[st.otaState] || 'updating') + pct
-        : 'preparing the update\u2026';
-      box.innerHTML = '';
-      const w = document.createElement('span');
-      w.className = 'fwv busy';
-      w.textContent = word;
-      box.append(w);
-      return;
-    }
-    if (!fw || fw.error) {
-      box.innerHTML = '';
-      const w = document.createElement('span');
-      w.className = 'fwv';
-      w.textContent = fw && fw.error ? 'firmware: ' + fw.error : 'firmware unknown';
-      box.append(w);
-      return;
-    }
+  // ONE field decides what this row says, and the Pi composes it.
+  //
+  // The browser used to assemble the line itself from three sources - our
+  // "running" flag, the device's UpdateState and its progress - and the failure
+  // was silent: it showed "preparing" for the whole attempt and then put the
+  // update button back with no word about how it had gone. Worse, a failed
+  // update and an update never started looked identical. The Pi is the only
+  // place that knows all three AND the outcome, so it says the sentence and
+  // this draws it.
+  const line = txt => {
     box.innerHTML = '';
     const w = document.createElement('span');
     w.className = 'fwv';
-    if (fw.available) {
-      w.innerHTML = 'firmware <b>' + esc(fw.installed) + '</b> \u2192 <b class="new">'
-                  + esc(fw.available) + '</b>';
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'fwgo';
-      b.textContent = 'update';
-      b.onclick = async () => {
-        b.disabled = true;
-        b.textContent = 'starting\u2026';
-        try {
-          const r = await (await api('/api/firmware', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ node: dev.node, version: fw.availableCode })
-          })).json();
-          if (r.error) { b.textContent = 'failed'; setStatus(r.error, 'err'); return; }
-          b.remove();
-          w.className = 'fwv busy';
-          w.textContent = 'preparing the update\u2026';
-          // Ask again straight away so `updating` is picked up even before the
-          // next state push arrives.
-          fetch('/api/firmware?node=' + encodeURIComponent(dev.node))
-            .then(r2 => r2.json()).then(f2 => { box._fw = f2; });
-        } catch (err) { b.textContent = 'failed'; }
-      };
-      box.append(w, b);
-    } else {
-      w.textContent = 'firmware ' + (fw.installed || '?') + ' \u00b7 up to date';
-      box.append(w);
-    }
+    w.textContent = txt;
+    box.append(w);
+    return w;
   };
 
-  fetch('/api/firmware?node=' + encodeURIComponent(dev.node))
-    .then(r => r.json())
-    .then(fw => {
-      box._fw = fw;
-      paint(fw);
-      // Repaint on every state change, so a running update shows its progress.
-      const was = SHEET_LIVE;
-      SHEET_LIVE = () => { if (was) { was(); } paint(box._fw); };
-    })
-    .catch(() => paint(null));
+  const paint = fw => {
+    if (!box.isConnected) { clearInterval(box._t); return; }
+    const s = (fw && fw.status) || {};
+    if (s.phase === 'running') { line(s.text).className = 'fwv busy'; return; }
+    if (s.phase === 'failed')  { line(s.text).className = 'fwv bad'; }
+    else if (s.phase === 'done') { line(s.text).className = 'fwv good'; return; }
+    else if (!fw || fw.error) { line(fw && fw.error ? 'firmware: ' + fw.error
+                                                    : 'firmware unknown'); return; }
+    if (!fw.available) {
+      if (s.phase !== 'failed') {
+        line('firmware ' + (fw.installed || '?') + ' \u00b7 up to date');
+      }
+      return;
+    }
+    // An offer, and a way to take it. After a failure the sentence above stays
+    // and the button joins it, so a retry is a choice rather than the interface
+    // quietly pretending the last attempt never happened.
+    const w = document.createElement('span');
+    w.className = 'fwv';
+    w.innerHTML = 'firmware <b>' + esc(fw.installed) + '</b> \u2192 <b class="new">'
+                + esc(fw.available) + '</b>';
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'fwgo';
+    b.textContent = s.phase === 'failed' ? 'try again' : 'update';
+    b.onclick = async () => {
+      b.disabled = true;
+      b.textContent = 'starting\u2026';
+      try {
+        const r = await (await api('/api/firmware', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ node: dev.node, version: fw.availableCode })
+        })).json();
+        if (r.error) { b.textContent = 'failed'; setStatus(r.error, 'err'); return; }
+        line('preparing the update\u2026').className = 'fwv busy';
+        poll();
+      } catch (err) { b.textContent = 'failed'; }
+    };
+    box.append(w, b);
+  };
+
+  const poll = () => fetch('/api/firmware?node=' + encodeURIComponent(dev.node))
+    .then(r => r.json()).then(paint).catch(() => {});
+
+  poll();
+  // An update is minutes long and its progress arrives as attribute reports, so
+  // the row has to keep asking. Cheap: the Pi answers from its cache and only
+  // goes to the ledger when the cache is cold.
+  box._t = setInterval(() => {
+    if (!box.isConnected) { clearInterval(box._t); return; }
+    poll();
+  }, 4000);
 }
 
 function wireActions(sheet, dev, back) {

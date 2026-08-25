@@ -25,6 +25,7 @@ import os
 import pathlib
 import queue
 import re
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -1433,6 +1434,66 @@ _fw_lock = threading.Lock()
 # update is under way, so the button came back and invited a second press.
 _ota_running = set()
 
+# One line of truth per node about an update, composed HERE rather than in the
+# browser. The interface was assembling it from three sources - our "is it
+# running" flag, the device's UpdateState and its progress - and got it wrong in
+# the way that matters: it showed "preparing" throughout and then, when the
+# attempt ended, silently put the button back with no word about what had
+# happened. A failed update that looks exactly like an update never started is
+# the one outcome worth ruling out by construction.
+_ota_status = {}
+
+
+def ota_note(node, phase, text):
+    _ota_status[node] = {"phase": phase, "text": text, "at": time.time()}
+    log(f"node {node}: {text}", "err" if phase == "failed" else "step")
+
+
+def ota_status(node) -> dict:
+    """What to show for this node: the device's own words while it is working,
+    and the verified outcome once it is not."""
+    st = _ota_status.get(node)
+    if node in _ota_running:
+        s = state_of(node)
+        code = s.get("otaState")
+        if isinstance(code, int) and code > 1:
+            pct = s.get("otaProgress")
+            word = OTA_STATES.get(code, "updating")
+            return {"phase": "running",
+                    "text": word + (f" {pct}%" if isinstance(pct, int) else "")}
+        return {"phase": "running", "text": "preparing the update\u2026"}
+    # Outcomes are worth showing for a while after the fact, and then not.
+    if st and time.time() - st["at"] < 900:
+        return {"phase": st["phase"], "text": st["text"]}
+    return {"phase": "idle", "text": ""}
+
+
+def fw_live(node, out) -> dict:
+    """A cached firmware answer, plus the two fields that must never be cached.
+
+    Whether an update is running, and what it is doing, change by the second;
+    what the ledger offers changes about twice a year. Folding the first into
+    the second's hour-long cache froze the status line - the interface showed
+    "up to date, [update]" throughout a running update, and then held the last
+    words of the attempt for an hour after it ended.
+    """
+    d = dict(out)
+    d["updating"] = node in _ota_running
+    d["status"] = ota_status(node)
+    return d
+
+
+def radio_up_for() -> float:
+    """Seconds since otbr-agent last started, or -1 if it cannot be told."""
+    try:
+        out = subprocess.run(
+            ["systemctl", "show", "otbr-agent",
+             "-p", "ActiveEnterTimestampMonotonic", "--value"],
+            capture_output=True, text=True, timeout=5).stdout.strip()
+        return time.monotonic() - int(out) / 1e6
+    except Exception:  # noqa: BLE001 - a missing answer is not worth a failure
+        return -1.0
+
 
 def firmware_for(node, fresh=False) -> dict:
     """What is installed on a node, and what the vendor is offering.
@@ -1451,20 +1512,19 @@ def firmware_for(node, fresh=False) -> dict:
     with _fw_lock:
         hit = _fw_cache.get(node)
         if hit and not fresh and time.time() - hit[0] < FW_TTL:
-            return hit[1]
+            return fw_live(node, hit[1])
 
     attrs, _err = m_attrs(node)
     out = {
         "node": node,
         "installed": m_get(attrs, 0, 0x0028, 0x000A),
         "updatePossible": m_get(attrs, 0, 0x002A, 0x0001),
-        "updating": node in _ota_running,
     }
     try:
         upd = MS.call("check_node_update", {"node_id": ms}, timeout=120.0)
     except MatterError as exc:
         out["error"] = str(exc)
-        return out
+        return fw_live(node, out)
 
     if upd:
         out["available"] = upd.get("software_version_string")
@@ -1472,7 +1532,7 @@ def firmware_for(node, fresh=False) -> dict:
         out["notes"] = upd.get("release_notes_url")
     with _fw_lock:
         _fw_cache[node] = (time.time(), out)
-    return out
+    return fw_live(node, out)
 
 
 def firmware_update(node, version):
@@ -1482,21 +1542,62 @@ def firmware_update(node, version):
         return
     with _fw_lock:
         _ota_running.add(node)
+    _ota_status.pop(node, None)
+    before = (firmware_for(node) or {}).get("installed")
+    began = time.time()
     try:
-        log(f"node {node}: updating firmware to {version}", "step")
+        ota_note(node, "running", f"updating firmware from {before}")
         # No timeout worth naming: this downloads an image and then waits for a
         # sleepy device to fetch and apply it. The device's own UpdateState is
         # what the panel watches, not this call returning.
         MS.call("update_node", {"node_id": ms, "software_version": version},
                 timeout=3600.0)
-        log(f"node {node}: firmware update finished", "ok")
-        with _fw_lock:
-            _fw_cache.pop(node, None)
     except MatterError as exc:
-        log(f"node {node}: firmware update failed: {exc}", "err")
-    finally:
         with _fw_lock:
             _ota_running.discard(node)
+        ota_note(node, "failed", f"update failed: {exc}")
+        return
+    finally:
+        with _fw_lock:
+            _fw_cache.pop(node, None)
+
+    # VERIFY, because "finished" from the layer below is not evidence.
+    #
+    # matter-server declares success when the device's UpdateState returns to
+    # idle - "assuming done" is its own wording - and a transfer that dies
+    # halfway also ends at idle. Observed: a contact sensor stopped at 8% with a
+    # BDX timeout and was reported as finished, still on its old version. So the
+    # only thing worth believing is the version, read back afterwards.
+    with _fw_lock:
+        _ota_running.discard(node)
+    if not before:
+        # Nothing to compare against, so say that rather than guess. Claiming
+        # success off a single post-hoc read would be the same mistake one level
+        # up: any value at all would look like a change.
+        ota_note(node, "done", "update finished - version not confirmed")
+        return
+    ota_note(node, "running", "checking whether the new firmware took")
+    radio_went = 0 < radio_up_for() < time.time() - began
+    after, until = before, time.time() + 360
+    while time.time() < until:
+        time.sleep(15)
+        attrs, _e = m_attrs(node)
+        got = m_get(attrs, 0, 0x0028, 0x000A)
+        if got and got != before:
+            after = got
+            break
+    if after != before:
+        ota_note(node, "done", f"updated to {after}")
+    elif radio_went:
+        # The one explanation worth offering, because it is the one actually
+        # observed: a sustained transfer keeps the radio talking, the 5V rail
+        # sags under it, the co-processor wedges and the whole Thread network
+        # goes with it. Naming it beats inventing a reason about the device.
+        ota_note(node, "failed",
+                 f"the Thread radio restarted during the transfer, so it never "
+                 f"finished - still on {before}")
+    else:
+        ota_note(node, "failed", f"the update did not take - still on {before}")
 
 
 def inspect_node(node) -> dict:
