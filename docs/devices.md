@@ -232,11 +232,27 @@ occupancy   device -> panel   same second
 illuminance device reports at irregular intervals: +52 s, +299 s, +100 s
 ```
 
-So walking past shows up immediately, and darkening the room can take a couple
-of minutes. That is the right trade on a coin cell: motion is interrupt-driven
-and costs nothing to notice, while sampling ambient light continuously would
-not be. `Tolerance` is `UnsupportedAttribute`, so the device does not say what
-change it considers reportable.
+So walking past shows up immediately, and a change in light can take minutes —
+or never arrive at all, which is the part worth understanding.
+
+**Ambient light is measured when the sensor wakes for MOTION.** It is not on a
+timer of its own. Three clean examples, motion followed by a light report one to
+three seconds later:
+
+```
+13:06:08 motion -> 13:06:09 illuminance
+13:10:32 motion -> 13:10:33 illuminance
+13:23:09 motion -> 13:23:12 illuminance   (698 s after the previous one)
+```
+
+That is the right trade on a coin cell — the device has to wake for the PIR
+anyway, so it takes the lux reading for free rather than running a second timer.
+
+The consequence is a test that always looks broken: **change the light in an
+empty, still room and nothing happens.** Nothing wakes the sensor, so nothing
+looks at the light. Move in front of it and the new value arrives at once.
+`Tolerance` is `UnsupportedAttribute`, so the device does not say what change it
+considers reportable either.
 
 **Occupancy clears about 23 s after the LAST movement, and the hold is not
 adjustable.**
