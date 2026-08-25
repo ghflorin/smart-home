@@ -3,7 +3,7 @@
 Hand-maintaining this table would be thousands of lines and wrong within a
 release. The SDK already has every id and every name; this just walks it.
 """
-import json, inspect
+import json, inspect, re
 from chip.clusters import Objects as C
 
 out = {}
@@ -37,5 +37,24 @@ for name in dir(C):
                     pass
     out[str(cid)] = {"name": name, "attributes": attrs, "commands": cmds}
 
-json.dump(out, open("/tmp/matter_names.json","w"), separators=(",",":"), sort_keys=True)
-print("clusters:", len(out), " attributes:", sum(len(v["attributes"]) for v in out.values()))
+# Device types, for the same reason. Hand-maintaining these is worse than
+# hand-maintaining the clusters, because a wrong device-type name is not
+# obviously wrong: 0x0043 read as "PM1 sensor" instead of "water leak detector"
+# is a plausible-looking label on a device that then behaves nothing like it.
+types = {}
+try:
+    from matter_server.client.models import device_types as DT
+    for name, v in vars(DT).items():
+        did = getattr(v, "device_type", None)
+        if isinstance(did, int) and not name.startswith("_"):
+            # CamelCase -> spaced words, which is how the panel writes them.
+            words = re.sub(r"(?<!^)(?=[A-Z])", " ", name).lower()
+            types.setdefault(str(did), words)
+except Exception as exc:
+    print("device types unavailable:", exc)
+
+json.dump({"clusters": out, "deviceTypes": types},
+          open("/tmp/matter_names.json","w"), separators=(",",":"), sort_keys=True)
+print("clusters:", len(out),
+      " attributes:", sum(len(v["attributes"]) for v in out.values()),
+      " device types:", len(types))

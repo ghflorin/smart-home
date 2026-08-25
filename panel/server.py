@@ -195,8 +195,6 @@ DEVICE_TYPE_NAMES = {
     0x0302: "temperature sensor", 0x0307: "humidity sensor",
     0x0305: "pressure sensor", 0x0306: "flow sensor",
     0x0076: "smoke/CO alarm", 0x002C: "air quality sensor",
-    0x0044: "PM2.5 sensor", 0x0043: "PM1 sensor", 0x0045: "PM10 sensor",
-    0x0042: "carbon monoxide sensor", 0x0041: "carbon dioxide sensor",
     0x002B: "fan", 0x0301: "thermostat", 0x0202: "window covering",
 }
 
@@ -214,10 +212,22 @@ MEASURED = [
     (0x005B, 0x0000, "airquality",   "air quality",  "",         1),
     (0x0403, 0x0000, "pressure",     "pressure",     "hPa",      1),
     (0x0400, 0x0000, "illuminance",  "light",        "lx",       1),
-    # BooleanState. A contact sensor's whole output is this one bit, so without
-    # it the panel asked a door sensor for nine things it does not have, got
-    # nothing back, and showed a device that reads as unreachable.
+    # BooleanState - ONE cluster, several completely different meanings.
+    #
+    # A door sensor, a water leak detector, a freeze detector and a rain sensor
+    # all report through 0x0045, and Matter tells them apart by DEVICE TYPE, not
+    # by cluster. So the cluster alone cannot say what `true` means: on a door
+    # it is "closed", on a leak detector it is water on your floor. Mapping the
+    # cluster straight to "contact" showed a flood sensor as "contact: open",
+    # which is a reading somebody would glance at and be reassured by.
+    #
+    # These four entries exist so the interface has a label and words for each
+    # kind. Which one a given device gets is decided by boolean_kind(), from the
+    # device's own descriptor.
     (0x0045, 0x0000, "contact",      "contact",      "",         1),
+    (0x0045, 0x0000, "leak",         "water",        "",         1),
+    (0x0045, 0x0000, "freeze",       "freeze",       "",         1),
+    (0x0045, 0x0000, "rain",         "rain",         "",         1),
     # PowerSource, on ENDPOINT 0 - see read_measurements. A battery device that
     # will not say how much it has left is a device that stops one day without
     # warning.
@@ -253,6 +263,12 @@ MEASURE_HIDDEN = {"batteryState", "batteryVolts"}
 
 MEASURE_WORDS = {
     "contact": ["open", "closed"],
+    # For these three, `true` is the thing you did not want to happen, so the
+    # word is shouted. The panel is quiet everywhere else; this is the one place
+    # a reading is an emergency.
+    "leak":    ["dry", "LEAK"],
+    "freeze":  ["clear", "FREEZING"],
+    "rain":    ["dry", "raining"],
     # PowerSource BatChargeLevel: 0 OK, 1 Warning, 2 Critical.
     "batteryState": ["ok", "low", "critical"],
 }
@@ -269,7 +285,7 @@ AIR_QUALITY_WORDS = ["unknown", "good", "fair", "moderate",
 LIGHT_TYPES = {0x0100, 0x0101, 0x010C, 0x010D}
 
 
-def describe_device(node: int) -> dict:
+def describe_device(node: int, ms=None) -> dict:
     """Ask a device what it is: its endpoints, their types and their clusters.
 
     Everything else in the panel is told what a device is when it is added.
@@ -282,7 +298,7 @@ def describe_device(node: int) -> dict:
     # PartsList and then another PER ENDPOINT, each of which had to reach the
     # device - up to nine waits on a sleepy one, which is why adding a battery
     # device took the best part of a minute and sometimes gave up half-described.
-    attrs, _err = m_attrs(node, timeout=30.0)
+    attrs, _err = m_attrs(node, timeout=30.0, ms=ms)
     parts = m_get(attrs, 0, DESCRIPTOR_CLUSTER, DESC_PARTS_LIST_ATTR)
     eps = [int(e) for e in parts] if isinstance(parts, list) else []
     # Endpoint 0 is the node itself and holds no application device type worth
@@ -310,12 +326,17 @@ def describe_device(node: int) -> dict:
 
 
 def device_type_name(desc: dict) -> str:
-    """One phrase for what this is, for a tile that has no icon of its own."""
-    named = [DEVICE_TYPE_NAMES[t] for t in desc.get("types", [])
-             if t in DEVICE_TYPE_NAMES]
-    if named:
-        return named[0]
+    """One phrase for what this is, for a tile that has no icon of its own.
+
+    The generated table first, the hand-written one only for the few phrasings
+    we prefer to the SDK's own - and neither is allowed to invent a name for an
+    id it does not know, because a confident wrong label is worse than a number.
+    """
     types = desc.get("types") or []
+    for t in types:
+        name = DEVICE_TYPE_NAMES.get(t) or MATTER_DEVICE_TYPES.get(str(t))
+        if name:
+            return name
     return f"device type 0x{types[0]:04X}" if types else "device"
 
 
@@ -338,7 +359,11 @@ def read_measurements(dev: dict) -> dict:
     if not held:
         return {}
 
-    want = {(c, a): (key, scale) for c, a, key, _lab, _unit, scale in MEASURED}
+    # BooleanState is resolved per device, not from this table - see
+    # boolean_kind - so it is deliberately left out of the lookup.
+    want = {(c, a): (key, scale) for c, a, key, _lab, _unit, scale in MEASURED
+            if c != BOOLEAN_CLUSTER}
+    kind = boolean_kind(dev)
     out = {}
     # Sorted so that a device exposing the same cluster on several endpoints
     # always reports the lowest one, rather than whichever the dict happened to
@@ -352,9 +377,14 @@ def read_measurements(dev: dict) -> dict:
             _ep, cluster, attr = (int(b) for b in bits)
         except ValueError:
             continue
-        hit = want.get((cluster, attr))
         val = held[path]
-        if hit is None or val is None:
+        if val is None:
+            continue
+        if (cluster, attr) == (BOOLEAN_CLUSTER, 0x0000):
+            out.setdefault(kind, val)
+            continue
+        hit = want.get((cluster, attr))
+        if hit is None:
             continue
         key, scale = hit
         if key in out:
@@ -371,13 +401,13 @@ CC_XY = 0x08
 CC_COLOR_TEMP = 0x10
 
 
-def detect_caps(node: int, endpoint: int = 1) -> dict:
+def detect_caps(node: int, endpoint: int = 1, ms=None) -> dict:
     """What the bulb can do: color temperature, RGB color, or white only.
 
     We read the FeatureMap on ColorControl. If the bulb does not have the
     cluster the request fails - and that failure is the answer.
     """
-    attrs, err = m_attrs(node)
+    attrs, err = m_attrs(node, ms=ms)
     fmap = m_get(attrs, endpoint, COLOR_CLUSTER_ID, 0xFFFC)
     if err or fmap is None:
         # Unknown, not "the bulb is plain white". The difference matters: a bulb
@@ -1043,8 +1073,34 @@ def refresh_bulb(bulb: dict) -> list:
 # never a stale value presented as current.
 
 # Which readings are an EVENT rather than a quantity. A temperature that drifts
-# is fine on a poll; a door is not.
-SUB_KEYS = {"contact"}
+# is fine on a poll; a door is not, and a flood certainly is not.
+SUB_KEYS = {"contact", "leak", "freeze", "rain"}
+
+# BooleanState's meaning, by the device type that carries it. Matter device
+# types, from the Device Library.
+BOOLEAN_CLUSTER = 0x0045
+
+BOOLEAN_KINDS = {
+    0x0015: "contact",   # Contact Sensor        true = closed
+    0x0041: "freeze",    # Water Freeze Detector true = freezing
+    0x0043: "leak",      # Water Leak Detector   true = water present
+    0x0044: "rain",      # Rain Sensor           true = raining
+}
+
+
+def boolean_kind(dev: dict) -> str:
+    """What this device's BooleanState is ABOUT.
+
+    Falls back to "contact", which is what every device answered before there
+    was anything else - and being wrong in that direction is the safe way round,
+    because an unknown sensor reading "contact" is obviously odd, while a flood
+    reading "closed" is quietly reassuring.
+    """
+    types = set((dev.get("desc") or {}).get("types") or [])
+    for type_id, kind in BOOLEAN_KINDS.items():
+        if type_id in types:
+            return kind
+    return "contact"
 
 # node -> when it last told us something. Not a flag: a subscription that has
 # gone quiet has to hand the node back to the poller, or a silent failure
@@ -1281,9 +1337,16 @@ def read_binding(node, endpoint=1):
 # Absent, the inspector still works and simply shows numbers.
 NAMES_FILE = HERE / "matter_names.json"
 try:
-    MATTER_NAMES = json.loads(NAMES_FILE.read_text())
+    _NAMES = json.loads(NAMES_FILE.read_text())
 except (OSError, ValueError):
-    MATTER_NAMES = {}
+    _NAMES = {}
+MATTER_NAMES = _NAMES.get("clusters") or {}
+# Device type ids -> names, generated too. A hand-written table had four of
+# these wrong in one block - 0x0041..0x0044 were labelled as CO2, CO, PM1 and
+# PM2.5 sensors when they are actually the water freeze detector, water valve,
+# water leak detector and rain sensor - and nothing about a wrong name looks
+# wrong. It read "PM1 sensor" on a flood sensor and nobody blinked.
+MATTER_DEVICE_TYPES = _NAMES.get("deviceTypes") or {}
 
 
 # The attribute ids every cluster carries. They are noise in an inspector that
@@ -1355,7 +1418,7 @@ def inspect_node(node) -> dict:
     return {"node": node, "endpoints": out}
 
 
-def m_attrs(node, timeout=20.0):
+def m_attrs(node, timeout=20.0, ms=None):
     """Everything matter-server currently knows about a node.
 
     This is a CACHE READ, and that is the whole point of it. matter-server holds
@@ -1370,10 +1433,20 @@ def m_attrs(node, timeout=20.0):
     and the read simply failed if it landed wrong. Here the switch's values are
     already in hand before anyone asks.
 
+    `ms` may be passed when the caller already knows matter-server's id for this
+    node and devices.json does not yet - which is the case for the few seconds
+    between commissioning a device and saving it. Without it, a freshly
+    commissioned device could not be read at all: ms_of() looks the mapping up
+    on DISK, and the entry carrying it has not been written yet. The symptom was
+    a new device arriving with an empty descriptor and no capabilities, which
+    then made every later decision about it wrong - a water leak sensor whose
+    device type was unknown reported its flood as a door.
+
     Returns (attributes, error). Attribute keys are "endpoint/cluster/attribute",
     all decimal.
     """
-    ms = ms_of(node)
+    if ms is None:
+        ms = ms_of(node)
     if ms is None:
         return None, f"node {node} is not on matter-server"
     try:
@@ -1503,6 +1576,14 @@ def matter_value(node, cluster, attr, val, pushed=True):
     for c, a, key, _lab, _unit, scale in MEASURED:
         if c != cluster or a != attr:
             continue
+        # Same resolution as the read path: the cluster says a bit changed, the
+        # device type says what the bit is about.
+        if cluster == BOOLEAN_CLUSTER:
+            dev = next((d for d in all_devices(load_devices())
+                        if int(d.get("node", 0)) == int(node)), None)
+            if dev is None:
+                return
+            key = boolean_kind(dev)
         v = round(val * scale, 2) if isinstance(val, (int, float)) and scale != 1 else val
         cur = dict(state_of(node).get("measured") or {})
         if pushed:
@@ -2958,26 +3039,35 @@ class Handler(BaseHTTPRequestHandler):
 
             # Commissioning takes a while: BLE, then joining Thread, then CASE.
             #
-            # A switch is a brand-new device with no radio yet, so it is reached
-            # over BLE and handed the Thread credentials. Everything else is
-            # already on Thread by the time we see it - a bulb joins through
-            # whatever ecosystem set it up, and gives us a code to join too.
-            if kind == "switch":
-                # Compiled into the firmware, so there is no label to read.
-                pair_code = manual_code(int(SWITCH_PASSCODE),
-                                        int(SWITCH_DISCRIMINATOR))
-                network_only = False
-                # matter-server needs the network before it can hand it over.
-                try:
-                    MS.call("set_thread_dataset", {"dataset": dataset},
-                            timeout=30.0)
-                except MatterError as exc:
-                    log(f"could not give matter-server the Thread dataset: "
-                        f"{exc}", "err")
-                    return self._send({"error": str(exc)}, status=502)
-            else:
-                pair_code = code
-                network_only = True
+            # A switch's code is compiled into its firmware, so there is no
+            # label to read; everything else brings its own printed on the box.
+            pair_code = (manual_code(int(SWITCH_PASSCODE),
+                                     int(SWITCH_DISCRIMINATOR))
+                         if kind == "switch" else code)
+
+            # Search BLE *and* the network, always.
+            #
+            # This used to ask for network-only unless the device was one of our
+            # switches, on the theory that everything else arrives already on
+            # Thread - shared out of the ecosystem that set it up. That holds
+            # for a bulb bought for another hub and fails completely for a
+            # FACTORY-NEW device, which is on no network at all and can only be
+            # reached over BLE. The failure says "Discovery timed out" after
+            # thirty seconds, which sounds like the device is out of range
+            # rather than like it was never looked for.
+            #
+            # Searching both costs nothing when the device is already on the
+            # network - it is found there - so there is no reason to guess.
+            network_only = False
+
+            # matter-server cannot hand over a network it has not been given,
+            # and a device reached over BLE needs the credentials to join.
+            try:
+                MS.call("set_thread_dataset", {"dataset": dataset}, timeout=30.0)
+            except MatterError as exc:
+                log(f"could not give matter-server the Thread dataset: {exc}",
+                    "err")
+                return self._send({"error": str(exc)}, status=502)
 
             if BYPASS_ATTESTATION:
                 # Logged on EVERY commissioning, on purpose: a security
@@ -3024,7 +3114,7 @@ class Handler(BaseHTTPRequestHandler):
                 # only description that cannot go stale, because it comes from
                 # the device and not from whoever filled the form.
                 try:
-                    entry["desc"] = describe_device(node)
+                    entry["desc"] = describe_device(node, ms=ms_node_id)
                 except Exception as exc:  # noqa: BLE001 - a mute device is still added
                     log(f"node {node}: could not read its descriptor: {exc}", "warn")
                     entry["desc"] = {"types": [], "endpoints": {}}
@@ -3033,7 +3123,7 @@ class Handler(BaseHTTPRequestHandler):
                 log(f"node {node} says it is a {entry['kind']}", "ok")
 
                 if is_light:
-                    entry["caps"] = detect_caps(node)
+                    entry["caps"] = detect_caps(node, ms=ms_node_id)
                     bulbs.append(entry)
                     kind = "bulb"     # from here on it is wired like one
                 else:

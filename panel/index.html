@@ -655,6 +655,21 @@
      often exactly the answer you opened this view to get. */
   table.insp .unsup::before { content: '\2014 '; }
 
+  /* A reading that is an emergency. Water on the floor, a pipe about to
+   * freeze. The whole tile takes the colour, because this has to be legible
+   * from the doorway rather than found by reading. */
+  .tile.alert {
+    border-color: var(--bad);
+    background: color-mix(in srgb, var(--bad) 10%, var(--panel));
+    animation: alertpulse 2s ease-in-out infinite;
+  }
+  .tile.alert .tstate, .tile.alert .tname { color: var(--bad); }
+  .tile.alert .quick { border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+  @keyframes alertpulse {
+    50% { border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+  }
+  @media (prefers-reduced-motion: reduce) { .tile.alert { animation: none; } }
+
   /* Unknown is not off. A bulb that did not answer must not look like a bulb
    * that is switched off - you would walk over and press a switch that is
    * already in the right position. */
@@ -2769,6 +2784,7 @@ function paintTile(el, o) {
   el.classList.toggle('on', o.cls === 'on');
   el.classList.toggle('unknown', o.cls === 'unknown');
   el.classList.toggle('locked', o.cls === 'locked');
+  el.classList.toggle('alert', o.cls === 'alert');
   setAttr(el, 'title', o.openTitle || 'open settings');
 
   // innerHTML re-parses the svg, so it is guarded by what is already drawn.
@@ -2925,6 +2941,17 @@ function battOf(measured) {
            title: `battery ${pct}%` + (said === 'ok' ? '' : ' \u2014 ' + said) + volts };
 }
 
+/* Readings where `true` is the thing you did not want to happen.
+ *
+ * A flood reported in the same grey as a humidity figure is a flood nobody
+ * notices. These are the only readings in the panel that are allowed to shout,
+ * and they shout only while they are true. */
+const ALARM_KEYS = ['leak', 'freeze', 'rain'];
+
+function alarming(measured) {
+  return ALARM_KEYS.some(k => (measured || {})[k] === true);
+}
+
 function deviceOpts(d) {
   const st = state.bulbs[String(d.node)];
   const measured = (st && st.measured) || null;
@@ -2941,7 +2968,8 @@ function deviceOpts(d) {
     // The button identifies, so it shows a beacon rather than a dial. The dial
     // said what the device IS on a control that does something to it.
     icon: ICONS.beacon,
-    cls: st && st.ok === false ? 'unknown' : '',
+    cls: alarming(measured) ? 'alert'
+      : (st && st.ok === false ? 'unknown' : ''),
     name: d.name,
     state: text,
     // Nothing to toggle: these are read, not commanded. The quick action is the

@@ -44,9 +44,15 @@ WorkingDirectory=/opt/smarthome
 # the path nor the reason. See deploy/README.md.
 ExecStartPre=/usr/bin/install -d -o pi -g pi /data
 
+# --bluetooth-adapter: needed to commission a FACTORY-NEW device, which has no
+# network to be reached over yet - you hold its pairing code up to a controller
+# and it is talked to over BLE while it joins Thread. A device that is already
+# on Thread (shared out of another ecosystem, say) needs none of this and is
+# commissioned "network only".
 ExecStart=/opt/smarthome/.venv-matter/bin/matter-server \
     --storage-path /opt/smarthome/ota/state/matter-server \
     --port 5580 \
+    --bluetooth-adapter 0 \
     --log-level info
 
 Restart=on-failure
