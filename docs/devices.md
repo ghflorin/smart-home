@@ -180,6 +180,34 @@ without going to look.
     The voltage is worth surfacing for exactly this reason: it is the one battery
     figure a multimeter can check, and it is what caught the mistake.
 
+### IKEA KLIPPBOK water leak sensor — water leak detector
+
+| | |
+|---|---|
+| Vendor / product | `IKEA of Sweden` / `KLIPPBOK water leak sensor` |
+| Part number | `E2493` |
+| Firmware seen | 1.0.7 |
+| Device type | `0x0043` water leak detector |
+| Clusters | Identify `0x0003`, Descriptor `0x001D`, BooleanState `0x0045`, BooleanStateConfiguration `0x0080` |
+| Transport | Matter over Thread, **battery**, intermittently connected |
+
+Works: wet/dry is read and shown, and a detected leak turns the whole tile red.
+`StateValue` **true = water present**.
+
+- **It reports instantly.** Measured: `StateValue` flips and the panel has it in
+  the same second. There is no wake-up delay because the device is *sending* —
+  the 6–15 s lag that afflicts identify is the cost of a sleeping device
+  *receiving*, and it does not apply in this direction.
+- **It alarms on its own.** `AlarmsSupported` and `AlarmsEnabled` are both `3`
+  (bit 0 visual, bit 1 audible), and on a leak `AlarmsActive` goes to `3` and
+  back to `0` when dry — so the device flashes and beeps without being asked.
+  Worth knowing before you assume the panel is the only thing that will notice.
+- **It shares its cluster with the door sensor.** `BooleanState` is the same
+  cluster a contact sensor uses, and Matter separates them by DEVICE TYPE. See
+  `BOOLEAN_KINDS` in `panel/server.py`: mapping the cluster straight to
+  "contact" showed a flood as `contact: open`.
+- Battery reads 3.14 V at 100%.
+
 ## Our own hardware
 
 ### Holyiot nRF54L15 module — switch
@@ -214,6 +242,15 @@ Descriptor cluster and decides from that:
   schedule
 - anything else becomes a **read-only device**, and the panel asks it for every
   measurement in the `MEASURED` table it advertises
+
+**One cluster can mean several things.** `BooleanState` is used by contact
+sensors, water leak detectors, freeze detectors and rain sensors alike, and only
+the device type says which. `BOOLEAN_KINDS` maps type to meaning, and
+`boolean_kind()` resolves it per device — so the same bit reads as `closed` on a
+door and `LEAK` on a flood sensor. Device type ids come from
+`panel/matter_names.json`, generated from the SDK, because a hand-written table
+had `0x0041`–`0x0044` labelled as CO2, CO, PM1 and PM2.5 sensors when they are
+the freeze detector, water valve, leak detector and rain sensor.
 
 Adding a new kind of reading is one line in `MEASURED` in `panel/server.py`.
 Readings that are a state rather than a quantity — a contact, an occupancy — add
