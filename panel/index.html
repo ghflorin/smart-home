@@ -523,7 +523,7 @@
     position: absolute;
     top: 10px;
     right: 10px;
-    width: 14px;
+    width: 16px;
     height: 8px;
     border: 1px solid var(--good);
     border-radius: 2px;
@@ -541,11 +541,21 @@
     background: var(--good);
     border-radius: 0 1px 1px 0;
   }
+  /* The bar measures the TRACK, not the box.
+   *
+   * It was a percentage of the element, while being inset a pixel on the left -
+   * so it ran a pixel past the right border and anything above about 85% drew
+   * as completely full. A 92% battery and a brand new one were the same
+   * picture, which is the one thing a gauge must never do.
+   *
+   * `--pct` is 0..1 and the track is the box less both insets, so full stops a
+   * pixel short of the far wall and reads as full rather than as overflowing. */
   .tile .batt i {
     position: absolute;
     left: 1px;
     top: 1px;
     bottom: 1px;
+    width: calc((100% - 2px) * var(--pct, 0));
     background: var(--good);
     border-radius: 1px;
     transition: width .4s ease;
@@ -2661,12 +2671,13 @@ function paintTile(el, o) {
       el.append(p.batt);
     }
     if (p.battPct !== o.batt.pct) {
-      // The true percentage, with no floor under it. A floor was there to keep
-      // the bar visible, and at 0% it drew a 0.7px sliver - which is neither
+      // The true fraction, with no floor under it. A floor was there to keep the
+      // bar visible, and at 0% it drew a sub-pixel sliver - which is neither
       // empty nor a reading. An empty cell is the honest picture of an empty
       // battery, and it is unambiguous because the gauge only exists at all
       // when the device has told us something.
-      p.batt.firstChild.style.width = Math.max(0, Math.min(100, o.batt.pct)) + '%';
+      p.batt.firstChild.style.setProperty(
+        '--pct', Math.max(0, Math.min(100, o.batt.pct)) / 100);
       p.battPct = o.batt.pct;
     }
     p.batt.classList.toggle('low', o.batt.state === 'low');
