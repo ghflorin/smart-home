@@ -62,6 +62,7 @@
     --amber-hot: #ffcc66;
     --link:      #45c4b0;
     --bad:       #e5534b;
+    --good:      #3fb950;   /* a charged battery, and nothing else so far */
 
     --sunken:    #08090b;  /* inputs, pre - deeper than the panel */
     --sunken-hi: #0c0e11;
@@ -95,6 +96,7 @@
     --amber-hot: #7a4504;
     --link:      #0c7a6b;
     --bad:       #b8352b;
+    --good:      #1a7f37;   /* a charged battery, and nothing else so far */
 
     --sunken:    #edeae3;
     --sunken-hi: #e6e2d9;
@@ -503,6 +505,62 @@
   /* Their clips become stacking contexts to match, so a composited child
      cannot paint outside the rounded corner it belongs to. */
   .tile, .hk-lvl { isolation: isolate; }
+
+  /* The battery gauge: a small cell in the tile's top corner.
+   *
+   * Drawn rather than glyphed, because the reading IS the drawing - the bar
+   * inside is the charge, so it reads at a glance without a number and without
+   * a legend. Fourteen pixels wide, sitting in space the tile already had, so a
+   * house of mains-powered devices looks exactly as it did.
+   *
+   * Green, orange, red - the one colour scale nobody needs explained, and the
+   * only place in the panel that uses it. It says how much is left without a
+   * number and without being read: the bar is the charge and the colour is the
+   * verdict. Green is held slightly back so a house of healthy devices is calm;
+   * orange and red are at full strength, because those are the two that are
+   * asking for something. */
+  .tile .batt {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 14px;
+    height: 8px;
+    border: 1px solid var(--good);
+    border-radius: 2px;
+    opacity: .8;
+    pointer-events: none;
+  }
+  /* The terminal nub, so it reads as a cell and not as a progress bar. */
+  .tile .batt::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    right: -3px;
+    width: 2px;
+    height: 2px;
+    background: var(--good);
+    border-radius: 0 1px 1px 0;
+  }
+  .tile .batt i {
+    position: absolute;
+    left: 1px;
+    top: 1px;
+    bottom: 1px;
+    background: var(--good);
+    border-radius: 1px;
+    transition: width .4s ease;
+  }
+  .tile .batt.low { opacity: 1; border-color: var(--amber); }
+  .tile .batt.low i, .tile .batt.low::after { background: var(--amber); }
+  .tile .batt.critical { opacity: 1; border-color: var(--bad); }
+  .tile .batt.critical i, .tile .batt.critical::after { background: var(--bad); }
+  /* Critical is the one state worth moving for, and slowly - it is a battery,
+     not an alarm. */
+  .tile .batt.critical { animation: battpulse 2.4s ease-in-out infinite; }
+  @keyframes battpulse { 50% { opacity: .45; } }
+  @media (prefers-reduced-motion: reduce) {
+    .tile .batt.critical { animation: none; }
+  }
 
   /* Unknown is not off. A bulb that did not answer must not look like a bulb
    * that is switched off - you would walk over and press a switch that is
@@ -2533,7 +2591,7 @@ function buildTile(o) {
   meta.append(name, st);
   el.append(q, meta);
   el._parts = { q, name, st, txt, dot, fill: null, badge: null,
-                icon: null, lvl: null };
+                icon: null, lvl: null, batt: null, battPct: null };
 
   // Bound once, reading el._o when they fire. This is the whole reason a redraw
   // can leave the element alone: rebinding on every pass would be most of the
@@ -2582,6 +2640,43 @@ function paintTile(el, o) {
   setText(p.txt, o.state);
   p.dot.style.display = o.dot ? 'inline-block' : 'none';
   if (o.dot) { p.dot.style.background = o.dot; }
+
+  /* The battery, for the devices that run on one.
+   *
+   * A gauge rather than a number: the bar is the reading, so it is legible
+   * across a room and from the corner of an eye, which is the only way a
+   * battery warning ever actually gets noticed. The number is in the tooltip
+   * and in the device's own sheet for when you want it exactly.
+   *
+   * It earns its place. A flat battery does not announce itself - this sensor
+   * kept reporting the door perfectly while refusing to blink its identify LED,
+   * because reporting is cheap and the LED is not, and there was nothing on
+   * screen that would have explained it.
+   */
+  if (o.batt) {
+    if (!p.batt) {
+      p.batt = document.createElement('span');
+      p.batt.className = 'batt';
+      p.batt.innerHTML = '<i></i>';
+      el.append(p.batt);
+    }
+    if (p.battPct !== o.batt.pct) {
+      // The true percentage, with no floor under it. A floor was there to keep
+      // the bar visible, and at 0% it drew a 0.7px sliver - which is neither
+      // empty nor a reading. An empty cell is the honest picture of an empty
+      // battery, and it is unambiguous because the gauge only exists at all
+      // when the device has told us something.
+      p.batt.firstChild.style.width = Math.max(0, Math.min(100, o.batt.pct)) + '%';
+      p.battPct = o.batt.pct;
+    }
+    p.batt.classList.toggle('low', o.batt.state === 'low');
+    p.batt.classList.toggle('critical', o.batt.state === 'critical');
+    setAttr(p.batt, 'title', o.batt.title);
+  } else if (p.batt) {
+    p.batt.remove();
+    p.batt = null;
+    p.battPct = null;
+  }
 
   // A level of 0 is "off" and draws nothing; null is "this device has no level"
   // (a switch), which is not the same thing.
@@ -2660,9 +2755,25 @@ function measureText(key, val) {
 // order the server lists them.
 function headlineMeasure(measured) {
   const order = ((state.devices || {}).measures || []).map(m => m.key);
-  const keys = Object.keys(measured || {});
+  // The battery has its own gauge on the tile, so it never takes the one line
+  // of text - a door sensor whose headline read "battery 40%" would have
+  // stopped saying whether the door was open.
+  const keys = Object.keys(measured || {}).filter(
+    k => k !== 'battery' && k !== 'batteryState');
   if (keys.includes('airquality')) { return 'airquality'; }
   return order.find(k => keys.includes(k)) || null;
+}
+
+/* The battery reading, if this device has one. `battery` is a percentage;
+ * `batteryState` is the device's own verdict, which is what decides the colour -
+ * a bulb that says "critical" at 30% knows something the percentage does not. */
+function battOf(measured) {
+  if (!measured || typeof measured.battery !== 'number') { return null; }
+  const pct = Math.round(measured.battery);
+  const state = measureText('batteryState', measured.batteryState);
+  const said = ['ok', 'low', 'critical'].includes(state) ? state
+    : (pct <= 10 ? 'critical' : pct <= 25 ? 'low' : 'ok');
+  return { pct, state: said, title: `battery ${pct}%` + (said === 'ok' ? '' : ' \u2014 ' + said) };
 }
 
 function deviceOpts(d) {
@@ -2688,13 +2799,54 @@ function deviceOpts(d) {
     // one thing that always applies - make it show you which one it is.
     quickTitle: 'identify \u2014 ' + d.name,
     onQuick: q => identifySwitch(d, q),
+    batt: battOf(measured),
     openTitle: 'readings for ' + d.name,
     onOpen: () => openDevice(d),
   };
 }
 
+/* What we just asked a bulb to do, held only until the bulb answers.
+ *
+ * The tile used to wait for the whole round trip before it moved: the request
+ * goes to the Pi, the Pi commands the bulb and then WAITS FOR THE BULB TO
+ * REPORT the new value before replying. That wait is there for a good reason -
+ * it is what makes the reply true rather than optimistic - but it means about a
+ * second passes between the tap and the fill starting to move, and a second is
+ * long enough to read as "did that work?".
+ *
+ * This is not inventing a number. `OnLevel` is precisely the attribute that
+ * says what the bulb comes up at, we wrote it ourselves, and a press is asking
+ * for exactly that. It is a prediction with a known answer, shown for under a
+ * second, and it yields the moment the real value lands - or when the request
+ * comes back, whichever is first. If the command failed, the tile falls back to
+ * the truth instead of keeping the promise.
+ */
+const PENDING = new Map();
+
+function predict(node, want) {
+  PENDING.set(String(node), want);
+  render();
+  // A request that never returns must not leave the tile lying for ever.
+  setTimeout(() => { if (PENDING.delete(String(node))) { render(); } }, 5000);
+}
+
+function settled(node) {
+  if (PENDING.delete(String(node))) { render(); }
+}
+
+/* A prediction stops applying as soon as the bulb's own report agrees with it -
+ * from then on the real reading is at least as good and always more honest. */
+function dropLandedPredictions(byNode) {
+  for (const [k, want] of PENDING) {
+    const real = byNode[k];
+    if (real && real.on === want.on) { PENDING.delete(k); }
+  }
+}
+
 function bulbOpts(b) {
-  const st = state.bulbs[String(b.node)];
+  const want = PENDING.get(String(b.node));
+  const st = want ? { ...(state.bulbs[String(b.node)] || {}), ...want }
+                  : state.bulbs[String(b.node)];
   const on = st ? st.on : undefined;
   const known = on === true || on === false;
   // Perceptual, like every other percentage on the page. It used to be the raw
@@ -3001,10 +3153,22 @@ async function toggleBulb(b, q) {
   // Ask for the state we want, not for a toggle, whenever we know where it is:
   // two clicks in a row on a slow bulb would otherwise cancel each other out.
   // With no idea, toggle is the only honest thing to send.
-  const cur = (state.bulbs[String(b.node)] || {}).on;
+  const now = state.bulbs[String(b.node)] || {};
+  const cur = now.on;
   const action = cur === true ? 'off' : cur === false ? 'on' : 'toggle';
 
+  // Move the tile on the tap, from what the bulb has told us it will come up
+  // at. Only for on and off - a toggle is a press into the dark, and guessing
+  // which way it goes is the one case where we would be making it up.
+  if (action === 'off') {
+    predict(b.node, { on: false });
+  } else if (action === 'on') {
+    predict(b.node, typeof now.onlevel === 'number'
+      ? { on: true, level: now.onlevel } : { on: true });
+  }
+
   const j = await setLight(b.node, b.endpoint ?? 1, action);
+  settled(b.node);
   // The tile survives a redraw now, so whatever we put on the button we take
   // off ourselves - it is no longer swept away by the element being replaced.
   q.disabled = false;
@@ -5585,6 +5749,7 @@ async function loadBulbs(fresh) {
     // old one. This is the wall-switch path: nobody pressed anything here.
     const say = SHEET_SAY
       && tookoverNow(SHEET_SAY.node, (fresh_[String(SHEET_SAY.node)] || {}).on);
+    dropLandedPredictions(fresh_);
     noteReleases(state.bulbs || {}, fresh_);
     if (say) { delete TOOKOVER[String(SHEET_SAY.node)]; SHEET_SAY.say(); }
     state.bulbs = fresh_;

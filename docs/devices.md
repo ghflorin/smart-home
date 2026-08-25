@@ -108,12 +108,34 @@ without going to look.
 - **Battery.** A subscription costs the device a transmission only when the door
   actually moves. Polling costs one every ~11 s for ever, which is what the
   cluster exists to avoid.
-- **Identify is accepted; the LED has not been seen here.** `Identify` lands —
-  `IdentifyTime` counts down on the device afterwards — and the device reports
-  `IdentifyType = 2`, VisibleIndicator. **`TriggerEffect` is not implemented at
-  all**: it answers `UNSUPPORTED_COMMAND`. So plain `Identify` is the only
-  mechanism this device has, which means IKEA's app must use it too, and the LED
-  it blinks is the one this ought to blink. Unresolved.
+- **Identify is accepted and the protocol works; the LED stays dark on a flat
+  battery.** This was unresolved for a while and looked like a Matter problem.
+  It is not. Sending `Identify(60)` and watching `IdentifyTime`:
+
+  ```
+   1.9s  ACCEPTED by the device
+   2.6s  IdentifyTime = 60
+  36.4s  IdentifyTime = 26
+  63.3s  back to 0 - finished
+  ```
+
+  The device sat in identify mode for a full minute, counting down in real time,
+  and never lit its LED. So the command lands, the endpoint is right, and the
+  device state is right — it is *choosing* not to light it. Its PowerSource
+  cluster reads `BatChargeLevel = 2` (critical), `BatPercentRemaining = 0%`,
+  which is the obvious reason: reporting a door costs one brief transmission,
+  blinking an LED for a minute costs far more, and a nearly-flat sensor is right
+  to keep doing its job and drop the ornament.
+
+  `TriggerEffect` is **not implemented at all** — it answers `UNSUPPORTED_COMMAND`,
+  and `AcceptedCommandList` on the cluster is `[0]`, so plain `Identify` is the
+  only mechanism this device has. `IdentifyType` is 2, VisibleIndicator.
+
+- **It reports its battery, on endpoint 0.** PowerSource (`0x002F`) is there, and
+  the panel shows it as a gauge on the tile. Note the endpoint: the descriptor
+  the panel records deliberately skips endpoint 0, so readings are matched
+  against the node's whole attribute set instead — a battery could never be
+  found by walking the descriptor.
 
 ## Our own hardware
 
@@ -155,6 +177,10 @@ Readings that are a state rather than a quantity — a contact, an occupancy —
 a second line in `MEASURE_WORDS` so they render as words instead of `true`, and
 a third in `SUB_KEYS` if the reading is an *event* that should arrive the moment
 it happens rather than on the next poll.
+
+Readings are matched against everything the node reports, **including endpoint
+0**, which is where PowerSource lives — so a battery is found without the device
+having to be re-interviewed, and a stale stored descriptor cannot hide a reading.
 
 A bulb needs nothing added: `BULB_ATTRS` already maps OnOff, LevelControl and
 ColorControl from a pushed report into the same fields a read fills, so a light

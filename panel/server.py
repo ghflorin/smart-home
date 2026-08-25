@@ -218,6 +218,14 @@ MEASURED = [
     # it the panel asked a door sensor for nine things it does not have, got
     # nothing back, and showed a device that reads as unreachable.
     (0x0045, 0x0000, "contact",      "contact",      "",         1),
+    # PowerSource, on ENDPOINT 0 - see read_measurements. A battery device that
+    # will not say how much it has left is a device that stops one day without
+    # warning, and it explains behaviour long before it explains silence: this
+    # sensor refuses to blink its identify LED at all on a flat battery while
+    # still reporting the door perfectly, because the LED is the expensive part.
+    # BatPercentRemaining counts in HALF percent, 0..200.
+    (0x002F, 0x000E, "battery",      "battery",      "%",        0.5),
+    (0x002F, 0x0010, "batteryState", "battery",      "",         1),
 ]
 
 # Readings that are a state rather than a quantity. The index is the value:
@@ -229,6 +237,8 @@ MEASURED = [
 # reading somebody would act on without looking.
 MEASURE_WORDS = {
     "contact": ["open", "closed"],
+    # PowerSource BatChargeLevel: 0 OK, 1 Warning, 2 Critical.
+    "batteryState": ["ok", "low", "critical"],
 }
 
 AIR_QUALITY_WORDS = ["unknown", "good", "fair", "moderate",
@@ -294,29 +304,44 @@ def device_type_name(desc: dict) -> str:
 
 
 def read_measurements(dev: dict) -> dict:
-    """Every measurement this device is known to expose, in one request.
+    """Every measurement this device exposes, from what it actually reports.
 
-    One request and not one per reading: these are mains-powered Thread routers
-    and each read is cheap, but chip-tool is single threaded and the panel holds
-    a lock across a command, so ten reads is ten times the window in which
-    everything else waits.
+    Read from the node's own attribute set rather than from the descriptor we
+    recorded when it was added, and the difference is not tidiness.
+
+    The descriptor deliberately skips ENDPOINT 0 - that endpoint is the node
+    itself and carries no application device type worth showing - and endpoint 0
+    is exactly where PowerSource lives. So a battery reading could never be
+    found by walking the descriptor, no matter what was added to MEASURED.
+
+    It also means a device whose stored descriptor is stale, or which was added
+    before a reading existed in the table, starts reporting it without having to
+    be re-interviewed. The cost is nothing: this is one cache read either way.
     """
-    desc = dev.get("desc") or {}
-    paths = []
-    for ep, info in (desc.get("endpoints") or {}).items():
-        have = set(info.get("clusters") or [])
-        for cluster, attr, key, label, unit, scale in MEASURED:
-            if cluster in have:
-                paths.append((cluster, attr, int(ep), key, scale))
-    if not paths:
+    held, _err = m_attrs(dev["node"])
+    if not held:
         return {}
 
-    held, _err = m_attrs(dev["node"])
-
+    want = {(c, a): (key, scale) for c, a, key, _lab, _unit, scale in MEASURED}
     out = {}
-    for cluster, attr, ep, key, scale in paths:
-        val = m_get(held, ep, cluster, attr)
-        if val is None:
+    # Sorted so that a device exposing the same cluster on several endpoints
+    # always reports the lowest one, rather than whichever the dict happened to
+    # yield last.
+    for path in sorted(held, key=lambda p: [int(x) if x.isdigit() else 0
+                                            for x in p.split("/")]):
+        bits = path.split("/")
+        if len(bits) != 3:
+            continue
+        try:
+            _ep, cluster, attr = (int(b) for b in bits)
+        except ValueError:
+            continue
+        hit = want.get((cluster, attr))
+        val = held[path]
+        if hit is None or val is None:
+            continue
+        key, scale = hit
+        if key in out:
             continue
         out[key] = round(val * scale, 2) if scale != 1 else val
     return out
