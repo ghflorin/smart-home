@@ -238,10 +238,26 @@ and costs nothing to notice, while sampling ambient light continuously would
 not be. `Tolerance` is `UnsupportedAttribute`, so the device does not say what
 change it considers reportable.
 
-**Occupancy holds for about a minute.** Measured clear-to-motion-to-clear cycles
-ran 22-74 s. While it already reads motion there is nothing new to report, so
-walking past again changes nothing on screen — which looks like a missed
-detection and is not one.
+**Occupancy holds for about a minute, and the hold is not adjustable.**
+Measured clear-to-motion-to-clear cycles ran 22-74 s. Matter defines four ways
+to configure that delay and this device implements none of them:
+
+```
+AttributeList = [0, 1, 2, 65528, 65529, 65531, 65532, 65533]
+  0x0003 HoldTime                      UnsupportedAttribute
+  0x0004 HoldTimeLimits                UnsupportedAttribute
+  0x0010 PIROccupiedToUnoccupiedDelay  UnsupportedAttribute
+  0x0011 PIRUnoccupiedToOccupiedDelay  UnsupportedAttribute
+```
+
+So the hold is fixed in firmware and no controller can shorten it. It is also
+not a defect: a PIR senses *change*, not presence, and one that reported "clear"
+the moment you stopped moving would switch off every time you sat still.
+Covering the sensor does not shortcut it either — to the sensor that is simply
+"no new motion", so it waits out the same minute.
+
+The practical shape, for anything built on it: **on immediately, off after about
+a minute.** Logic in the panel can only ever make that delay longer.
 
 **Illuminance is logarithmic.** `MeasuredValue = 10000 x log10(lux) + 1`, so a
 raw 10414 is 11 lux and not 10414 of anything. The device confirms its own
