@@ -44,6 +44,16 @@ WorkingDirectory=/opt/smarthome
 # the path nor the reason. See deploy/README.md.
 ExecStartPre=/usr/bin/install -d -o pi -g pi /data
 
+# matter-server serves a firmware image by SPAWNING chip-ota-provider-app, and
+# finds it on PATH. Without this it fails deep inside the update with
+# "FileNotFoundError: chip-ota-provider-app" - after the image has already been
+# downloaded, so it looks like the device refused it rather than like a missing
+# binary.
+#
+# It is the same binary ota/setup.sh builds for our own switch's updates, so
+# nothing extra needs building: one provider serves both paths.
+Environment=PATH=/opt/smarthome/ota/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 # --bluetooth-adapter: needed to commission a FACTORY-NEW device, which has no
 # network to be reached over yet - you hold its pairing code up to a controller
 # and it is talked to over BLE while it joins Thread. A device that is already

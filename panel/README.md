@@ -835,6 +835,23 @@ asking the DCL over the internet; a sheet that waits on the internet to open
 feels broken every time the line is slow. Results are cached for an hour, which
 is far shorter than the interval at which a vendor publishes anything.
 
+**A running update is tracked on the Pi, not in the browser.** `_ota_running`
+is what decides whether the button may be drawn, because "is this already
+updating" has one answer for the whole house: a flag in one tab does not stop a
+second tab, or the same tab after a reload, from offering the button again. It
+also covers the gap the browser cannot see — the device stays `idle` for the
+first stretch while the image is being fetched, and during that window nothing
+in the device's own state says an update is under way.
+
+**An update must not make the panel unusable.** A firmware transfer saturates
+the Thread mesh: pushes stop arriving, devices fall out of `subscribed()`, and
+the ordinary poller starts making real reads that queue behind the image.
+Measured on a live update, `/api/bulbs` took **139 seconds** — the interface
+simply stopped. While an update is running the readings are served from state
+without polling, and there is a `BULB_SWEEP_MAX` ceiling on that loop besides,
+so one slow device can never hold a page load open. Nothing is lost by not
+asking: the pushes fill state in whenever the mesh has room.
+
 **Progress comes from the device**, not from a spinner of ours. The requestor
 cluster reports `UpdateState` and `UpdateStateProgress`, both subscribed like
 any other attribute, so the sheet can say *downloading 47%* rather than

@@ -3745,15 +3745,24 @@ function firmwareBox(sheet, dev) {
   const paint = fw => {
     if (!box.isConnected) { return; }
     const st = (state.bulbs[String(dev.node)] || {});
-    const running = typeof st.otaState === 'number' && st.otaState > 1;
+    // Two sources, and BOTH have to be quiet before the button may return.
+    // `otaBusy` is the Pi's own record that it is running an update; otaState is
+    // the device's. The device stays `idle` for the first stretch - the image
+    // has to be fetched before it is even offered to it - and drawing the button
+    // during that gap invited a second press on an update already under way.
+    const busy = st.otaBusy || (typeof st.otaState === 'number' && st.otaState > 1);
 
-    if (running) {
-      // The DEVICE's account of what it is doing, not a spinner of ours.
+    if (busy) {
+      // The DEVICE's account of what it is doing wherever it has one, and
+      // otherwise the honest "preparing" rather than a fabricated percentage.
       const pct = typeof st.otaProgress === 'number' ? ' ' + st.otaProgress + '%' : '';
+      const word = (typeof st.otaState === 'number' && st.otaState > 1)
+        ? (OTA_WORDS[st.otaState] || 'updating') + pct
+        : 'preparing the update\u2026';
       box.innerHTML = '';
       const w = document.createElement('span');
       w.className = 'fwv busy';
-      w.textContent = (OTA_WORDS[st.otaState] || 'updating') + pct;
+      w.textContent = word;
       box.append(w);
       return;
     }
@@ -3786,7 +3795,12 @@ function firmwareBox(sheet, dev) {
           })).json();
           if (r.error) { b.textContent = 'failed'; setStatus(r.error, 'err'); return; }
           b.remove();
-          w.textContent = 'update started \u2014 the device reports its own progress';
+          w.className = 'fwv busy';
+          w.textContent = 'preparing the update\u2026';
+          // Ask again straight away so `updating` is picked up even before the
+          // next state push arrives.
+          fetch('/api/firmware?node=' + encodeURIComponent(dev.node))
+            .then(r2 => r2.json()).then(f2 => { box._fw = f2; });
         } catch (err) { b.textContent = 'failed'; }
       };
       box.append(w, b);

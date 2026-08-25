@@ -1019,6 +1019,10 @@ BULB_TTL_SEC = int(os.environ.get("PANEL_BULB_TTL_SEC", "12"))
 # How long a device may fail to answer before the panel says so. Long enough to
 # ride out the ordinary misses of a sleepy device, short enough that a device
 # genuinely gone is reported while you still care.
+# The longest a page load may spend asking devices for readings. Past this the
+# rest are served from what we already know.
+BULB_SWEEP_MAX = float(os.environ.get("PANEL_BULB_SWEEP_MAX", "6"))
+
 SLEEPY_GRACE = int(os.environ.get("PANEL_SLEEPY_GRACE", "150"))
 BULB_COLD_SEC = int(os.environ.get("PANEL_BULB_COLD_SEC", "300"))
 BULB_READ_TIMEOUT = float(os.environ.get("PANEL_BULB_TIMEOUT", "15"))
@@ -1418,6 +1422,17 @@ _fw_cache = {}
 FW_TTL = 3600
 _fw_lock = threading.Lock()
 
+# Nodes with an update running. Held HERE rather than in the browser, because
+# the question "is this already updating" has one answer for the whole house:
+# a flag in one tab does not stop a second tab, or the same tab after a reload,
+# from offering the button again and starting a second update.
+#
+# It also covers the gap the browser cannot see. The device stays `idle` for a
+# while after the request - the image has to be fetched before it is even
+# offered - and during that window nothing in the device's own state says an
+# update is under way, so the button came back and invited a second press.
+_ota_running = set()
+
 
 def firmware_for(node, fresh=False) -> dict:
     """What is installed on a node, and what the vendor is offering.
@@ -1443,6 +1458,7 @@ def firmware_for(node, fresh=False) -> dict:
         "node": node,
         "installed": m_get(attrs, 0, 0x0028, 0x000A),
         "updatePossible": m_get(attrs, 0, 0x002A, 0x0001),
+        "updating": node in _ota_running,
     }
     try:
         upd = MS.call("check_node_update", {"node_id": ms}, timeout=120.0)
@@ -1464,6 +1480,8 @@ def firmware_update(node, version):
     ms = ms_of(node)
     if ms is None:
         return
+    with _fw_lock:
+        _ota_running.add(node)
     try:
         log(f"node {node}: updating firmware to {version}", "step")
         # No timeout worth naming: this downloads an image and then waits for a
@@ -1476,6 +1494,9 @@ def firmware_update(node, version):
             _fw_cache.pop(node, None)
     except MatterError as exc:
         log(f"node {node}: firmware update failed: {exc}", "err")
+    finally:
+        with _fw_lock:
+            _ota_running.discard(node)
 
 
 def inspect_node(node) -> dict:
@@ -1830,8 +1851,27 @@ def refresh_bulbs(force: bool = False) -> dict:
                + [("device", d) for d in devices.get("devices", [])])
 
     now = time.time()
+    # A page load must never wait on the radio, and during an OTA it will if we
+    # let it. A firmware transfer saturates the Thread mesh: pushes stop
+    # arriving, devices fall out of subscribed(), and this loop starts making
+    # real reads that queue behind the image. Measured on a live update,
+    # /api/bulbs took 139 SECONDS - the interface simply stopped.
+    #
+    # There is nothing to gain by asking anyway. The pushes fill state in
+    # whenever the mesh has room, so serving what we already know is both
+    # faster and no less true. The readings show their age through readAt like
+    # they always did.
+    deadline = now + BULB_SWEEP_MAX
+    quiet = bool(_ota_running)
+    if quiet:
+        log("firmware update in progress - serving readings without polling",
+            "info")
     with _bulb_lock:
         for kind, dev in watched:
+            # ... and a ceiling even when nothing is updating, so one slow
+            # device cannot hold the whole page open.
+            if quiet or time.time() > deadline:
+                continue
             # A subscribed device is not polled. Its value arrives on its own,
             # and a direct read of a node while a subscription owns its session
             # comes back empty - which would flap it between "reporting" and
@@ -1879,7 +1919,8 @@ def refresh_bulbs(force: bool = False) -> dict:
         row = {"ok": ok, "readAt": st.get("readAt"),
                "identify": st.get("identify"),
                "otaState": st.get("otaState"),
-               "otaProgress": st.get("otaProgress")}
+               "otaProgress": st.get("otaProgress"),
+               "otaBusy": dev["node"] in _ota_running}
         if kind == "bulb":
             row.update({"on": st.get("on"), "level": st.get("level"),
                         "mireds": st.get("mireds"), "onlevel": st.get("onlevel"),
@@ -3665,6 +3706,9 @@ class Handler(BaseHTTPRequestHandler):
             version = body.get("version")
             if not node or version is None:
                 return self._send({"error": "need 'node' and 'version'"}, status=400)
+            if node in _ota_running:
+                return self._send({"error": "an update is already running for "
+                                            "this device"}, status=409)
             fw = firmware_for(node)
             if fw.get("availableCode") != version:
                 # The offer moved, or somebody is asking for a version that was
