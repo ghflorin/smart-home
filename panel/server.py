@@ -1426,6 +1426,13 @@ def matter_map(devices: dict) -> dict:
 # picked. Subscribed, the bulb reports the change itself, and the tile moves
 # while your finger is still on the button.
 BULB_ATTRS = {
+    # Not a bulb attribute, and it earns its place here anyway: this is the
+    # device's OWN identify countdown, pushed as it ticks. It is the only
+    # honest source for "is it identifying" - a timer started in the browser
+    # when the request returns is measuring the wrong thing entirely, because a
+    # sleeping device does not receive the command for another six to fifteen
+    # seconds and then runs its full duration from there.
+    (0x0003, 0x0000): ("identify", int),
     (0x0006, 0x0000): ("on", bool),
     (0x0008, 0x0000): ("level", int),
     (0x0008, 0x0011): ("onlevel", int),
@@ -1644,7 +1651,11 @@ def refresh_bulbs(force: bool = False) -> dict:
         ok = st.get("ok")
         if ok is False and time.time() - float(st.get("okAt") or 0) < SLEEPY_GRACE:
             ok = True
-        row = {"ok": ok, "readAt": st.get("readAt")}
+        # The device's own identify countdown, so the button can show what the
+        # DEVICE is doing rather than a timer the browser started. It applies to
+        # every kind, which is why it sits above the split.
+        row = {"ok": ok, "readAt": st.get("readAt"),
+               "identify": st.get("identify")}
         if kind == "bulb":
             row.update({"on": st.get("on"), "level": st.get("level"),
                         "mireds": st.get("mireds"), "onlevel": st.get("onlevel"),

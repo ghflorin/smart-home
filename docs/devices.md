@@ -108,29 +108,38 @@ without going to look.
 - **Battery.** A subscription costs the device a transmission only when the door
   actually moves. Polling costs one every ~11 s for ever, which is what the
   cluster exists to avoid.
-- **Identify is accepted and the protocol demonstrably works. The LED still does
-  not light, and that is unexplained.** Sending `Identify(60)` and watching
-  `IdentifyTime`:
+- **Identify works. It is a brief double flash, and it arrives late.** This
+  looked broken for a long time and was not.
+
+  The LED does **not** blink for the requested duration. It flashes twice, for
+  about a second, and then goes dark for the rest of the countdown — which is
+  the right call on a coin cell, where fifteen seconds of LED costs far more
+  than the radio does.
+
+  And it arrives **6–15 seconds after you press**, because the device is asleep:
+  the command waits at its Thread parent until the device next wakes. Measured
+  end to end:
 
   ```
-   1.9s  ACCEPTED by the device
-   2.6s  IdentifyTime = 60
-  36.4s  IdentifyTime = 26
-  63.3s  back to 0 - finished
+  10:47:23   panel sent Identify(15)
+  10:47:32   device entered identify, IdentifyTime = 15     <- 9 s later
+  10:47:33   IdentifyTime = 14 ... reported every second
   ```
 
-  The device sits in identify mode for a full minute, counting down in real
-  time, and never lights its LED. So the command lands, the endpoint is right,
-  and the device state is right — it is *choosing* not to light it, while IKEA's
-  own app blinks the same device.
+  Put together, that is a two-second event happening at an unpredictable moment
+  up to fifteen seconds after the button — which is why watching the sensor for
+  a minute after pressing finds nothing. If the device happens to be awake
+  already it starts within a second, so the delay varies with nothing you can
+  see.
 
-  `TriggerEffect` is **not implemented at all** — it answers
-  `UNSUPPORTED_COMMAND`, and `AcceptedCommandList` on the cluster is `[0]`, so
-  plain `Identify` is the only mechanism this device has. `IdentifyType` is 2,
-  VisibleIndicator.
+  The panel shows the **device's own** `IdentifyTime` on the button rather than
+  a timer of its own, because a browser-side countdown measures the wrong
+  fifteen seconds entirely.
 
-  A low battery was ruled out: the cell reads 1.6 V and 100%, confirmed on a
-  multimeter. Still open.
+  `TriggerEffect` is **not implemented** — it answers `UNSUPPORTED_COMMAND`, and
+  `AcceptedCommandList` on the cluster is `[0]`, so plain `Identify` is the only
+  mechanism this device has. `IdentifyType` is 2, VisibleIndicator. Writing the
+  `IdentifyTime` attribute works identically to sending the command.
 
 - **It reports its battery, on endpoint 0**, and the panel shows it as a gauge on
   the tile. Two things to get right:

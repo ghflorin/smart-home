@@ -781,6 +781,22 @@ The chain end to end is a push at every hop: device → matter-server → panel 
 browser. Measured at about 0.2 s from a bulb changing to the tile moving, which
 is what makes a wall-switch press look live rather than remembered.
 
+## Identify, and whose clock it runs on
+
+The button shows the **device's own** `IdentifyTime`, pushed as it counts down,
+not a timer started in the browser when the request returned.
+
+On a mains device those are the same thing. On a battery one they are not: a
+sleeping sensor does not receive the command until its next wake — measured on
+the door sensor, six to fifteen seconds — and then runs its full duration from
+there. A browser-side countdown therefore finishes before the device has begun,
+and anyone watching the lamp on the strength of it is looking at the wrong ten
+seconds. Which is exactly how this looked like a broken feature for a while.
+
+Worth knowing about that sensor specifically: it flashes **twice, for about a
+second**, and is then dark for the rest of the countdown. A two-second event, at
+an unpredictable moment, up to fifteen seconds after the press.
+
 ## The property inspector
 
 Every device sheet has a **properties** button. It opens a **page**, the same

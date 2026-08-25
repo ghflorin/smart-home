@@ -4144,18 +4144,41 @@ function openSwitch(sw) {
   $('#overlay').classList.add('on');
 }
 
+/* The countdown belongs to the DEVICE, not to us.
+ *
+ * This used to start a 15-second timer in the browser the moment the request
+ * came back. On a mains device that is close enough; on a battery one it is
+ * simply wrong. A sleeping sensor does not receive the command until its next
+ * wake - measured on the door sensor, six to fifteen seconds - and only then
+ * starts its own fifteen. So the button finished counting before the device had
+ * begun, and anyone watching the lamp on the strength of that countdown was
+ * looking at the wrong ten seconds.
+ *
+ * The device pushes IdentifyTime as it ticks, so the button now waits for the
+ * device to say it has started, and then shows the device's own number.
+ */
 async function identify(btn) {
   const seconds = 15;
   const original = btn.textContent.trim();
+  const node = String(btn.dataset.node);
   btn.disabled = true;
   btn.classList.add('busy');
+  btn.textContent = 'sent';
 
-  let left = seconds;
-  btn.textContent = left + 's';
+  let started = false;
   const tick = setInterval(() => {
-    btn.textContent = (--left) + 's';
-    if (left <= 0) clearInterval(tick);
-  }, 1000);
+    const left = (state.bulbs[node] || {}).identify;
+    if (typeof left === 'number' && left > 0) {
+      started = true;
+      btn.textContent = left + 's';
+    } else if (started) {
+      // It reported zero: the device is done, whatever our own clock says.
+      clearInterval(tick);
+      btn.textContent = original;
+      btn.classList.remove('busy');
+      btn.disabled = false;
+    }
+  }, 250);
 
   try {
     const r = await api('/api/identify', {
@@ -4180,12 +4203,16 @@ async function identify(btn) {
     console.error(e);
   }
 
+  // A backstop, not the mechanism. Generous enough to cover the wake-up delay
+  // plus the full duration, so it only fires when the device never answered at
+  // all - a sleepy device can take 15 s to receive the command and then runs
+  // its own 15 from there.
   setTimeout(() => {
     clearInterval(tick);
     btn.classList.remove('busy');
     btn.textContent = original;
     btn.disabled = false;
-  }, seconds * 1000);
+  }, (seconds * 2 + 10) * 1000);
 }
 
 // The bulbs grouped by room, with the switch's own room first - that is usually
