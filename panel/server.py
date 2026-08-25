@@ -231,9 +231,9 @@ MEASURED = [
     #   0x0C BatPercentRemaining    HALF percent, 0..200
     #   0x0E BatChargeLevel         0 ok, 1 warning, 2 critical
     #   0x10 BatReplaceability      not a charge level at all
-    (0x002F, 0x000B, "batteryVolts", "battery",      "V",        0.001),
-    (0x002F, 0x000C, "battery",      "battery",      "%",        0.5),
-    (0x002F, 0x000E, "batteryState", "battery",      "",         1),
+    (0x002F, 0x000C, "battery",      "battery",         "%",     0.5),
+    (0x002F, 0x000E, "batteryState", "battery state",   "",      1),
+    (0x002F, 0x000B, "batteryVolts", "battery voltage", "V",     0.001),
 ]
 
 # Readings that are a state rather than a quantity. The index is the value:

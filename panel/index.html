@@ -574,48 +574,26 @@
 
   /* ---------- the property inspector ---------- */
 
-  /* Full screen, because this is a reference view: 232 attributes on one sensor,
-     and reading them in a 420px column is scrolling, not reading.
-     `.wide` is declared further down the sheet and would otherwise win the
-     max-width, so this names both classes rather than relying on order. */
-  .sheetwrap.wide.full { max-width: none; }
-  .sheetwrap.full { width: 100%; height: calc(100vh - 24px); }
-  .sheetwrap.full .sheet {
-    height: 100%;
-    max-height: 100%;
-    border-radius: 16px;
-    /* The sheet centres its content everywhere else, which is right for a form
-       and wrong for a table - centred rows have no left edge for the eye to
-       come back to, so a column of names reads as scattered. */
-    text-align: left;
-    padding: 0 var(--pad) var(--pad);
+  /* A page, not a dialog - the same call the schedule makes, for the same
+     reason: 232 attributes across sixteen clusters is a reference document, and
+     a document read inside a box in the middle of the screen is read through a
+     letterbox. It borrows the schedule's own header so the way out of both
+     looks and sits the same. */
+  .insp-view .section-label { margin-top: 26px; }
+  .insp-view .section-label .back {
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    background: transparent;
+    border: 1px solid var(--line-hi);
+    border-radius: 8px;
+    padding: 5px 11px;
+    cursor: pointer;
   }
-
-  /* Stays put while 232 rows go past underneath, so "which device is this" and
-     the way out are never scrolled off. */
-  .insp-head {
-    position: sticky;
-    top: 0;
-    z-index: 3;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 18px 0 14px;
-    margin-bottom: 4px;
-    background: var(--panel-hi);
-    border-bottom: 1px solid var(--line);
-  }
-  /* Qualified with .sheet on purpose. `.sheet h2` is a centring flex row - it
-     has a rename pencil to place - and carries the same specificity as a bare
-     `.insp-head h2`, so with the inspector's rules declared earlier in the
-     sheet it would win on order alone and the title would stay centred. */
-  .sheet .insp-head h2 {
-    margin: 0;
-    text-align: left;
-    justify-content: flex-start;
-  }
-  .sheet .insp-head .who { text-align: left; margin: 2px 0 0; }
-  .insp-title { min-width: 0; }
+  .insp-view .section-label .back:hover { color: var(--link); border-color: var(--link); }
+  .insp-view .section-label .tzn { font-size: 9px; color: var(--ink-faint); }
 
   .insp-ep { margin-top: 22px; }
   .insp-ephead {
@@ -626,12 +604,11 @@
     padding-bottom: 8px;
   }
   /* Clusters side by side on a wide screen. Sixteen tables in one column is a
-     very long page for what is mostly short tables. */
+     very long page for what are mostly short tables. 360px is about where a
+     232px name column plus a readable value column stops being cramped, so this
+     gives several columns on a laptop and one on a phone without a breakpoint. */
   .insp-grid {
     display: grid;
-    /* 360px is about where a 232px name column plus a readable value column
-       stops being cramped, so this gives two columns on a laptop and one on a
-       phone without a breakpoint. */
     grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
     gap: 10px 28px;
     align-items: start;
@@ -664,10 +641,10 @@
     font-size: 12.5px;
     text-align: left;
   }
-  /* A fixed name column with a rule down it, so the two halves are a label and
-     a value rather than two things that happen to be near each other. The width
-     is fixed rather than a percentage: on a full-screen table a percentage
-     column grows with the window and drags the values away from their names. */
+  /* A fixed name column with a rule down it, so the two halves read as a label
+     and a value rather than two things that happen to be near each other. Fixed
+     rather than a percentage: on a full-width table a percentage column grows
+     with the window and drags the values away from their names. */
   table.insp td.an {
     width: 232px;
     color: var(--ink-dim);
@@ -949,6 +926,30 @@
     font-size: 12px;
     padding: 4px 0;
   }
+
+  /* Informational, so it is quiet: the neutral of `remove` without the
+     destructive hover, warming to the link colour on the way in. Every button
+     in this sheet restates the base rather than sharing one, which is why a new
+     one with no rule of its own arrives as a raw browser button in Arial. */
+  button.inspect {
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    background: transparent;
+    border: 1px solid var(--line-hi);
+    padding: 10px 18px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+    white-space: nowrap;
+  }
+  button.inspect:hover:not(:disabled) {
+    color: var(--link);
+    border-color: var(--link);
+    background: color-mix(in srgb, var(--link) 8%, transparent);
+  }
+  button.inspect:active:not(:disabled) { transform: translateY(1px); }
 
   button.share {
     font-family: inherit;
@@ -2675,8 +2676,11 @@ function setTileSize(v) {
  * once, at build time, and read `el._o` - the current options - when they fire.
  * Rebinding on every redraw would be most of the work of rebuilding anyway. */
 const DOM = { toolbar: null, sizer: [], lockAll: [], sections: new Map(),
-              tiles: new Map(), raw: null, sched: null,
+              tiles: new Map(), raw: null, sched: null, insp: null,
               fresh: 0, firstPaint: true };
+
+// Which device the inspector is showing, while it is showing one.
+let INSPECT = null;
 
 function setText(el, text) {
   const t = text == null ? '' : String(text);
@@ -3230,6 +3234,15 @@ function render() {
     return;
   }
 
+  // The inspector is a page for the same reason the schedule is: 232 attributes
+  // across sixteen clusters is a reference document, and a document read inside
+  // a box in the middle of the screen is read through a letterbox.
+  if (state.view === 'inspect') {
+    if (!DOM.insp) { DOM.insp = buildInspectView(); }
+    place(root, [DOM.toolbar, DOM.insp]);
+    return;
+  }
+
   // --- one section per room ---
   //
   // Rooms are the structure of the page, not a filter over it. Grouping by kind
@@ -3541,71 +3554,85 @@ function esc(v) {
  * It is a cache read, so it costs no radio traffic and works on a sleeping
  * battery device - which is the one you most want to interrogate.
  */
-async function openInspector(dev, back) {
-  const sheet = $('#sheet');
-  $('#sheetwrap').classList.add('wide', 'full');
-  sheet.innerHTML = `<h2>${esc(dev.name || 'device')} \u00b7 properties</h2>
-    <div class="who">reading everything it exposes\u2026</div>`;
-  $('#overlay').classList.add('on');
+function openInspector(dev) {
+  closeSheet();
+  INSPECT = dev;
+  state.view = 'inspect';
+  DOM.insp = null;
+  render();
+  window.scrollTo({ top: 0 });
+  loadInspect();
+}
 
+function buildInspectView() {
+  const sec = document.createElement('section');
+  sec.className = 'insp-view';
+  const dev = INSPECT || {};
+  sec.innerHTML = `
+    <div class="section-label">
+      <button type="button" class="back">&lsaquo; rooms</button>
+      <span>${esc(dev.name || 'device')} \u00b7 properties</span>
+      <span class="rule"></span>
+      <span class="tzn" id="insp-count"></span>
+    </div>
+    <div id="insp-body"><div class="empty">reading everything it exposes\u2026</div></div>`;
+  sec.querySelector('.back').onclick = closeInspect;
+  return sec;
+}
+
+async function loadInspect() {
+  const dev = INSPECT;
+  if (!dev) { return; }
   let j;
   try {
     j = await (await fetch('/api/inspect?node=' + encodeURIComponent(dev.node))).json();
   } catch (err) { j = { error: String(err) }; }
+  // Left the page while it was loading.
+  if (state.view !== 'inspect' || INSPECT !== dev) { return; }
 
-  const head = sub => `
-    <div class="insp-head">
-      ${back ? '<button class="ghost" id="insp-back">\u2190 back</button>' : ''}
-      <div class="insp-title">
-        <h2>${esc(dev.name || 'device')} \u00b7 properties</h2>
-        <div class="who">${sub}</div>
-      </div>
-    </div>`;
-
+  const body = $('#insp-body');
+  if (!body) { return; }
   if (j.error) {
-    sheet.innerHTML = head(`node ${dev.node}`) +
-      `<div class="empty">${esc(j.error)}</div>`;
-  } else {
-    // Counted from what came back rather than stated, so the summary cannot
-    // drift from the table under it.
-    let nCl = 0, nAt = 0;
-    for (const ep of j.endpoints) {
-      nCl += ep.clusters.length;
-      for (const c of ep.clusters) { nAt += c.attributes.length; }
-    }
-    const body = j.endpoints.map(ep => `
-      <div class="insp-ep">
-        <div class="insp-ephead">endpoint ${ep.endpoint}${
-          ep.endpoint === 0 ? ' \u00b7 the node itself' : ''}</div>
-        <div class="insp-grid">
-        ${ep.clusters.map(c => `
-          <table class="insp">
-            <caption>${esc(c.name)}
-              <span class="hex">0x${c.id.toString(16).toUpperCase().padStart(4, '0')}</span>
-            </caption>
-            <tbody>${c.attributes.map(a => `
-              <tr class="${a.global ? 'gl' : ''}">
-                <td class="an">${esc(a.name)}
-                  <span class="hex">0x${a.id.toString(16).toUpperCase().padStart(4, '0')}</span>
-                </td>
-                <td class="av">${a.unsupported
-                  ? `<span class="unsup">${esc(a.unsupported)}</span>`
-                  : esc(fmtVal(a.value))}</td>
-              </tr>`).join('')}</tbody>
-          </table>`).join('')}
-        </div>
-      </div>`).join('');
-    sheet.innerHTML = head(`node ${dev.node} \u00b7 ${j.endpoints.length} endpoint${
-      j.endpoints.length === 1 ? '' : 's'} \u00b7 ${nCl} clusters \u00b7 ${nAt} attributes`)
-      + body;
+    body.innerHTML = `<div class="failed">${esc(j.error)}</div>`;
+    return;
   }
-  const bb = sheet.querySelector('#insp-back');
-  if (bb) {
-    bb.onclick = () => {
-      $('#sheetwrap').classList.remove('wide', 'full');
-      back();
-    };
+
+  // Counted from what came back rather than stated, so the summary cannot
+  // drift from the table under it.
+  let nCl = 0, nAt = 0;
+  for (const ep of j.endpoints) {
+    nCl += ep.clusters.length;
+    for (const c of ep.clusters) { nAt += c.attributes.length; }
   }
+  const count = $('#insp-count');
+  if (count) {
+    count.textContent = `node ${dev.node} \u00b7 ${j.endpoints.length} endpoint`
+      + `${j.endpoints.length === 1 ? '' : 's'} \u00b7 ${nCl} clusters`
+      + ` \u00b7 ${nAt} attributes`;
+  }
+
+  body.innerHTML = j.endpoints.map(ep => `
+    <div class="insp-ep">
+      <div class="insp-ephead">endpoint ${ep.endpoint}${
+        ep.endpoint === 0 ? ' \u00b7 the node itself' : ''}</div>
+      <div class="insp-grid">
+      ${ep.clusters.map(c => `
+        <table class="insp">
+          <caption>${esc(c.name)}
+            <span class="hex">0x${c.id.toString(16).toUpperCase().padStart(4, '0')}</span>
+          </caption>
+          <tbody>${c.attributes.map(a => `
+            <tr class="${a.global ? 'gl' : ''}">
+              <td class="an">${esc(a.name)}
+                <span class="hex">0x${a.id.toString(16).toUpperCase().padStart(4, '0')}</span>
+              </td>
+              <td class="av">${a.unsupported
+                ? `<span class="unsup">${esc(a.unsupported)}</span>`
+                : esc(fmtVal(a.value))}</td>
+            </tr>`).join('')}</tbody>
+        </table>`).join('')}
+      </div>
+    </div>`).join('');
 }
 
 /* A value as the device gave it. Long lists and structs are the norm here -
@@ -3632,7 +3659,7 @@ function wireActions(sheet, dev, back) {
   shb.onclick = () => share(shb);
 
   const ins = sheet.querySelector('.inspect');
-  if (ins) { ins.onclick = () => openInspector(dev, back); }
+  if (ins) { ins.onclick = () => openInspector(dev); }
 
   wireForget(sheet, dev);
 }
@@ -5044,6 +5071,13 @@ function closeSchedule() {
   render();
 }
 
+function closeInspect() {
+  state.view = 'home';
+  DOM.insp = null;
+  INSPECT = null;
+  render();
+}
+
 /* The way back, from wherever you are.
  *
  * Deliberately not a no-op when you are already home: pressed from the rooms
@@ -5051,7 +5085,8 @@ function closeSchedule() {
  * "home" means to somebody halfway down a long house. */
 function goHome() {
   closeSheet();
-  if (state.view !== 'home') { closeSchedule(); }
+  if (state.view === 'schedule') { closeSchedule(); }
+  if (state.view === 'inspect') { closeInspect(); }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 

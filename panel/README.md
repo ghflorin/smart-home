@@ -783,10 +783,15 @@ is what makes a wall-switch press look live rather than remembered.
 
 ## The property inspector
 
-Every device sheet has a **properties** button. It opens full screen and shows
-everything the device exposes — endpoints, clusters, attributes — with the names
-the Matter SDK gives them and the raw ids beside those, so anything on the screen
-can be looked up in the specification.
+Every device sheet has a **properties** button. It opens a **page**, the same
+call the schedule makes and for the same reason: 232 attributes across sixteen
+clusters is a reference document, and a document read inside a box in the middle
+of the screen is read through a letterbox. It borrows the schedule's header, so
+the way out of both looks and sits the same.
+
+It shows everything the device exposes — endpoints, clusters, attributes — with
+the names the Matter SDK gives them and the raw ids beside those, so anything on
+the screen can be looked up in the specification.
 
 It is the one view in the panel that has no opinion. Everywhere else the panel
 decides that a device is a bulb, that a reading deserves a tile, that a level is
