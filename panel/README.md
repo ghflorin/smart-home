@@ -623,10 +623,11 @@ at its own midpoint, so the shape of the day survives.
 the only thing on the page you press to make something happen, so it is the only
 solid button on it.
 
-Brightness snaps to tenths with a floor of 10%; finer is a schedule full of 61%
-and 63%, which are the same light, and below a tenth is a lamp that is
-technically on. Colour is finer — 25 notches, about 14 mireds a step, roughly
-where a change stops being visible.
+Brightness snaps to whole percent, with a floor at level 2. One percent is about
+two and a half levels — finer than anyone can see at the top, and just usable at
+the bottom, where an evening actually lives: level 8 looks like 3% of full, and
+that is the honest figure rather than a squashed one. Colour is 25 notches, about
+14 mireds a step, roughly where a change stops being visible.
 
 **The snap has to be idempotent**, and this is not a nicety. It runs on the way
 *in* as well as on a drag — `columnsFrom` puts every stored point on the ladder
@@ -634,16 +635,20 @@ when the sheet opens — so a snap that moves a value that is already on a notch
 edits the schedule merely by being looked at, and edits it again next time. A
 true snap-to-nearest is the only thing that makes opening the editor safe.
 
-### Why the brightness axis is not linear
+### Why the brightness axis is linear in the level
 
-Matter level 1..254 is proportional to the light emitted, and the eye is not: at
-127 you do not see "half", you see about three quarters. Plotted linearly the
-whole useful evening range is squashed into the bottom sixth of the chart.
+Because on this hardware the level already *is* perceived brightness — the bulb
+carries the perceptual curve in its own firmware, so a linear axis is a
+perceptually even one, and half the height really does look half as bright.
 
-The axis is **L\* from CIE Lab**, which is literally "how bright it looks". Half
-the height really does look half as bright — and that lands at level 47, not 127.
-The scale, the numbers it produces, and what it assumes about the bulb are in
-[docs/notes.md](../docs/notes.md#brightness-is-not-linear).
+The axis applied L\* from CIE Lab for a long time, on the assumption that a
+Matter level is proportional to emitted light. Matter does not require that, and
+measurement against the real bulb refutes it. The evidence, the numbers, and the
+one place a per-device curve would go are in
+[docs/notes.md](../docs/notes.md#brightness-and-what-a-level-actually-means).
+
+**Nothing sends level 1**: this bulb switches off at 1 while staying lit at 2, so
+`LEVEL_MIN` is 2 and the ladder's floor sits just above it.
 
 ### What is stored but no longer used
 

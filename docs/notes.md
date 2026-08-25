@@ -4,7 +4,7 @@ Detail that would drown the README. Nothing here is required reading — it is
 what you look up when a specific thing surprises you.
 
 - [Battery and the Thread role](#battery-and-the-thread-role)
-- [Brightness is not linear](#brightness-is-not-linear)
+- [Brightness, and what a level actually means](#brightness-and-what-a-level-actually-means)
 - [The status LED](#the-status-led)
 - [The accelerometer](#the-accelerometer)
 - [Flashing](#flashing)
@@ -51,50 +51,84 @@ The CASE session to the bulb does expire — Matter evicts idle sessions — so 
 first press after a long pause costs a few hundred ms while it is rebuilt.
 `light_ctrl.cpp` handles that; it cannot avoid it.
 
-## Brightness is not linear
+## Brightness, and what a level actually means
 
-**The range is 1..254, not 0..255.** The bulb says so itself — its LevelControl
-cluster reports `MinLevel = 1`, `MaxLevel = 254`. In Matter 255 is the reserved
-null and 0 is not a brightness a dimmable light uses.
+**The range is 1..254**, and the bulb says so itself — its LevelControl cluster
+reports `MinLevel = 1`, `MaxLevel = 254`. In Matter 255 is not a brightness and 0
+is not one either for a dimmable light.
 
-Every percentage on screen is **perceived** brightness, not `level / 254`. The
-level is proportional to *emitted light*, and the eye is not: double the light
-and you see a much smaller increase. The conversion is L\* from CIE Lab —
-`perceived()` in `panel/index.html`, `perceived()` in `panel/server.py`:
+**But level 1 switches this bulb off.** It reports `OnOff = false` and goes dark,
+while levels 2 and 3 stay lit — so the device advertises a minimum it does not
+honour. `LEVEL_MIN = 2` exists for that, and nothing in the panel sends 1.
+
+**The percentage shown is simply `level / 254`.** That is the perceived
+brightness, because the bulb applies the perceptual curve itself.
+
+### How that was established
+
+Matter deliberately does not define what a level means physically. The
+specification's only word on it is that the meaning *"is device dependent"*, and
+the Device Library adds no photometric requirement at all — the terms *curve*,
+*gamma*, *perceptual* and *lumen* appear nowhere in it. There is a recommended
+logarithmic dimming curve in the spec, identical to DALI's, but it lives in the
+Ballast Configuration cluster and is referenced only by Color Control's
+intensity attributes. It has never applied to LevelControl.
+
+So it has to be measured. With a phone on a fixed surface, exposure locked at
+ISO 320 / f1.78 / 1/60 s, photographing a ceiling lit by the bulb, ambient
+subtracted from a bulb-off frame, sRGB linearised:
+
+| level | measured light | if level ∝ light | if level = perceived |
+|---|---|---|---|
+| 254 | 100% | 100% | 100% |
+| **64** | **3.7%** | **25.2%** | **4.5%** |
+
+Level 64 is the decisive point — the only one far enough above the ambient floor
+to resolve. Proportional-to-light is out by a factor of seven. "The level is
+already perceived brightness" predicts 4.5% and measurement gave 3.7%.
+
+This matches published scope measurements of IKEA TRÅDFRI hardware, where PWM
+duty against setting fits an exponential to within 4%, and firmware
+reverse-engineering that found the curve computed in floating point inside the
+bulb.
+
+### Why it is not corrected here
+
+Applying L\* on top of a bulb that already carries the curve corrects twice, and
+the compounded scale is worse than either alone: the top fifth of the range moved
+41 points of perceived lightness while the bottom fifth moved 2. That is a light
+that falls off a cliff near full and does nothing at all down low.
+
+It also puts the panel in line with everything else. Google Home documents
+*"to set the brightness level to approximately 50%, use a value of 127"*; Home
+Assistant, zigbee2mqtt, SmartThings and openHAB all map percent to level
+affinely. No consumer controller applies a perceptual transform.
+
+**Not every bulb is like this.** Philips anchors Hue's scale to lumens —
+`min_dim_level` is documented as a percentage of maximum lumen output — and Hue's
+measured floor sits where a linear map predicts. A Hue bulb may genuinely be
+proportional to light, in which case L\* would be right *for it*. `perceived()`
+in `panel/index.html` and `panel/server.py` is the one place a per-device curve
+would go.
+
+### The bulb does not report lumens
+
+There is no luminous-flux attribute in Matter, and this bulb exposes none: its
+endpoint 1 carries Identify, Groups, OnOff, LevelControl, Descriptor and
+ColorControl, and nothing else. Ballast Configuration — the only cluster that
+ever described light output — is absent, and was removed from the specification
+in Matter 1.6.
+
+The rated output is in the product name and nowhere else:
 
 ```
-y = level / 254
-shown = (116 · ∛y − 16) / 100
+VendorName   IKEA of Sweden
+ProductName  KAJPLATS E27 CWS globe 1055lm
+PartNumber   LED2405G8
 ```
 
-| level | of the bulb's light | shown |
-|---|---|---|
-| 1 | 0.4% | 4% |
-| 5 | 2.0% | 15% |
-| 8 | 3.1% | 21% |
-| 47 | 18.5% | **50%** |
-| 120 | 47.2% | 74% |
-| 127 | 50.0% | 76% |
-| 254 | 100% | 100% |
-
-So the whole useful evening range is crammed between 1 and 40, while the top half
-of the scale is nearly indistinguishable. The schedule editor uses a perceptual
-vertical axis for that reason: half the height really does look like half the
-light, and it lands at level 47, not 127. The server interpolates the curve in
-the same perceptual space, so the editor's reading for "now" and the level the
-bulb is actually given agree.
-
-**What this rests on, and what it does not.** L\* is a model of the eye and the
-round trip is exact — level → % → level returns the same level. What is *assumed*
-is that the bulb turns level into light linearly. A bulb that already applies its
-own perceptual curve internally is corrected twice, and every number shown is
-then too high. Nothing in Matter exposes a bulb's transfer curve, so this cannot
-be settled in software.
-
-To settle it by eye: set the bulb to 20/40/60/80/100% shown — levels 8, 29, 71,
-144, 254 — and look. Evenly spaced steps mean the bulb is linear and the scale is
-right. Steps that bunch up at the bright end mean the bulb is already perceptual
-and the extra curve should come out.
+So absolute lumens can only be had by parsing that string, which works for these
+bulbs and is not a general mechanism.
 
 ## The status LED
 

@@ -525,20 +525,25 @@ SCHED_DEFAULT = [
     # The recommended day, the same curve the panel's reset button loads.
     # Warm and nearly out overnight, cold and full over the middle of the
     # day, warming back to candle by bedtime. Levels are the Matter scale;
-    # the percentages beside them are how bright each one LOOKS, which is
-    # what the panel shows and what the curve was drawn in.
-    {"min":    0, "level":   1, "fade": 20, "mireds": 454},   # 01:00     4%   2200 K
-    {"min":  120, "level":   1, "fade": 20, "mireds": 454},   # 03:00     4%   2200 K
-    {"min":  240, "level":   1, "fade": 20, "mireds": 454},   # 05:00     4%   2200 K
-    {"min":  360, "level":  22, "fade": 20, "mireds": 370},   # 07:00    35%   2700 K
-    {"min":  480, "level": 144, "fade": 20, "mireds": 250},   # 09:00    80%   4000 K
+    # the percentages beside them are how bright each one LOOKS, which on
+    # this hardware is simply level/254 - the bulb carries the curve.
+    #
+    # Nothing here goes below LEVEL_MIN. The overnight points used to be
+    # level 1, chosen as "the dimmest a bulb can be": on the real bulb that
+    # is OFF, so the recommended night setting switched the lamp out
+    # instead of dimming it.
+    {"min":    0, "level":  10, "fade": 20, "mireds": 454},   # 01:00     4%   2200 K
+    {"min":  120, "level":  10, "fade": 20, "mireds": 454},   # 03:00     4%   2200 K
+    {"min":  240, "level":  10, "fade": 20, "mireds": 454},   # 05:00     4%   2200 K
+    {"min":  360, "level":  89, "fade": 20, "mireds": 370},   # 07:00    35%   2700 K
+    {"min":  480, "level": 203, "fade": 20, "mireds": 250},   # 09:00    80%   4000 K
     {"min":  600, "level": 254, "fade": 20, "mireds": 217},   # 11:00   100%   4600 K
     {"min":  720, "level": 254, "fade": 20, "mireds": 208},   # 13:00   100%   4800 K
-    {"min":  840, "level": 223, "fade": 20, "mireds": 222},   # 15:00    95%   4500 K
-    {"min":  960, "level": 144, "fade": 20, "mireds": 263},   # 17:00    80%   3800 K
-    {"min": 1080, "level":  71, "fade": 20, "mireds": 333},   # 19:00    60%   3000 K
-    {"min": 1200, "level":  29, "fade": 20, "mireds": 370},   # 21:00    40%   2700 K
-    {"min": 1320, "level":   5, "fade": 20, "mireds": 417},   # 23:00    15%   2400 K
+    {"min":  840, "level": 241, "fade": 20, "mireds": 222},   # 15:00    95%   4500 K
+    {"min":  960, "level": 203, "fade": 20, "mireds": 263},   # 17:00    80%   3800 K
+    {"min": 1080, "level": 152, "fade": 20, "mireds": 333},   # 19:00    60%   3000 K
+    {"min": 1200, "level": 102, "fade": 20, "mireds": 370},   # 21:00    40%   2700 K
+    {"min": 1320, "level":  38, "fade": 20, "mireds": 417},   # 23:00    15%   2400 K
 ]
 
 
@@ -1685,22 +1690,45 @@ def save_schedule(points: list):
 # last one and the light glides through midnight instead of stepping at it.
 #
 # The brightness axis is PERCEPTUAL for the same reason it is on the chart -
-# level 1..254 is proportional to emitted light and the eye is not, so
-# interpolating raw levels would follow a different curve from the drawn one.
-# Colour temperature is interpolated in mireds, which is what its axis already
-# is; a spline is affine-invariant, so that matches the drawing exactly.
+# The curve is interpolated in the same units the chart draws, so the schedule
+# the Pi follows is the schedule you drew. Colour temperature is interpolated in
+# mireds, which is what its axis already is; a spline is affine-invariant, so
+# that matches the drawing exactly.
+
+# The dimmest level worth sending.
+#
+# MEASURED, not assumed: at level 1 this bulb switches OFF - it reports
+# OnOff=false and goes dark - while levels 2 and 3 stay lit. Its own MinLevel
+# attribute claims 1, so the device is describing a level it does not actually
+# honour, and nothing but trying it would have found that out. Sending 1 as a
+# "very dim" value silently extinguishes the lamp.
+LEVEL_MIN = int(os.environ.get("PANEL_LEVEL_MIN", "2"))
 
 
 def perceived(level: int) -> float:
-    """L* from CIE Lab: how bright a Matter level looks, 0..1."""
-    y = max(0.0, min(1.0, level / 254))
-    return (116 * (y ** (1 / 3)) - 16 if y > 0.008856 else 903.3 * y) / 100
+    """How bright a Matter level looks, 0..1.
+
+    Simply level/254, because the BULB already applies the perceptual curve.
+
+    This used to apply L* from CIE Lab, on the reasoning that a Matter level is
+    proportional to emitted light and the eye is not. Matter does not say that -
+    the spec's only word on the physical meaning of a level is that it "is
+    device dependent" - and for this hardware it is false. Measured with a
+    fixed-exposure camera against the real bulb: at level 64 it emits 3.7% of
+    its level-254 output. Proportional-to-light demands 25%. "Level is already
+    perceived brightness" predicts 4.5%, which is what came back.
+
+    So the correction was being applied twice, and the compounded scale was
+    worse than either alone: the top of the range moved 41 points of perceived
+    lightness while the bottom moved 2. Every other controller - Google Home,
+    Home Assistant, zigbee2mqtt, SmartThings - shows level/254 and applies no
+    curve at all.
+    """
+    return max(0.0, min(1.0, level / 254))
 
 
 def level_from_perceived(p: float) -> int:
-    lstar = max(0.0, min(1.0, p)) * 100
-    y = ((lstar + 16) / 116) ** 3 if lstar > 8 else lstar / 903.3
-    return max(1, min(254, round(y * 254)))
+    return max(LEVEL_MIN, min(254, round(max(0.0, min(1.0, p)) * 254)))
 
 
 def _mono_tangents(y: list) -> list:
@@ -3122,7 +3150,7 @@ class Handler(BaseHTTPRequestHandler):
             # Brightness on its own, with-on-off so asking for light gives light
             # rather than silently arming a bulb that is switched off.
             if level is not None:
-                lvl = max(1, min(254, int(level)))
+                lvl = max(LEVEL_MIN, min(254, int(level)))
                 err = m_cmd(node, endpoint, 0x0008, "MoveToLevelWithOnOff",
                             {"level": lvl, "transitionTime": 0,
                              "optionsMask": 0, "optionsOverride": 0})
@@ -3208,7 +3236,7 @@ class Handler(BaseHTTPRequestHandler):
             # deadline rather than block the request for ever. A bulb that never
             # reports the value it was given is a real thing to know about, and
             # falling through with the honest current reading says it.
-            asked = None if level is None else max(1, min(254, int(level)))
+            asked = None if level is None else max(LEVEL_MIN, min(254, int(level)))
             asked_ct = None if mireds is None else max(100, min(700, int(mireds)))
             want_on = {"on": True, "off": False}.get(action)
             deadline = time.time() + 1.5

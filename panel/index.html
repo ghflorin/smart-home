@@ -3827,21 +3827,36 @@ const PLOT = { w: 1200, top: 68, bottom: 452, axis: 476, h: 492 };
 const hhmm = m => String(Math.floor(m / 60) % 24).padStart(2, '0') + ':' +
                   String(Math.round(m) % 60).padStart(2, '0');
 
-// Perceptual brightness, and it is not a refinement.
+// The dimmest level worth sending. MEASURED: at level 1 this bulb switches off
+// entirely - it reports OnOff=false - while 2 and 3 stay lit, even though its
+// own MinLevel attribute claims 1.
+const LEVEL_MIN = 2;
+
+// How bright a level looks: level/254, because the BULB already applies the
+// perceptual curve.
 //
-// Matter level 1..254 is proportional to the light emitted, and the eye is not:
-// at 127 you do not see "half", you see about three quarters. Plotted linearly
-// the entire useful evening range is squashed into the bottom sixth of the
-// chart. L* from CIE Lab is literally "how bright it looks", so half the height
-// really does look half as bright - and that lands at level 47, not 127.
+// This applied L* from CIE Lab for a long time, on the reasoning that a Matter
+// level is proportional to emitted light while the eye is not. Matter says no
+// such thing - its only statement about what a level physically means is that
+// it "is device dependent" - and measurement says the opposite for this
+// hardware. With a fixed-exposure camera against the real bulb, level 64 emits
+// 3.7% of the level-254 output; proportional-to-light demands 25%, and "the
+// level IS perceived brightness" predicts 4.5%.
+//
+// So the curve was applied twice. Compounding two perceptual corrections does
+// not give a perceptual scale - it gives one worse than either: the top of the
+// range moved 41 points of perceived lightness per fifth while the bottom moved
+// 2, which is why the light fell off a cliff near full and did nothing at all
+// down low. Linear is also what every other controller shows.
+//
+// If a bulb ever turns up that really is proportional to light - Philips
+// anchors its scale to lumens, so Hue may be one - this is the single place a
+// per-device curve would go.
 function perceived(level) {
-  const y = Math.max(0, Math.min(1, level / 254));
-  return (y > 0.008856 ? 116 * Math.cbrt(y) - 16 : 903.3 * y) / 100;
+  return Math.max(0, Math.min(1, level / 254));
 }
 function levelFromPerceived(p) {
-  const l = Math.max(0, Math.min(1, p)) * 100;
-  const y = l > 8 ? Math.pow((l + 16) / 116, 3) : l / 903.3;
-  return Math.max(1, Math.min(254, Math.round(y * 254)));
+  return Math.max(LEVEL_MIN, Math.min(254, Math.round(Math.max(0, Math.min(1, p)) * 254)));
 }
 
 /* The recommended day, one entry per column at 12 columns.
@@ -3856,8 +3871,8 @@ function levelFromPerceived(p) {
  * Brightness is PERCEIVED, the same scale the chart and the tiles use, so
  * "60%" here is the 60% you would set by hand - not Matter's level 152. */
 const SCHED_RECOMMENDED = [
-  // 4% is the floor, not a choice: it is what Matter level 1 comes out at on
-  // this scale, and a bulb cannot be dimmer than its lowest step.
+  // Percentages of perceived brightness, which on this scale is what the number
+  // means directly. 4% is a night light: about level 10.
   { at: '01:00', pct:   4, mireds: 454 },   // 2200 K
   { at: '03:00', pct:   4, mireds: 454 },   // 2200 K
   { at: '05:00', pct:   4, mireds: 454 },   // 2200 K
@@ -4062,12 +4077,19 @@ function sampleNorm(vals, minute, tang) {
  */
 const CURVE_STEP = 6;      // minutes between samples of the drawn curve
 
-// How finely each control moves. Brightness in tenths with a floor at 10%,
-// because finer is a schedule full of 61% and 63% and below a tenth is a lamp
-// that is technically on. Colour is finer - a step there is about 14 mireds,
-// roughly where a change stops being visible.
+// How finely each control moves.
+//
+// Brightness in percent now, not tenths. On a scale where the number IS the
+// perceived fraction, an evening sits in the bottom few percent - level 8 looks
+// like 3% of full and that is the honest figure, not a squashed one - so a
+// ladder in tenths could not express a night setting at all: its first rung
+// above the floor was level 25. One percent is about two and a half levels,
+// which is finer than anyone can see at the top and just usable at the bottom.
+//
+// Colour is unchanged - a step there is about 14 mireds, roughly where a change
+// stops being visible.
 const LADDER = {
-  level: { min: 0.1, notches: 10 },
+  level: { min: LEVEL_MIN / 254, notches: 100 },
   ct: { min: 0, notches: 25 },
 };
 
