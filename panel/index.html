@@ -580,19 +580,6 @@
      letterbox. It borrows the schedule's own header so the way out of both
      looks and sits the same. */
   .insp-view .section-label { margin-top: 26px; }
-  .insp-view .section-label .back {
-    font-family: inherit;
-    font-size: 10px;
-    letter-spacing: .18em;
-    text-transform: uppercase;
-    color: var(--ink-dim);
-    background: transparent;
-    border: 1px solid var(--line-hi);
-    border-radius: 8px;
-    padding: 5px 11px;
-    cursor: pointer;
-  }
-  .insp-view .section-label .back:hover { color: var(--link); border-color: var(--link); }
   .insp-view .section-label .tzn { font-size: 9px; color: var(--ink-faint); }
 
   .insp-ep { margin-top: 22px; }
@@ -1342,19 +1329,33 @@
    * is. One picture answers "how bright, and what kind of white" at every hour,
    * which is the question a light schedule exists to answer. */
   .sched-view .section-label { margin-top: 26px; }
-  .sched-view .section-label .back {
+  /* The way out of a page, wherever one appears - the schedule and the property
+     inspector today. One rule for both: it was written twice, identically,
+     which is how two copies drift apart.
+     
+     Coloured, not neutral. It was the same grey as the rule beside it and the
+     labels around it, so the one control on the page you actually need in order
+     to leave read as decoration. It carries the link colour and a tint behind
+     it, which is the panel's existing vocabulary for "this does something". */
+  .section-label .back {
     font-family: inherit;
     font-size: 10px;
     letter-spacing: .18em;
     text-transform: uppercase;
-    color: var(--ink-dim);
-    background: transparent;
-    border: 1px solid var(--line-hi);
+    color: var(--link);
+    background: color-mix(in srgb, var(--link) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--link) 45%, transparent);
     border-radius: 8px;
     padding: 5px 11px;
     cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
   }
-  .sched-view .section-label .back:hover { color: var(--link); border-color: var(--link); }
+  .section-label .back:hover {
+    color: var(--link);
+    border-color: var(--link);
+    background: color-mix(in srgb, var(--link) 20%, transparent);
+  }
+  .section-label .back:active { transform: translateY(1px); }
   .sched-view .section-label .tzn { font-size: 9px; color: var(--ink-faint); }
 
   .sched-top {
