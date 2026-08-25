@@ -34,3 +34,6 @@ __pycache__/
 # Large, proprietary, and specific to one individual board - they have no
 # business in history.
 backup/
+
+# Test captures - photographs of a room, not source. Kept locally.
+exposure test/
