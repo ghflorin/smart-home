@@ -2888,7 +2888,11 @@ function measureText(key, val) {
     const i = val === true ? 1 : val === false ? 0 : Number(val);
     if (m.words[i] !== undefined) { return m.words[i]; }
   }
-  const unit = m && m.unit ? ' ' + m.unit : '';
+  // A percent sign sets tight against its number - "100%", not "100 %" - which
+  // is the one unit everybody reads as a single word. The rest take a space,
+  // because "1.6V" and "24 lx" are not the same kind of thing.
+  const tight = m && m.unit === '%';
+  const unit = m && m.unit ? (tight ? '' : ' ') + m.unit : '';
   return (typeof val === 'number' ? val : String(val)) + unit;
 }
 
@@ -3988,7 +3992,7 @@ function openDevice(d) {
   const st = state.bulbs[String(d.node)] || {};
   const measured = st.measured || {};
   const keys = ((state.devices || {}).measures || [])
-    .map(m => m.key).filter(k => k in measured);
+    .filter(m => !m.hidden).map(m => m.key).filter(k => k in measured);
 
   sheet.innerHTML = `
     <h2></h2>
@@ -4012,7 +4016,7 @@ function openDevice(d) {
     const cur = (state.bulbs[String(d.node)] || {});
     const vals = cur.measured || {};
     const rows = ((state.devices || {}).measures || [])
-      .map(m => m.key).filter(k => k in vals);
+      .filter(m => !m.hidden).map(m => m.key).filter(k => k in vals);
     box.innerHTML = '';
     if (!rows.length) {
       // The three reasons there is nothing here are different, and which one it

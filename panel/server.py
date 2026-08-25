@@ -243,6 +243,14 @@ MEASURED = [
 # MYGGBETT with the two halves apart reports False. Guessing this wrong is worse
 # than not showing it at all - a door reported shut while it is open is the one
 # reading somebody would act on without looking.
+# Readings that are read but not LISTED. They have a better presentation of
+# their own - the battery is a gauge on the tile, where a bar says more at a
+# glance than a row of digits - and repeating them as text turned a door
+# sensor's sheet into four lines of battery and one line about the door.
+# Everything is still in the property inspector, which is the view that promises
+# to hide nothing.
+MEASURE_HIDDEN = {"batteryState", "batteryVolts"}
+
 MEASURE_WORDS = {
     "contact": ["open", "closed"],
     # PowerSource BatChargeLevel: 0 OK, 1 Warning, 2 Critical.
@@ -2410,7 +2418,8 @@ class Handler(BaseHTTPRequestHandler):
             # What each measurement is called and in what unit, so the interface
             # does not need a second copy of the table.
             d["measures"] = [{"key": k, "label": lab, "unit": u,
-                              "words": MEASURE_WORDS.get(k)}
+                              "words": MEASURE_WORDS.get(k),
+                              "hidden": k in MEASURE_HIDDEN}
                              for _, _, k, lab, u, _ in MEASURED]
             d["airQualityWords"] = AIR_QUALITY_WORDS
             self._send(d)

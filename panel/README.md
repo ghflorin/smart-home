@@ -781,6 +781,18 @@ The chain end to end is a push at every hop: device → matter-server → panel 
 browser. Measured at about 0.2 s from a bulb changing to the tile moving, which
 is what makes a wall-switch press look live rather than remembered.
 
+## Readings that are read but not listed
+
+`MEASURE_HIDDEN` in `panel/server.py` marks readings the server collects and the
+sheet does not print. Today that is the battery's charge level and its voltage:
+both have a better presentation already — the gauge on the tile, where a bar
+says more at a glance than a row of digits — and printing them as well turned a
+door sensor's sheet into four lines about the battery and one about the door.
+
+Nothing is lost. The values are still in the state, still drive the gauge and
+its tooltip, and are still listed in the property inspector, which is the one
+view that promises to hide nothing.
+
 ## Identify, and whose clock it runs on
 
 The button shows the **device's own** `IdentifyTime`, pushed as it counts down,
