@@ -136,6 +136,21 @@ without going to look.
   a timer of its own, because a browser-side countdown measures the wrong
   fifteen seconds entirely.
 
+  **Why two flashes looks like a fault.** Matter §1.2.6.1 says a device
+  `SHALL` enter its identification state "in order to indicate to an observer",
+  and that it is `RECOMMENDED` that the state "consists of flashing a light with
+  a period of 0.5 seconds". Continuous flashing is the recommendation, not the
+  requirement — so a brief acknowledgement is within the letter of the spec and
+  looks nothing like what anyone expects. Certification does not settle it
+  either: the only test that checks the light, TC-I-2.2, ends in a manual
+  verification step gated behind `PICS_USER_PROMPT`, which is `0` in CI. Every
+  machine-checkable part of identify passes on a device that merely runs the
+  countdown.
+
+  Note also that this LED already uses a double flash to mean "connected" during
+  pairing, so identify appears to reuse the firmware's existing acknowledgement
+  rather than implementing a distinct effect.
+
   `TriggerEffect` is **not implemented** — it answers `UNSUPPORTED_COMMAND`, and
   `AcceptedCommandList` on the cluster is `[0]`, so plain `Identify` is the only
   mechanism this device has. `IdentifyType` is 2, VisibleIndicator. Writing the
