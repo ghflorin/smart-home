@@ -232,27 +232,28 @@ occupancy   device -> panel   same second
 illuminance device reports at irregular intervals: +52 s, +299 s, +100 s
 ```
 
-So walking past shows up immediately, and a change in light can take minutes —
-or never arrive at all, which is the part worth understanding.
+So walking past shows up immediately, and a change in light takes up to a couple
+of minutes to appear.
 
-**Ambient light is measured when the sensor wakes for MOTION.** It is not on a
-timer of its own. Three clean examples, motion followed by a light report one to
-three seconds later:
+**Light reporting is irregular, and reports only on change.** Observed gaps
+between illuminance reports, in seconds:
 
 ```
-13:06:08 motion -> 13:06:09 illuminance
-13:10:32 motion -> 13:10:33 illuminance
-13:23:09 motion -> 13:23:12 illuminance   (698 s after the previous one)
+23   60   181   24   60   698   94
 ```
 
-That is the right trade on a coin cell — the device has to wake for the PIR
-anyway, so it takes the lux reading for free rather than running a second timer.
+Some land one to three seconds after a motion event, which makes it tempting to
+conclude the sensor only measures light when the PIR wakes it — that conclusion
+was drawn here on three samples and is wrong. A later report arrived 62 s after
+the last motion with the room already occupied, so it samples on its own as
+well. The long gaps (181 s, 698 s) are periods when the reading did not change:
+`min interval 0` means report on change, and an unchanged value is not a change.
 
-The consequence is a test that always looks broken: **change the light in an
-empty, still room and nothing happens.** Nothing wakes the sensor, so nothing
-looks at the light. Move in front of it and the new value arrives at once.
-`Tolerance` is `UnsupportedAttribute`, so the device does not say what change it
-considers reportable either.
+What this means in practice: **turn a light on and the panel catches up within a
+minute or two, not instantly.** A test that changes the light and then checks
+the screen a few seconds later will always look broken. `Tolerance` is
+`UnsupportedAttribute`, so the device does not say how big a change it considers
+worth reporting either.
 
 **Occupancy clears about 23 s after the LAST movement, and the hold is not
 adjustable.**
