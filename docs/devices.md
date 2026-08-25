@@ -208,6 +208,47 @@ Works: wet/dry is read and shown, and a detected leak turns the whole tile red.
   "contact" showed a flood as `contact: open`.
 - Battery reads 3.14 V at 100%.
 
+### IKEA MYGGSPRAY motion sensor — occupancy + light sensor
+
+| | |
+|---|---|
+| Vendor / product | `IKEA of Sweden` / MYGGSPRAY motion sensor |
+| Device types | endpoint 1 `0x0106` light sensor, endpoint 2 `0x0107` occupancy sensor |
+| Clusters | Identify `0x0003`, Descriptor `0x001D`, IlluminanceMeasurement `0x0400` (ep1), OccupancySensing `0x0406` (ep2) |
+| Transport | Matter over Thread, **battery**, intermittently connected |
+
+**It is two sensors in one**, on two endpoints, and it must be named after the
+occupancy one — a device that also measures light is a motion sensor with a
+light meter in it, not a light sensor. `TYPE_PRIORITY` in `panel/server.py`
+decides that; without it the panel called it a "light sensor" and headlined its
+tile `light 11 lx`.
+
+**Motion is instant. Light is not. The difference is large and it is the
+device's, not the panel's.** Measured end to end:
+
+```
+occupancy   device -> panel   same second
+            panel  -> browser 0.3-0.7 s
+illuminance device reports at irregular intervals: +52 s, +299 s, +100 s
+```
+
+So walking past shows up immediately, and darkening the room can take a couple
+of minutes. That is the right trade on a coin cell: motion is interrupt-driven
+and costs nothing to notice, while sampling ambient light continuously would
+not be. `Tolerance` is `UnsupportedAttribute`, so the device does not say what
+change it considers reportable.
+
+**Occupancy holds for about a minute.** Measured clear-to-motion-to-clear cycles
+ran 22-74 s. While it already reads motion there is nothing new to report, so
+walking past again changes nothing on screen — which looks like a missed
+detection and is not one.
+
+**Illuminance is logarithmic.** `MeasuredValue = 10000 x log10(lux) + 1`, so a
+raw 10414 is 11 lux and not 10414 of anything. The device confirms its own
+encoding: `MinMeasuredValue 1` and `MaxMeasuredValue 40001` decode to 1 lux and
+10000 lux, which is a sane range where 1..40001 lux would not be. Decoded by
+`lux_from_measured()`; 0 is the spec's "too dark to measure".
+
 ## Our own hardware
 
 ### Holyiot nRF54L15 module — switch
