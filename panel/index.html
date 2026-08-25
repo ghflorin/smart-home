@@ -572,6 +572,45 @@
     .tile .batt.critical { animation: none; }
   }
 
+  /* Firmware, at the foot of a device's sheet.
+     A footnote while it is up to date, and a call to action when it is not -
+     the version pair is the whole message, so it carries the emphasis rather
+     than a banner around it. */
+  .fw {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+    font-size: 11px;
+    letter-spacing: .06em;
+    color: var(--ink-faint);
+  }
+  .fw .fwv b { font-weight: 600; color: var(--ink-dim); }
+  .fw .fwv b.new { color: var(--link); }
+  .fw .fwv.busy { color: var(--link); }
+  .fw .fwgo {
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--link);
+    background: color-mix(in srgb, var(--link) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--link) 45%, transparent);
+    border-radius: 8px;
+    padding: 5px 11px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  .fw .fwgo:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--link) 20%, transparent);
+    border-color: var(--link);
+  }
+  .fw .fwgo:disabled { opacity: .6; cursor: default; }
+
   /* ---------- the property inspector ---------- */
 
   /* A page, not a dialog - the same call the schedule makes, for the same
@@ -3680,6 +3719,95 @@ function fmtVal(v) {
   try { return JSON.stringify(v); } catch (err) { return String(v); }
 }
 
+/* Firmware, shown inside the device it belongs to.
+ *
+ * Two separate worlds meet here and the sheet has to be honest about which one
+ * a device is in. Our own switch is signed with our own key and updated from
+ * ota/; nothing else can be. Everything bought is signed by its vendor and
+ * published to Matter's Distributed Compliance Ledger, and that is the only
+ * route by which this panel could ever update it - the signature is what stops
+ * anyone pushing their own firmware onto somebody else's hardware.
+ *
+ * Fetched AFTER the sheet is on screen, never before: checking means asking the
+ * DCL over the internet, and a sheet that waits on the internet to open is a
+ * sheet that feels broken every time the line is slow.
+ */
+const OTA_WORDS = { 0: 'unknown', 1: 'idle', 2: 'checking', 3: 'waiting to download',
+                    4: 'downloading', 5: 'applying', 6: 'waiting to apply',
+                    7: 'rolling back', 8: 'waiting for consent' };
+
+function firmwareBox(sheet, dev) {
+  const box = document.createElement('div');
+  box.className = 'fw';
+  box.innerHTML = '<span class="fwv">checking for firmware\u2026</span>';
+  sheet.append(box);
+
+  const paint = fw => {
+    if (!box.isConnected) { return; }
+    const st = (state.bulbs[String(dev.node)] || {});
+    const running = typeof st.otaState === 'number' && st.otaState > 1;
+
+    if (running) {
+      // The DEVICE's account of what it is doing, not a spinner of ours.
+      const pct = typeof st.otaProgress === 'number' ? ' ' + st.otaProgress + '%' : '';
+      box.innerHTML = '';
+      const w = document.createElement('span');
+      w.className = 'fwv busy';
+      w.textContent = (OTA_WORDS[st.otaState] || 'updating') + pct;
+      box.append(w);
+      return;
+    }
+    if (!fw || fw.error) {
+      box.innerHTML = '';
+      const w = document.createElement('span');
+      w.className = 'fwv';
+      w.textContent = fw && fw.error ? 'firmware: ' + fw.error : 'firmware unknown';
+      box.append(w);
+      return;
+    }
+    box.innerHTML = '';
+    const w = document.createElement('span');
+    w.className = 'fwv';
+    if (fw.available) {
+      w.innerHTML = 'firmware <b>' + esc(fw.installed) + '</b> \u2192 <b class="new">'
+                  + esc(fw.available) + '</b>';
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'fwgo';
+      b.textContent = 'update';
+      b.onclick = async () => {
+        b.disabled = true;
+        b.textContent = 'starting\u2026';
+        try {
+          const r = await (await api('/api/firmware', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ node: dev.node, version: fw.availableCode })
+          })).json();
+          if (r.error) { b.textContent = 'failed'; setStatus(r.error, 'err'); return; }
+          b.remove();
+          w.textContent = 'update started \u2014 the device reports its own progress';
+        } catch (err) { b.textContent = 'failed'; }
+      };
+      box.append(w, b);
+    } else {
+      w.textContent = 'firmware ' + (fw.installed || '?') + ' \u00b7 up to date';
+      box.append(w);
+    }
+  };
+
+  fetch('/api/firmware?node=' + encodeURIComponent(dev.node))
+    .then(r => r.json())
+    .then(fw => {
+      box._fw = fw;
+      paint(fw);
+      // Repaint on every state change, so a running update shows its progress.
+      const was = SHEET_LIVE;
+      SHEET_LIVE = () => { if (was) { was(); } paint(box._fw); };
+    })
+    .catch(() => paint(null));
+}
+
 function wireActions(sheet, dev, back) {
   const idb = sheet.querySelector('.id');
   idb.dataset.node = dev.node;
@@ -4006,6 +4134,7 @@ function openBulb(b) {
   sheetListDone(list);
 
   wireActions(sheet, b, () => openBulb(b));
+  firmwareBox(sheet, b);
   $('#overlay').classList.add('on');
 }
 
@@ -4081,6 +4210,7 @@ function openDevice(d) {
   SHEET_LIVE = paintReads;
 
   wireActions(sheet, d, () => openDevice(d));
+  firmwareBox(sheet, d);
   $('#overlay').classList.add('on');
 
   // ONE fresh read, and only the numbers are repainted with it. A sheet that is
@@ -4186,6 +4316,7 @@ function openSwitch(sw) {
   // the switch drove nothing. The schedule lives in the header, and on the
   // sheet of each bulb it actually affects.
   wireActions(sheet, sw, () => openSwitch(sw));
+  firmwareBox(sheet, sw);
   $('#overlay').classList.add('on');
 }
 

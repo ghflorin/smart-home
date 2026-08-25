@@ -809,6 +809,37 @@ Worth knowing about that sensor specifically: it flashes **twice, for about a
 second**, and is then dark for the rest of the countdown. A two-second event, at
 an unpredictable moment, up to fifteen seconds after the press.
 
+## Firmware
+
+Every device sheet ends with its firmware version, and offers an update when the
+vendor has published one.
+
+Two entirely separate worlds meet in that one line, and the sheet has to be
+honest about which one a device is in:
+
+- **Our own switch** is signed with our own key, its bootloader trusts that key,
+  and it is updated from [`ota/`](../ota/). Nothing else can update it, and it
+  appears in no ledger — so the panel correctly offers nothing.
+- **Everything bought** is signed by its vendor and published to Matter's
+  **Distributed Compliance Ledger**. Any controller on the fabric can fetch a
+  published image and serve it. matter-server has a built-in OTA provider, so
+  `check_node_update` and `update_node` are the whole mechanism.
+
+The signature is the reason this is safe rather than alarming: you cannot push
+your own firmware onto somebody else's hardware, because the device will not
+accept an image its vendor did not sign. That is also precisely why the switch
+is the only thing here you *can* write firmware to.
+
+**The check is made after the sheet is on screen**, never before. Checking means
+asking the DCL over the internet; a sheet that waits on the internet to open
+feels broken every time the line is slow. Results are cached for an hour, which
+is far shorter than the interval at which a vendor publishes anything.
+
+**Progress comes from the device**, not from a spinner of ours. The requestor
+cluster reports `UpdateState` and `UpdateStateProgress`, both subscribed like
+any other attribute, so the sheet can say *downloading 47%* rather than
+*something is happening*. An update is long enough that the difference matters.
+
 ## The property inspector
 
 Every device sheet has a **properties** button. It opens a **page**, the same

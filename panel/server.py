@@ -1403,6 +1403,81 @@ MATTER_DEVICE_TYPES = _NAMES.get("deviceTypes") or {}
 GLOBAL_ATTRS = {0xFFF8, 0xFFF9, 0xFFFA, 0xFFFB, 0xFFFC, 0xFFFD}
 
 
+# What the device says it is doing during an update. From the Matter spec's
+# OtaSoftwareUpdateRequestor UpdateStateEnum.
+OTA_STATES = {
+    0: "unknown", 1: "idle", 2: "checking", 3: "waiting to download",
+    4: "downloading", 5: "applying", 6: "waiting to apply",
+    7: "rolling back", 8: "waiting for consent",
+}
+
+# Checking means asking the Distributed Compliance Ledger over the internet, so
+# it is slow and worth remembering. An hour is far shorter than the interval at
+# which a vendor publishes firmware.
+_fw_cache = {}
+FW_TTL = 3600
+_fw_lock = threading.Lock()
+
+
+def firmware_for(node, fresh=False) -> dict:
+    """What is installed on a node, and what the vendor is offering.
+
+    Two entirely separate paths end up here. Our OWN switch is signed with our
+    own key and updated from ota/ - the DCL knows nothing about it and correctly
+    offers nothing. Everything bought is signed by its vendor and published to
+    the DCL, which is the only way a third-party controller can ever update it:
+    the image is signed, so nobody can push their own firmware to somebody
+    else's device, which is the point rather than a limitation.
+    """
+    ms = ms_of(node)
+    if ms is None:
+        return {"node": node, "error": f"node {node} is not on matter-server"}
+
+    with _fw_lock:
+        hit = _fw_cache.get(node)
+        if hit and not fresh and time.time() - hit[0] < FW_TTL:
+            return hit[1]
+
+    attrs, _err = m_attrs(node)
+    out = {
+        "node": node,
+        "installed": m_get(attrs, 0, 0x0028, 0x000A),
+        "updatePossible": m_get(attrs, 0, 0x002A, 0x0001),
+    }
+    try:
+        upd = MS.call("check_node_update", {"node_id": ms}, timeout=120.0)
+    except MatterError as exc:
+        out["error"] = str(exc)
+        return out
+
+    if upd:
+        out["available"] = upd.get("software_version_string")
+        out["availableCode"] = upd.get("software_version")
+        out["notes"] = upd.get("release_notes_url")
+    with _fw_lock:
+        _fw_cache[node] = (time.time(), out)
+    return out
+
+
+def firmware_update(node, version):
+    """Run the update. Long - the image is fetched and then served to the device."""
+    ms = ms_of(node)
+    if ms is None:
+        return
+    try:
+        log(f"node {node}: updating firmware to {version}", "step")
+        # No timeout worth naming: this downloads an image and then waits for a
+        # sleepy device to fetch and apply it. The device's own UpdateState is
+        # what the panel watches, not this call returning.
+        MS.call("update_node", {"node_id": ms, "software_version": version},
+                timeout=3600.0)
+        log(f"node {node}: firmware update finished", "ok")
+        with _fw_lock:
+            _fw_cache.pop(node, None)
+    except MatterError as exc:
+        log(f"node {node}: firmware update failed: {exc}", "err")
+
+
 def inspect_node(node) -> dict:
     """Everything a device exposes, decoded: endpoints, clusters, attributes.
 
@@ -1563,6 +1638,12 @@ BULB_ATTRS = {
     # sleeping device does not receive the command for another six to fifteen
     # seconds and then runs its full duration from there.
     (0x0003, 0x0000): ("identify", int),
+    # The device's own account of an update in progress. Shown rather than a
+    # spinner of our own: only the device knows whether it is downloading,
+    # applying, or waiting - and an update is long enough that "something is
+    # happening" is not good enough.
+    (0x002A, 0x0002): ("otaState", int),
+    (0x002A, 0x0003): ("otaProgress", int),
     (0x0006, 0x0000): ("on", bool),
     (0x0008, 0x0000): ("level", int),
     (0x0008, 0x0011): ("onlevel", int),
@@ -1796,7 +1877,9 @@ def refresh_bulbs(force: bool = False) -> dict:
         # DEVICE is doing rather than a timer the browser started. It applies to
         # every kind, which is why it sits above the split.
         row = {"ok": ok, "readAt": st.get("readAt"),
-               "identify": st.get("identify")}
+               "identify": st.get("identify"),
+               "otaState": st.get("otaState"),
+               "otaProgress": st.get("otaProgress")}
         if kind == "bulb":
             row.update({"on": st.get("on"), "level": st.get("level"),
                         "mireds": st.get("mireds"), "onlevel": st.get("onlevel"),
@@ -2556,6 +2639,15 @@ class Handler(BaseHTTPRequestHandler):
                              for _, _, k, lab, u, _ in MEASURED]
             d["airQualityWords"] = AIR_QUALITY_WORDS
             self._send(d)
+
+        elif self.path.startswith("/api/firmware"):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                node = int((q.get("node") or ["0"])[0])
+            except ValueError:
+                node = 0
+            fresh = "fresh=1" in self.path
+            self._send(firmware_for(node, fresh=fresh))
 
         elif self.path.startswith("/api/inspect"):
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -3567,6 +3659,27 @@ class Handler(BaseHTTPRequestHandler):
                                "level": st.get("level"), "mireds": st.get("mireds"),
                                "onlevel": st.get("onlevel"), "held": overridden(node),
                                "ctMin": st.get("ctMin"), "ctMax": st.get("ctMax")})
+
+        if self.path == "/api/firmware":
+            node = int(body.get("node") or 0)
+            version = body.get("version")
+            if not node or version is None:
+                return self._send({"error": "need 'node' and 'version'"}, status=400)
+            fw = firmware_for(node)
+            if fw.get("availableCode") != version:
+                # The offer moved, or somebody is asking for a version that was
+                # never offered. Either way, do not push an image at a device on
+                # the strength of a stale screen.
+                return self._send({"error": "that version is no longer the one "
+                                            "on offer - reopen and try again"},
+                                  status=409)
+            # In the background: this fetches an image and then waits for a
+            # sleepy device to take it, which is minutes. The device's own
+            # UpdateState is what the panel follows meanwhile.
+            threading.Thread(target=firmware_update, args=(node, version),
+                             name=f"ota-{node}", daemon=True).start()
+            return self._send({"node": node, "started": True,
+                               "version": fw.get("available")})
 
         if self.path == "/api/identify":
             node = body.get("node")
