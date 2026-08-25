@@ -108,9 +108,9 @@ without going to look.
 - **Battery.** A subscription costs the device a transmission only when the door
   actually moves. Polling costs one every ~11 s for ever, which is what the
   cluster exists to avoid.
-- **Identify is accepted and the protocol works; the LED stays dark on a flat
-  battery.** This was unresolved for a while and looked like a Matter problem.
-  It is not. Sending `Identify(60)` and watching `IdentifyTime`:
+- **Identify is accepted and the protocol demonstrably works. The LED still does
+  not light, and that is unexplained.** Sending `Identify(60)` and watching
+  `IdentifyTime`:
 
   ```
    1.9s  ACCEPTED by the device
@@ -119,23 +119,42 @@ without going to look.
   63.3s  back to 0 - finished
   ```
 
-  The device sat in identify mode for a full minute, counting down in real time,
-  and never lit its LED. So the command lands, the endpoint is right, and the
-  device state is right — it is *choosing* not to light it. Its PowerSource
-  cluster reads `BatChargeLevel = 2` (critical), `BatPercentRemaining = 0%`,
-  which is the obvious reason: reporting a door costs one brief transmission,
-  blinking an LED for a minute costs far more, and a nearly-flat sensor is right
-  to keep doing its job and drop the ornament.
+  The device sits in identify mode for a full minute, counting down in real
+  time, and never lights its LED. So the command lands, the endpoint is right,
+  and the device state is right — it is *choosing* not to light it, while IKEA's
+  own app blinks the same device.
 
-  `TriggerEffect` is **not implemented at all** — it answers `UNSUPPORTED_COMMAND`,
-  and `AcceptedCommandList` on the cluster is `[0]`, so plain `Identify` is the
-  only mechanism this device has. `IdentifyType` is 2, VisibleIndicator.
+  `TriggerEffect` is **not implemented at all** — it answers
+  `UNSUPPORTED_COMMAND`, and `AcceptedCommandList` on the cluster is `[0]`, so
+  plain `Identify` is the only mechanism this device has. `IdentifyType` is 2,
+  VisibleIndicator.
 
-- **It reports its battery, on endpoint 0.** PowerSource (`0x002F`) is there, and
-  the panel shows it as a gauge on the tile. Note the endpoint: the descriptor
-  the panel records deliberately skips endpoint 0, so readings are matched
-  against the node's whole attribute set instead — a battery could never be
-  found by walking the descriptor.
+  A low battery was ruled out: the cell reads 1.6 V and 100%, confirmed on a
+  multimeter. Still open.
+
+- **It reports its battery, on endpoint 0**, and the panel shows it as a gauge on
+  the tile. Two things to get right:
+
+  - **The endpoint.** PowerSource (`0x002F`) is on endpoint 0, and the descriptor
+    the panel records deliberately skips endpoint 0 — so readings are matched
+    against the node's whole attribute set instead. A battery could never be
+    found by walking the descriptor.
+  - **The attribute ids**, which are easy to take one off and which fail
+    *plausibly* rather than loudly. Reading `0x0C` as the voltage, `0x0E` as the
+    percentage and `0x10` as the charge level yields "200 mV, 0%, critical" for a
+    perfectly good cell — a complete and convincing account of a dead battery,
+    assembled entirely from correct readings of the wrong attributes. The real
+    layout:
+
+    | id | attribute | note |
+    |---|---|---|
+    | `0x0B` | BatVoltage | mV — 1604 here |
+    | `0x0C` | BatPercentRemaining | **half** percent, 0..200 |
+    | `0x0E` | BatChargeLevel | 0 ok, 1 warning, 2 critical |
+    | `0x10` | BatReplaceability | not a charge level |
+
+    The voltage is worth surfacing for exactly this reason: it is the one battery
+    figure a multimeter can check, and it is what caught the mistake.
 
 ## Our own hardware
 

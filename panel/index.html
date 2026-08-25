@@ -2770,7 +2770,7 @@ function headlineMeasure(measured) {
   // of text - a door sensor whose headline read "battery 40%" would have
   // stopped saying whether the door was open.
   const keys = Object.keys(measured || {}).filter(
-    k => k !== 'battery' && k !== 'batteryState');
+    k => k !== 'battery' && k !== 'batteryState' && k !== 'batteryVolts');
   if (keys.includes('airquality')) { return 'airquality'; }
   return order.find(k => keys.includes(k)) || null;
 }
@@ -2784,7 +2784,10 @@ function battOf(measured) {
   const state = measureText('batteryState', measured.batteryState);
   const said = ['ok', 'low', 'critical'].includes(state) ? state
     : (pct <= 10 ? 'critical' : pct <= 25 ? 'low' : 'ok');
-  return { pct, state: said, title: `battery ${pct}%` + (said === 'ok' ? '' : ' \u2014 ' + said) };
+  const volts = typeof measured.batteryVolts === 'number'
+    ? ` \u00b7 ${measured.batteryVolts.toFixed(2)} V` : '';
+  return { pct, state: said,
+           title: `battery ${pct}%` + (said === 'ok' ? '' : ' \u2014 ' + said) + volts };
 }
 
 function deviceOpts(d) {

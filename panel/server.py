@@ -220,12 +220,20 @@ MEASURED = [
     (0x0045, 0x0000, "contact",      "contact",      "",         1),
     # PowerSource, on ENDPOINT 0 - see read_measurements. A battery device that
     # will not say how much it has left is a device that stops one day without
-    # warning, and it explains behaviour long before it explains silence: this
-    # sensor refuses to blink its identify LED at all on a flat battery while
-    # still reporting the door perfectly, because the LED is the expensive part.
-    # BatPercentRemaining counts in HALF percent, 0..200.
-    (0x002F, 0x000E, "battery",      "battery",      "%",        0.5),
-    (0x002F, 0x0010, "batteryState", "battery",      "",         1),
+    # warning.
+    #
+    # MIND THE ATTRIBUTE IDS. They are easy to get wrong by one, and getting
+    # them wrong does not look like an error - it looks like a reading. Taking
+    # 0x0C for the voltage, 0x0E for the percentage and 0x10 for the charge
+    # level produced "200 mV, 0%, critical" for a cell measuring 1.6 V on a
+    # multimeter, which is an entirely believable story about a dead battery.
+    #   0x0B BatVoltage             mV
+    #   0x0C BatPercentRemaining    HALF percent, 0..200
+    #   0x0E BatChargeLevel         0 ok, 1 warning, 2 critical
+    #   0x10 BatReplaceability      not a charge level at all
+    (0x002F, 0x000B, "batteryVolts", "battery",      "V",        0.001),
+    (0x002F, 0x000C, "battery",      "battery",      "%",        0.5),
+    (0x002F, 0x000E, "batteryState", "battery",      "",         1),
 ]
 
 # Readings that are a state rather than a quantity. The index is the value:
