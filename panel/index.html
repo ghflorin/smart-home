@@ -594,7 +594,7 @@
   /* Something is happening, and the row should look like it even in the
      stretches where the device reports no percentage at all. */
   .fw .fwv.busy { color: var(--link); animation: fwpulse 1.6s ease-in-out infinite; }
-  .fw .fwv.bad  { color: var(--bad); }
+  .fw .fwv.bad  { color: var(--bad); flex-basis: 100%; }
   .fw .fwv.good { color: var(--good); }
   @keyframes fwpulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
   @media (prefers-reduced-motion: reduce) {
@@ -3743,7 +3743,6 @@ function fmtVal(v) {
 function firmwareBox(sheet, dev) {
   const box = document.createElement('div');
   box.className = 'fw';
-  box.innerHTML = '<span class="fwv">checking for firmware\u2026</span>';
   sheet.append(box);
 
   // ONE field decides what this row says, and the Pi composes it.
@@ -3755,40 +3754,43 @@ function firmwareBox(sheet, dev) {
   // update and an update never started looked identical. The Pi is the only
   // place that knows all three AND the outcome, so it says the sentence and
   // this draws it.
-  const line = txt => {
-    box.innerHTML = '';
+  const line = (txt, cls) => {
     const w = document.createElement('span');
-    w.className = 'fwv';
+    w.className = 'fwv' + (cls ? ' ' + cls : '');
     w.textContent = txt;
     box.append(w);
     return w;
   };
 
+  // Every repaint starts from an empty box. It is redrawn every few seconds
+  // while an update runs, and a branch that appended without clearing first
+  // stacked a fresh copy of the row on each pass - four offers, four buttons.
   const paint = fw => {
     if (!box.isConnected) { clearInterval(box._t); return; }
     const s = (fw && fw.status) || {};
-    if (s.phase === 'running') { line(s.text).className = 'fwv busy'; return; }
-    if (s.phase === 'failed')  { line(s.text).className = 'fwv bad'; }
-    else if (s.phase === 'done') { line(s.text).className = 'fwv good'; return; }
-    else if (!fw || fw.error) { line(fw && fw.error ? 'firmware: ' + fw.error
-                                                    : 'firmware unknown'); return; }
-    if (!fw.available) {
-      if (s.phase !== 'failed') {
-        line('firmware ' + (fw.installed || '?') + ' \u00b7 up to date');
-      }
+    box.innerHTML = '';
+    if (s.phase === 'running') { line(s.text, 'busy'); return; }
+    if (s.phase === 'done') { line(s.text, 'good'); return; }
+    // A failure keeps its sentence AND gets the offer back underneath, so a
+    // retry is a choice rather than the interface quietly pretending the last
+    // attempt never happened.
+    const failed = s.phase === 'failed';
+    if (failed) { line(s.text, 'bad'); }
+    if (!fw || fw.error) {
+      if (!failed) { line(fw && fw.error ? 'firmware: ' + fw.error : 'firmware unknown'); }
       return;
     }
-    // An offer, and a way to take it. After a failure the sentence above stays
-    // and the button joins it, so a retry is a choice rather than the interface
-    // quietly pretending the last attempt never happened.
-    const w = document.createElement('span');
-    w.className = 'fwv';
+    if (!fw.available) {
+      if (!failed) { line('firmware ' + (fw.installed || '?') + ' \u00b7 up to date'); }
+      return;
+    }
+    const w = line('');
     w.innerHTML = 'firmware <b>' + esc(fw.installed) + '</b> \u2192 <b class="new">'
                 + esc(fw.available) + '</b>';
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'fwgo';
-    b.textContent = s.phase === 'failed' ? 'try again' : 'update';
+    b.textContent = failed ? 'try again' : 'update';
     b.onclick = async () => {
       b.disabled = true;
       b.textContent = 'starting\u2026';
@@ -3799,16 +3801,18 @@ function firmwareBox(sheet, dev) {
           body: JSON.stringify({ node: dev.node, version: fw.availableCode })
         })).json();
         if (r.error) { b.textContent = 'failed'; setStatus(r.error, 'err'); return; }
-        line('preparing the update\u2026').className = 'fwv busy';
+        box.innerHTML = '';
+        line('preparing the update\u2026', 'busy');
         poll();
       } catch (err) { b.textContent = 'failed'; }
     };
-    box.append(w, b);
+    box.append(b);
   };
 
   const poll = () => fetch('/api/firmware?node=' + encodeURIComponent(dev.node))
     .then(r => r.json()).then(paint).catch(() => {});
 
+  line('checking for firmware\u2026');
   poll();
   // An update is minutes long and its progress arrives as attribute reports, so
   // the row has to keep asking. Cheap: the Pi answers from its cache and only

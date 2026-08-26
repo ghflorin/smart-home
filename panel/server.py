@@ -1443,6 +1443,13 @@ _ota_running = set()
 # the one outcome worth ruling out by construction.
 _ota_status = {}
 
+# The last progress figure seen for a node, and when. A stalled transfer keeps
+# reporting the percentage it reached - the device said "downloading 13%" once
+# and then stopped answering entirely - so a row that just echoes the device
+# looks like an update still going somewhere. It is not.
+_ota_seen = {}
+OTA_STALL = 180
+
 
 def ota_note(node, phase, text):
     _ota_status[node] = {"phase": phase, "text": text, "at": time.time()}
@@ -1459,6 +1466,14 @@ def ota_status(node) -> dict:
         if isinstance(code, int) and code > 1:
             pct = s.get("otaProgress")
             word = OTA_STATES.get(code, "updating")
+            seen, now = _ota_seen.get(node), time.time()
+            if not seen or seen[0] != pct:
+                _ota_seen[node] = (pct, now)
+            elif now - seen[1] > OTA_STALL:
+                mins = int((now - seen[1]) / 60)
+                return {"phase": "running",
+                        "text": f"stuck at {pct}% for {mins} min - "
+                                f"the device stopped answering"}
             return {"phase": "running",
                     "text": word + (f" {pct}%" if isinstance(pct, int) else "")}
         return {"phase": "running", "text": "preparing the update\u2026"}
@@ -1543,6 +1558,7 @@ def firmware_update(node, version):
     with _fw_lock:
         _ota_running.add(node)
     _ota_status.pop(node, None)
+    _ota_seen.pop(node, None)
     before = (firmware_for(node) or {}).get("installed")
     began = time.time()
     try:
