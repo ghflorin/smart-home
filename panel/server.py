@@ -1666,6 +1666,16 @@ def firmware_update(node, version):
     else:
         ota_note(node, "failed", f"the update did not take - still on {before}")
 
+    # Settle what the tiles are told, now that the device has rebooted and can
+    # be believed. The cache was dropped when the transfer ended, but the open
+    # sheet polls this every few seconds and would have refilled it from a
+    # device that had not restarted yet - leaving "update available" on a bulb
+    # that had just taken one, for the whole hour the cache lives.
+    try:
+        firmware_for(node, fresh=True)
+    except Exception as exc:  # noqa: BLE001 - the update itself already stands
+        log(f"node {node}: firmware re-check failed: {exc}", "warn")
+
 
 def inspect_node(node) -> dict:
     """Everything a device exposes, decoded: endpoints, clusters, attributes.

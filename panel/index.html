@@ -3818,6 +3818,13 @@ function firmwareBox(sheet, dev) {
   const paint = fw => {
     if (!box.isConnected) { clearInterval(box._t); return; }
     const s = (fw && fw.status) || {};
+    // An update that has just ended changes what the TILES should say, and the
+    // tile has no idea this row exists. Tell it the moment the outcome lands,
+    // rather than leaving a cloud on a device that has just taken its update
+    // until the next slow sweep.
+    if (box._phase !== s.phase
+        && (s.phase === 'done' || s.phase === 'failed')) { loadUpdates(); }
+    box._phase = s.phase;
     box.innerHTML = '';
     if (s.phase === 'running') { line(s.text, 'busy'); return; }
     if (s.phase === 'done') { line(s.text, 'good'); return; }
@@ -6290,7 +6297,10 @@ async function loadUpdates() {
     /* Nothing is drawn for a device we know nothing about, which is correct. */
   }
 }
-setInterval(loadUpdates, 600000);
+// Two minutes. The Pi answers from a cache, so this costs a few hundred bytes
+// and no radio traffic - and the alternative is a stale badge on the one
+// screen somebody is looking at while they update something.
+setInterval(loadUpdates, 120000);
 
 async function loadBulbs(fresh) {
   const d = state.devices || {};
