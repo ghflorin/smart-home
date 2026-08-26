@@ -1872,6 +1872,64 @@ def power_watch() -> None:
             log(f"bulb {node}: power watch failed: {exc}", "warn")
 
 
+SWITCH_CLUSTER = 0x003B
+
+# Measured on a BILRESA, whose two buttons are endpoints 1 and 2. The gesture is
+# only ever known from these; the cluster's CurrentPosition attribute flips 0/1
+# around every press and cannot tell one tap from two.
+#
+#   short press   InitialPress -> ShortRelease -> MultiPressComplete count 1
+#   double press  the same twice, MultiPressOngoing between, then count 2
+#   LONG PRESS    InitialPress -> LongPress -> LongRelease, and NO
+#                 MultiPressComplete at all - so anything that listens only for
+#                 the completion event silently ignores every long press.
+SWITCH_EVENTS = {
+    0x00: "latched", 0x01: "down", 0x02: "long", 0x03: "up",
+    0x04: "long-up", 0x05: "counting", 0x06: "complete",
+}
+
+# What a press is worth waiting for. The device closes its multi-press window
+# about half a second after the last release, and that wait is the price of
+# telling a tap from a double tap - there is no way to know at the first tap
+# whether a second one is coming. Half a second on a light is not felt; getting
+# the wrong action is.
+GESTURE_EVENTS = {0x02, 0x06}
+
+
+def gesture_of(event_id, data):
+    """The press a person made, or None for the events that only lead up to one."""
+    if event_id == 0x02:
+        return "long"
+    if event_id == 0x06:
+        n = data.get("totalNumberOfPressesCounted")
+        if n == 1:
+            return "press"
+        if n == 2:
+            return "double"
+        return f"press-{n}" if isinstance(n, int) else None
+    return None
+
+
+def matter_event(node, endpoint, cluster, event_id, data):
+    """A button was pressed. Nothing else here reports through this path yet."""
+    if cluster != SWITCH_CLUSTER:
+        return
+    name = SWITCH_EVENTS.get(event_id, f"event {event_id}")
+    gesture = gesture_of(event_id, data)
+    if gesture is None:
+        # Logged at debug volume rather than dropped, because the run-up is what
+        # tells you WHY a gesture did not arrive when somebody says the button
+        # did nothing.
+        log(f"node {node} button {endpoint}: {name}", "dim")
+        return
+    log(f"node {node} button {endpoint}: {gesture}", "ok")
+    # The press itself is proof the device is alive, exactly as a pushed reading
+    # would be, and it is the only thing a button ever sends.
+    state_put(node, {"readAt": time.time(), "okAt": time.time(), "ok": True,
+                     "press": {"button": endpoint, "gesture": gesture,
+                               "at": time.time()}})
+
+
 def matter_value(node, cluster, attr, val, pushed=True):
     """One reading from matter-server, folded into state as a poll would be.
 
@@ -1934,7 +1992,7 @@ def matter_watch():
     if not MATTER_LINK:
         log("matter-server link is off (PANEL_MATTER_LINK=0)", "info")
         return
-    link = MatterLink(MATTER_WS, matter_value, log)
+    link = MatterLink(MATTER_WS, matter_value, log, on_event=matter_event)
 
     def remap():
         while True:

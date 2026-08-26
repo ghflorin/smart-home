@@ -48,10 +48,18 @@ class MatterLink:
     that the lights depend on.
     """
 
-    def __init__(self, url, on_value, log):
+    def __init__(self, url, on_value, log, on_event=None):
         self._url = url
         # (our_node, cluster, attribute, value, pushed)
         self._on_value = on_value
+        # (our_node, endpoint, cluster, event_id, data), or None to ignore them.
+        #
+        # Separate from on_value because a Matter EVENT is not an attribute that
+        # happens to have changed. A button press has no resting value to read:
+        # by the time anything could poll for it the finger is long gone. It is
+        # only ever delivered as an event, and a device whose entire purpose is
+        # pressing needs that path or it does nothing at all.
+        self._on_event = on_event
         self._log = log
         # matter-server assigns its own node ids on its own fabric, so 1004 here
         # is 1 there. devices.json carries the mapping.
@@ -149,6 +157,28 @@ class MatterLink:
                     continue
                 for path, val in (node.get("attributes") or {}).items():
                     self._feed(ours, path, val, pushed=False)
+            return
+
+        # Something HAPPENED, as opposed to something being different.
+        #
+        # Both arrive for a button - the Switch cluster keeps a CurrentPosition
+        # attribute that flips 0/1 around a press - but only the events carry
+        # the gesture. Pressing twice quickly reports as two identical position
+        # changes and one MultiPressComplete saying "that was a double", and no
+        # amount of watching the attribute recovers the difference.
+        if msg.get("event") == "node_event":
+            data = msg.get("data")
+            if not isinstance(data, dict) or self._on_event is None:
+                return
+            ours = self._ours(data.get("node_id"))
+            if ours is None:
+                return
+            try:
+                self._on_event(ours, int(data.get("endpoint_id")),
+                               int(data.get("cluster_id")),
+                               int(data.get("event_id")), data.get("data") or {})
+            except (TypeError, ValueError):
+                return
             return
 
         # And every change after it. This is the part that is not polling, and
