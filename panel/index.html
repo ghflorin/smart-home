@@ -2410,7 +2410,8 @@
 const $ = (s, r = document) => r.querySelector(s);
 
 const state = { devices: null, switches: [], bySwitch: {}, raw: null,
-                locks: {}, bulbs: {}, updates: {}, view: 'home' };
+                locks: {}, bulbs: {}, updates: {}, byButton: {},
+                remotes: new Set(), view: 'home' };
 
 function setStatus(text, cls) {
   const el = $('#status');
@@ -2452,6 +2453,9 @@ async function load() {
   try {
     const b = await (await api('/api/bindings')).json();
     state.bySwitch = b.bySwitch || {};
+    // A remote has one list per button, because it has more than one button.
+    state.byButton = b.byButton || {};
+    state.remotes = new Set(b.remotes || []);
     state.raw = b.raw;
     // The state comes from the server, in layers. The old version checked
     // `b.raw.error`, but `raw` is keyed by switch node, so that field never
@@ -3171,6 +3175,28 @@ function bulbOpts(b) {
 }
 
 function switchOpts(sw) {
+  // A remote has nothing to lock and nothing that can be locked: it carries no
+  // client cluster, so a padlock on its tile would offer an action that cannot
+  // happen. It gets the switch icon and the one thing it can do - blink, so you
+  // can tell which of them it is.
+  if (state.remotes.has(sw.node)) {
+    const per = state.byButton[String(sw.node)] || {};
+    const drives = new Set();
+    Object.values(per).forEach(list => (list || []).forEach(n => drives.add(n)));
+    return {
+      node: sw.node,
+      update: !!state.updates[String(sw.node)],
+      icon: ICONS.switch,
+      cls: '',
+      name: sw.name,
+      state: drives.size ? `${drives.size} bulb${drives.size === 1 ? '' : 's'}`
+                         : 'controls nothing yet',
+      quickTitle: 'identify \u2014 ' + sw.name,
+      onQuick: q => identifySwitch(sw, q),
+      openTitle: 'what ' + sw.name + ' controls',
+      onOpen: () => editRemote(sw),
+    };
+  }
   const lk = state.locks[String(sw.node)] || {};
   const isLock = lk.role === 1 || sw.role === 'lock';
   const bound = state.bySwitch[String(sw.node)] || [];
@@ -5814,8 +5840,70 @@ document.addEventListener('pointerup', ev => {
 document.addEventListener('pointercancel', () => endDrag(false));
 
 // ---------- edit a switch's bindings ----------
+/* The same job as editLinks, for a remote that cannot be wired to anything.
+ *
+ * Two differences, and both are honest rather than cosmetic. It has a list per
+ * BUTTON, because it has two and they should not do the same thing. And it
+ * saves instantly - there is no sleepy device to wait for, because nothing is
+ * written to the device at all. What that costs is written in the note: the
+ * remote goes dead whenever the Pi does, which is not true of our own switch.
+ */
+function editRemote(sw) {
+  const per = state.byButton[String(sw.node)] || {};
+  const bulbs = state.devices.bulbs || [];
+  const sheet = $('#sheet');
+  const section = ep => `
+    <div class="hdr">button ${ep}</div>
+    <div class="pick" data-button="${ep}">${renderPick(
+        bulbs, new Set((per[String(ep)] || [])), sw.where, 'no bulbs')}</div>`;
+
+  sheet.innerHTML = `<h2>bindings</h2>
+    <div class="who">${esc(sw.name)} &middot; node ${sw.node} &middot; remote</div>
+    ${section(1)}${section(2)}
+    <button class="go">save</button>
+    <div class="note">
+      Check what each button controls. A press toggles them together &mdash; one
+      decision for the whole group, so two bulbs on one button cannot end up
+      opposite each other. Held down, the top button brightens and the bottom
+      one dims.<br><br>
+      This remote cannot be wired to a bulb: its buttons carry no client
+      cluster, so they report a press and nothing else. The Pi is what acts on
+      it &mdash; which means it does nothing while the Pi is off, unlike the
+      switches we build.
+    </div>`;
+  $('#overlay').classList.add('on');
+
+  sheet.querySelector('.go').onclick = async (e) => {
+    const btn = e.target;
+    btn.disabled = true;
+    btn.textContent = 'saving\u2026';
+    let err = null;
+    for (const box of sheet.querySelectorAll('.pick[data-button]')) {
+      const want = [...box.querySelectorAll('input:checked')].map(i => Number(i.value));
+      try {
+        const j = await (await api('/api/bindings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ switch: sw.node,
+                                 button: Number(box.dataset.button),
+                                 bulbs: want })
+        })).json();
+        if (j.error) { err = j.error; break; }
+      } catch (e2) { err = String(e2); break; }
+    }
+    if (err) {
+      sheet.innerHTML = `<h2>bindings</h2><div class="failed">${esc(err)}</div>`;
+      sheetOnClose = load;
+      return;
+    }
+    closeSheet();
+    load();
+  };
+}
+
 function editLinks(swNode) {
   const sw = state.switches.find(s => s.node === swNode);
+  if (state.remotes.has(swNode)) { return editRemote(sw); }
   const bound = new Set((state.bySwitch[String(swNode)] || []).map(e => e.node));
   const lk = state.locks[String(swNode)] || {};
   const isLock = lk.role === 1 || sw.role === 'lock';

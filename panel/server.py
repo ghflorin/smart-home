@@ -154,6 +154,60 @@ def all_devices(devices: dict) -> list:
             + list(devices.get("devices", [])))
 
 
+# A remote is a switch that cannot be wired to anything.
+#
+# Ours has the Binding cluster and an OnOff client, so a binding table written
+# into it makes it command the bulb directly - and it keeps working with the Pi
+# switched off, because the instruction lives in the device. A bought remote
+# like the BILRESA has neither: its endpoints implement only Identify,
+# Descriptor and Switch, and their ClientList is empty, so it cannot originate a
+# command at all. It reports that it was pressed and nothing more.
+#
+# It is still a switch as far as the panel is concerned - the same editor picks
+# what it controls - but the mapping lives HERE and the Pi is what acts on it.
+REMOTE_TYPES = {0x000F}
+
+
+def is_remote(entry: dict) -> bool:
+    if entry.get("remote"):
+        return True
+    return bool(set((entry.get("desc") or {}).get("types") or []) & REMOTE_TYPES)
+
+
+def migrate_remotes(devices: dict) -> bool:
+    """Move any remote filed as a sensor into the switch list. Returns whether
+    anything moved.
+
+    Commissioning asks the device what it is and files a non-light under
+    `devices`, which is right for everything that is read and wrong for a thing
+    that is pressed. Done here rather than by hand so an install that already
+    has one does not need editing.
+    """
+    moved = []
+    keep = []
+    for d in devices.get("devices") or []:
+        (moved if is_remote(d) else keep).append(d)
+    if not moved:
+        return False
+    devices["devices"] = keep
+    sws = devices.setdefault("switches", [])
+    for d in moved:
+        d["remote"] = True
+        sws.append(d)
+    return True
+
+
+def remote_buttons(entry: dict) -> dict:
+    """Which bulbs each button drives: {"1": [node, ...], "2": [...]}."""
+    out = {}
+    for ep, cfg in (entry.get("buttons") or {}).items():
+        if isinstance(cfg, list):          # the short form, bulbs only
+            out[str(ep)] = [int(n) for n in cfg]
+        elif isinstance(cfg, dict):
+            out[str(ep)] = [int(n) for n in cfg.get("bulbs") or []]
+    return out
+
+
 def switches(devices: dict) -> list:
     """The list of switches. The old single-'switch' format is still accepted so
     existing installs keep working."""
@@ -1910,6 +1964,83 @@ def gesture_of(event_id, data):
     return None
 
 
+# What each button does, when the file does not say. A two-button remote in a
+# room with lights wants the obvious thing, and anything cleverer should be a
+# choice somebody made rather than a default they have to discover.
+#
+# `toggle` rather than on/off because the same button may be pointed at one
+# room or at three, and a toggle is right either way. Whether the group is on is
+# decided ONCE and sent to all of them, so two bulbs on one button cannot end up
+# opposite each other - the same reason our own switch sends its state rather
+# than a toggle each.
+DEFAULT_GESTURES = {"press": "toggle", "long": "brighter", "double": None}
+DEFAULT_GESTURES_2 = {"press": "toggle", "long": "dimmer", "double": None}
+LEVEL_STEP = 25
+
+_press_q = queue.Queue()
+
+
+def remote_action(entry, button, gesture):
+    cfg = (entry.get("buttons") or {}).get(str(button))
+    if isinstance(cfg, dict) and gesture in cfg:
+        return cfg[gesture]
+    table = DEFAULT_GESTURES_2 if str(button) == "2" else DEFAULT_GESTURES
+    return table.get(gesture)
+
+
+def press_watch():
+    """Act on presses, off the listener's thread.
+
+    Commanding a bulb takes a Matter round trip, and the socket this arrived on
+    is the one every other device reports through. Doing the work here is what
+    keeps one slow bulb from delaying a door sensor.
+    """
+    while True:
+        node, button, gesture = _press_q.get()
+        try:
+            remote_act(node, button, gesture)
+        except Exception as exc:  # noqa: BLE001 - a press is not worth dying for
+            log(f"node {node} button {button}: {gesture} failed: {exc}", "err")
+
+
+def remote_act(node, button, gesture):
+    try:
+        devices = load_devices()
+    except (OSError, ValueError):
+        return
+    entry = next((x for x in switches(devices) if x["node"] == node), None)
+    if entry is None:
+        return
+    targets = remote_buttons(entry).get(str(button)) or []
+    action = remote_action(entry, button, gesture)
+    if not targets or not action:
+        return
+    bulbs = {b["node"]: b for b in devices.get("bulbs", [])}
+    if action == "toggle":
+        # One decision for the whole group, taken before anything is sent.
+        want_on = not any(state_of(n).get("on") for n in targets if n in bulbs)
+        action = "on" if want_on else "off"
+    for n in targets:
+        b = bulbs.get(n)
+        if b is None:
+            continue
+        ep = int(b.get("endpoint", 1))
+        if action in ONOFF_CMD:
+            err = m_cmd(n, ep, 0x0006, ONOFF_CMD[action])
+        elif action in ("brighter", "dimmer"):
+            err = m_cmd(n, ep, 0x0008, "StepWithOnOff",
+                        {"stepMode": 0 if action == "brighter" else 1,
+                         "stepSize": LEVEL_STEP, "transitionTime": 2,
+                         "optionsMask": 0, "optionsOverride": 0})
+        else:
+            log(f"node {node} button {button}: unknown action {action!r}", "warn")
+            return
+        if err:
+            log(f"bulb {n}: {action} from button {button} failed: {err}", "warn")
+    log(f"node {node} button {button}: {action} on "
+        f"{len(targets)} bulb{'' if len(targets) == 1 else 's'}", "ok")
+
+
 def matter_event(node, endpoint, cluster, event_id, data):
     """A button was pressed. Nothing else here reports through this path yet."""
     if cluster != SWITCH_CLUSTER:
@@ -1928,6 +2059,7 @@ def matter_event(node, endpoint, cluster, event_id, data):
     state_put(node, {"readAt": time.time(), "okAt": time.time(), "ok": True,
                      "press": {"button": endpoint, "gesture": gesture,
                                "at": time.time()}})
+    _press_q.put((node, endpoint, gesture))
 
 
 def matter_value(node, cluster, attr, val, pushed=True):
@@ -2949,8 +3081,14 @@ class Handler(BaseHTTPRequestHandler):
             # From the state held on the Pi, so it is instant. Reading from the
             # device happens in the background - see the "state kept on the Pi"
             # section.
-            sw_list = switches(load_devices())
+            _devs = load_devices()
+            sw_list = switches(_devs)
             out = {}
+            # A remote keeps its mapping here, not in the device, so it has no
+            # table to read back. The flat list is the union of its buttons, so
+            # anything that only wants "what does this control" still works.
+            by_button = {}
+            remotes = []
             # "reachable" stays honest: it counts the switches whose LAST read
             # succeeded, not the switches we happen to hold an old opinion
             # about. A switch unplugged an hour ago is "not answering", even
@@ -2959,10 +3097,24 @@ class Handler(BaseHTTPRequestHandler):
                       "matter": _matter_ok}
             for sw in sw_list:
                 st = state_of(sw["node"])
-                out[str(sw["node"])] = st.get("binding") or []
+                key = str(sw["node"])
+                if is_remote(sw):
+                    remotes.append(sw["node"])
+                    per = remote_buttons(sw)
+                    by_button[key] = per
+                    seen, flat = set(), []
+                    for nodes in per.values():
+                        for n in nodes:
+                            if n not in seen:
+                                seen.add(n)
+                                flat.append({"node": n})
+                    out[key] = flat
+                else:
+                    out[key] = st.get("binding") or []
                 if st.get("ok"):
                     health["reachable"] += 1
-            self._send({"bySwitch": out, "raw": None, "health": health,
+            self._send({"bySwitch": out, "byButton": by_button,
+                        "remotes": remotes, "raw": None, "health": health,
                         "rev": state_rev()})
 
         elif self.path.startswith("/api/lock"):
@@ -3305,6 +3457,29 @@ class Handler(BaseHTTPRequestHandler):
                 log(f"unknown switch: {sw_node}", "err")
                 return self._send({"error": f"unknown switch: {sw_node}"},
                                   status=400)
+
+            if is_remote(sw):
+                # Nothing is written to the device, because there is nowhere to
+                # write it: no Binding cluster, and no client cluster that could
+                # send a command even if there were. Saving the file IS the
+                # whole operation, and it takes effect on the next press.
+                try:
+                    button = str(int(body.get("button")))
+                except (TypeError, ValueError):
+                    return self._send({"error": "which button?"}, status=400)
+                known = {b["node"] for b in devices.get("bulbs", [])}
+                keep = [n for n in want if n in known]
+                cfg = sw.setdefault("buttons", {})
+                if isinstance(cfg.get(button), dict):
+                    cfg[button]["bulbs"] = keep
+                else:
+                    cfg[button] = keep
+                save_devices(devices)
+                log(f"remote {sw_node} button {button} now drives "
+                    f"{len(keep)} bulb{'' if len(keep) == 1 else 's'}", "ok")
+                state_wake()
+                return self._send({"switch": sw_node, "button": int(button),
+                                   "bulbs": keep, "remote": True})
             # A lock does not control bulbs, it controls switches. Different
             # cluster, different endpoint, and the targets need an ACL -
             # switches had none until now, because nobody wrote anything to
@@ -3551,10 +3726,25 @@ class Handler(BaseHTTPRequestHandler):
                     entry["caps"] = detect_caps(node, ms=ms_node_id)
                     bulbs.append(entry)
                     kind = "bulb"     # from here on it is wired like one
+                elif is_remote(entry):
+                    # Pressed, not read. It belongs with the switches even
+                    # though nothing can be written into it.
+                    entry["remote"] = True
+                    sws.append(entry)
+                    kind = "remote"
                 else:
                     others.append(entry)
 
             save_devices(devices)
+
+            if kind == "remote":
+                # No ACL and no binding table: there is nothing in the device to
+                # write them to. What it controls is chosen in the panel and
+                # kept here, so it is ready to be edited immediately.
+                state_wake()
+                return self._send({"node": node, "name": name,
+                                   "kind": entry["kind"], "remote": True,
+                                   "desc": entry["desc"]})
 
             if kind not in ("switch", "bulb"):
                 # Nothing else to wire: an ACL and a binding are what a SWITCH
@@ -4012,4 +4202,12 @@ if __name__ == "__main__":
     threading.Thread(target=matter_watch, name="matter", daemon=True).start()
     threading.Thread(target=power_watch, name="power", daemon=True).start()
     threading.Thread(target=firmware_watch, name="firmware", daemon=True).start()
+    threading.Thread(target=press_watch, name="presses", daemon=True).start()
+    try:
+        devs = load_devices()
+        if migrate_remotes(devs):
+            save_devices(devs)
+            log("moved a remote out of the sensor list", "ok")
+    except (OSError, ValueError) as exc:
+        log(f"could not check for remotes: {exc}", "warn")
     ThreadingHTTPServer(("0.0.0.0", PANEL_PORT), Handler).serve_forever()
