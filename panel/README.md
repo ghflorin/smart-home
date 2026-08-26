@@ -134,6 +134,13 @@ Each tile does two jobs, split the way a phone splits them:
   switch;
 - **anywhere else** on the tile opens its settings.
 
+Two small marks can sit in a tile's top corner: a **battery gauge** for the
+devices that run on one, and a **cloud** when firmware is waiting for that
+device — the update itself lives at the foot of its sheet. When both apply the
+cloud steps aside. Availability comes from `/api/updates`, which the Pi answers
+from a cache a background sweep keeps warm, so opening the page never waits on
+the compliance ledger.
+
 Three tile sizes, from the picker on the right of the toolbar. `s` is a row
 (icon beside the text), `m` and `l` are squares. They are not one shape scaled:
 below about 150px a square has no room for a name. The choice is kept in

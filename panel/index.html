@@ -572,6 +572,26 @@
     .tile .batt.critical { animation: none; }
   }
 
+  /* An update is waiting for this device.
+   *
+   * Same corner as the battery, and it moves aside when there is one, because
+   * the two say different kinds of thing about the same device and neither is
+   * worth hiding. In the panel's link colour rather than a warning colour: an
+   * available update is an offer, not a fault, and nothing is wrong with a
+   * device that has not taken it. */
+  .tile .fwup {
+    position: absolute;
+    top: 6px;
+    right: 9px;
+    width: 15px;
+    height: 15px;
+    color: var(--link);
+    opacity: .75;
+    pointer-events: none;
+  }
+  .tile .fwup svg { width: 100%; height: 100%; display: block; }
+  .tile .fwup.beside-batt { right: 31px; }
+
   /* Firmware, at the foot of a device's sheet.
      A footnote while it is up to date, and a call to action when it is not -
      the version pair is the whole message, so it carries the emphasis rather
@@ -2390,7 +2410,7 @@
 const $ = (s, r = document) => r.querySelector(s);
 
 const state = { devices: null, switches: [], bySwitch: {}, raw: null,
-                locks: {}, bulbs: {}, view: 'home' };
+                locks: {}, bulbs: {}, updates: {}, view: 'home' };
 
 function setStatus(text, cls) {
   const el = $('#status');
@@ -2420,6 +2440,7 @@ async function load() {
   // changes without us: the wall switch sends Toggle straight to the bulb over
   // Thread and the Pi never sees it. See pollBulbs().
   loadBulbs();
+  loadUpdates();
 
   // The lock state is read separately so it does not delay the first render.
   // Without that, the page would sit blank for 30 s when nobody answers.
@@ -2591,6 +2612,15 @@ const CLUSTER_NAMES = { 6: 'on/off', 8: 'brightness', 768: 'colour' };
  * grid cannot survive, since the icon IS the button. currentColor throughout,
  * so the palette drives them and both themes work with no second copy. */
 const ICONS = {
+  // A cloud with the arrow coming down out of it: there is something for this
+  // device, and it is somewhere else. Drawn slightly heavier than the rest
+  // because it is worn at badge size in the corner of a tile, not at button
+  // size, and 1.6 disappears at fourteen pixels.
+  cloudDown: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M7.6 14.4a3.6 3.6 0 0 1-.2-7.2 5 5 0 0 1 9.4-1 3.4 3.4 0 0 1 .8 6.7"/>
+    <path d="M12 11.6v8"/><path d="M9.1 16.8 12 19.6l2.9-2.8"/></svg>`,
+
   bulb: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
     stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d="M12 2.8a6.2 6.2 0 0 0-3.8 11.1c.6.5 1 1.2 1.1 1.9l.1.7h5.2l.1-.7c.1-.7.5-1.4 1.1-1.9A6.2 6.2 0 0 0 12 2.8Z"/>
@@ -2794,7 +2824,8 @@ function buildTile(o) {
   meta.append(name, st);
   el.append(q, meta);
   el._parts = { q, name, st, txt, dot, fill: null, badge: null,
-                icon: null, lvl: null, batt: null, battPct: null };
+                icon: null, lvl: null, batt: null, battPct: null,
+                fwup: null };
 
   // Bound once, reading el._o when they fire. This is the whole reason a redraw
   // can leave the element alone: rebinding on every pass would be most of the
@@ -2881,6 +2912,22 @@ function paintTile(el, o) {
     p.batt.remove();
     p.batt = null;
     p.battPct = null;
+  }
+
+  // Drawn after the battery, because where it sits depends on whether there
+  // is one.
+  if (o.update) {
+    if (!p.fwup) {
+      p.fwup = document.createElement('span');
+      p.fwup.className = 'fwup';
+      p.fwup.innerHTML = ICONS.cloudDown;
+      setAttr(p.fwup, 'title', 'a firmware update is available');
+      el.append(p.fwup);
+    }
+    p.fwup.classList.toggle('beside-batt', !!p.batt);
+  } else if (p.fwup) {
+    p.fwup.remove();
+    p.fwup = null;
   }
 
   // A level of 0 is "off" and draws nothing; null is "this device has no level"
@@ -3024,6 +3071,7 @@ function deviceOpts(d) {
     quickTitle: 'identify \u2014 ' + d.name,
     onQuick: q => identifySwitch(d, q),
     batt: battOf(measured),
+    update: !!state.updates[String(d.node)],
     openTitle: 'readings for ' + d.name,
     onOpen: () => openDevice(d),
   };
@@ -3116,6 +3164,7 @@ function bulbOpts(b) {
     state: text,
     quickTitle: (on === true ? 'turn off' : 'turn on') + ' — ' + b.name,
     onQuick: q => toggleBulb(b, q),
+    update: !!state.updates[String(b.node)],
     openTitle: 'settings for ' + b.name,
     onOpen: () => openBulb(b),
   };
@@ -3149,6 +3198,7 @@ function switchOpts(sw) {
       : (locked ? 'unlock ' : 'lock ') + sw.name,
     quickDisabled: !isLock && !known,
     onQuick: q => (isLock ? identifySwitch(sw, q) : quickLock(sw, q)),
+    update: !!state.updates[String(sw.node)],
     openTitle: 'settings for ' + sw.name,
     onOpen: () => openSwitch(sw),
   };
@@ -6223,6 +6273,24 @@ const BULBS = { timer: null, lastTouch: Date.now(), idle: false, rev: -1 };
 // the server answered "nothing changed" and we go straight round again.
 const BULB_POLL_MS = 250;
 const BULB_IDLE_MS = 3 * 60 * 1000;
+
+/* Which devices have firmware waiting.
+ *
+ * Its own request, and a rare one. The Pi answers from a cache it fills in the
+ * background, so this never waits on the internet - and what it reports moves
+ * about twice a year, so asking every ten minutes is already generous.
+ */
+async function loadUpdates() {
+  try {
+    const j = await (await fetch('/api/updates')).json();
+    const before = JSON.stringify(state.updates);
+    state.updates = j || {};
+    if (JSON.stringify(state.updates) !== before) { render(); }
+  } catch (err) {
+    /* Nothing is drawn for a device we know nothing about, which is correct. */
+  }
+}
+setInterval(loadUpdates, 600000);
 
 async function loadBulbs(fresh) {
   const d = state.devices || {};

@@ -1483,6 +1483,57 @@ def ota_status(node) -> dict:
     return {"phase": "idle", "text": ""}
 
 
+def all_nodes() -> list:
+    """Every node this house owns, of any kind."""
+    try:
+        d = load_devices()
+    except (OSError, ValueError):
+        return []
+    out = []
+    for key in ("switches", "bulbs", "devices"):
+        for item in d.get(key) or []:
+            n = item.get("node")
+            if isinstance(n, int):
+                out.append(n)
+    return out
+
+
+def firmware_offer(node):
+    """Is an update on offer? From cache ONLY - this never blocks.
+
+    The tiles ask about every device at once, and finding out for real means a
+    request to the Distributed Compliance Ledger over the internet. A page that
+    waits on seven of those before it can draw is a page that looks broken. So
+    the answer here is whatever the background sweep has already learned, and
+    None - draw nothing - until it has.
+    """
+    with _fw_lock:
+        hit = _fw_cache.get(node)
+    if not hit or time.time() - hit[0] > FW_TTL:
+        return None
+    return bool(hit[1].get("available"))
+
+
+def firmware_watch():
+    """Keep the firmware cache warm, slowly and in the background.
+
+    Cheap on the radio: the installed version comes from matter-server's
+    subscription cache, so the only cost is the ledger lookup. Spread out
+    anyway - there is no hurry about a figure that changes twice a year, and
+    nothing here should compete with a transfer that is already running.
+    """
+    time.sleep(20)
+    while True:
+        for node in all_nodes():
+            if not _ota_running:
+                try:
+                    firmware_for(node)
+                except Exception as exc:  # noqa: BLE001 - one node, not the sweep
+                    log(f"node {node}: firmware check failed: {exc}", "warn")
+            time.sleep(20)
+        time.sleep(300)
+
+
 def fw_live(node, out) -> dict:
     """A cached firmware answer, plus the two fields that must never be cached.
 
@@ -2798,6 +2849,10 @@ class Handler(BaseHTTPRequestHandler):
             d["airQualityWords"] = AIR_QUALITY_WORDS
             self._send(d)
 
+        elif self.path == "/api/updates":
+            self._send({str(n): bool(o) for n in all_nodes()
+                        for o in [firmware_offer(n)] if o is not None})
+
         elif self.path.startswith("/api/firmware"):
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             try:
@@ -3888,4 +3943,5 @@ if __name__ == "__main__":
     threading.Thread(target=event_watch, name="events", daemon=True).start()
     threading.Thread(target=matter_watch, name="matter", daemon=True).start()
     threading.Thread(target=power_watch, name="power", daemon=True).start()
+    threading.Thread(target=firmware_watch, name="firmware", daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PANEL_PORT), Handler).serve_forever()
