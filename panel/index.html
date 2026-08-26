@@ -609,6 +609,10 @@
     letter-spacing: .06em;
     color: var(--ink-faint);
   }
+  .sheet .section-label.btn-sec {
+    margin: 20px 0 10px;
+    text-align: left;
+  }
   .fw .fwv b { font-weight: 600; color: var(--ink-dim); }
   .fw .fwv b.new { color: var(--link); }
   /* Something is happening, and the row should look like it even in the
@@ -5853,24 +5857,15 @@ function editRemote(sw) {
   const bulbs = state.devices.bulbs || [];
   const sheet = $('#sheet');
   const section = ep => `
-    <div class="hdr">button ${ep}</div>
+    <div class="section-label btn-sec"><span>button ${ep}</span>
+      <span class="rule"></span></div>
     <div class="pick" data-button="${ep}">${renderPick(
         bulbs, new Set((per[String(ep)] || [])), sw.where, 'no bulbs')}</div>`;
 
   sheet.innerHTML = `<h2>bindings</h2>
     <div class="who">${esc(sw.name)} &middot; node ${sw.node} &middot; remote</div>
     ${section(1)}${section(2)}
-    <button class="go">save</button>
-    <div class="note">
-      Check what each button controls. A press toggles them together &mdash; one
-      decision for the whole group, so two bulbs on one button cannot end up
-      opposite each other. Held down, the top button brightens and the bottom
-      one dims.<br><br>
-      This remote cannot be wired to a bulb: its buttons carry no client
-      cluster, so they report a press and nothing else. The Pi is what acts on
-      it &mdash; which means it does nothing while the Pi is off, unlike the
-      switches we build.
-    </div>`;
+    <button class="go">save</button>`;
   $('#overlay').classList.add('on');
 
   sheet.querySelector('.go').onclick = async (e) => {
