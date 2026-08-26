@@ -5,6 +5,37 @@ reflashed as a **Matter switch accessory** that drives IKEA Matter bulbs
 **directly over Thread**, with no hub in the command path — plus a small web
 panel on a Raspberry Pi to administer it all.
 
+![The panel: a section per room, a tile per device](docs/images/home.png)
+
+## The panel
+
+A section per room, a tile per device. The round icon is the quick action —
+on/off for a bulb, lock/unlock for a switch — and anywhere else opens it. A
+battery gauge and a small cloud appear in a tile's corner when they apply: one
+for the devices that run on a cell, one when firmware is waiting.
+
+**Brightness and colour follow the time of day.** The curve is yours to edit:
+drag a point, then save it for the whole house or for one lamp.
+
+![The schedule editor: brightness and colour temperature across the day](docs/images/schedule.png)
+
+**Every device says what it is part of.** A bulb shows which switches drive it,
+which schedule it follows, and what firmware it is on.
+
+![A bulb: brightness, colour, who controls it, what schedule it follows](docs/images/bulb.png)
+
+**Switches are wired to bulbs here.** Tick what each one drives; the panel
+writes the binding table and the ACLs that go with it.
+
+![The bindings editor: choosing which bulbs a switch drives](docs/images/bindings.png)
+
+**A bought remote gets the same editor**, one list per button. It cannot be
+wired to a bulb the way our own switch can — a remote like IKEA's BILRESA
+reports that it was pressed and nothing more — so the Pi is what acts on it,
+and it goes quiet whenever the Pi does.
+
+![The same editor for a two-button remote, one list per button](docs/images/remote.png)
+
 ## How "direct" works
 
 Not by running a controller on the module — that would need certificates, CASE
@@ -157,19 +188,46 @@ The modules have no USB — flashing is over SWD, with a Raspberry Pi Pico or a
 J-Link. Board definitions, LED behaviour, battery figures and the flashing
 recipe are in [`docs/notes.md`](docs/notes.md).
 
-## Setup
+## Installing it
+
+Two halves, and they go in either order: the switch firmware, built on your own
+machine and flashed over SWD, and the Raspberry Pi that runs the border router,
+the Matter controller and the panel.
+
+### What you need
+
+| | |
+|---|---|
+| the switch | a Holyiot nRF54L15 module — 25008 or 25015 — and something that speaks SWD. A Raspberry Pi Pico or a XIAO RP2040 with `debugprobe` does the job; the modules have no USB. |
+| the hub | a Raspberry Pi and an nRF52840 dongle for the Thread radio. Give it a supply that can hold 5 V under load — a sagging one browns out the radio, and it looks like everything else. |
+| the lights | IKEA Matter bulbs. |
+
+### 1. The switch
 
 ```bash
-./scripts/bootstrap.sh
+./scripts/bootstrap.sh              # the toolchain, once
 ./scripts/build.sh holyiot_25015
 ./scripts/flash.sh holyiot_25015
 ```
 
-For the Raspberry Pi side — border router, matter-server, the panel — see
-[`deploy/README.md`](deploy/README.md).
+Pin map, LED behaviour, battery figures and the flashing recipe — including
+which pad is which on each programmer — are in
+[`docs/notes.md`](docs/notes.md).
 
-Then commission from the panel: add the switch, add the bulbs, tick which bulbs
-each switch drives. There are two layers here that are easy to confuse: the
+### 2. The Raspberry Pi
+
+Border router, matter-server, the panel and the systemd units that keep them up:
+[`deploy/README.md`](deploy/README.md) walks through it end to end.
+
+### 3. Then, from the panel
+
+1. **Add the bulbs.** The pairing code is on the box or the bulb itself.
+2. **Add the switch.** No code to type — it is ours, and the panel knows its
+   passcode.
+3. **Tick which bulbs each switch drives**, and the panel writes the binding
+   table and the ACLs.
+
+There are two layers here that are easy to confuse: the
 **Thread network** decides who can reach whom, the **Matter fabric** decides who
 is allowed to command. The switch and the bulb have to share both, and a Matter
 device cannot be moved to a different Thread network without a factory reset.
