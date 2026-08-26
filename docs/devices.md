@@ -296,6 +296,56 @@ encoding: `MinMeasuredValue 1` and `MaxMeasuredValue 40001` decode to 1 lux and
 10000 lux, which is a sane range where 1..40001 lux would not be. Decoded by
 `lux_from_measured()`; 0 is the spec's "too dark to measure".
 
+### IKEA BILRESA dual button — remote
+
+| | |
+|---|---|
+| Vendor / product | `IKEA of Sweden` / `BILRESA dual button` |
+| Part number | `E2489`, hardware `P2.0` |
+| Firmware seen | 1.9.15 |
+| Device type | `0x000F` generic switch, revision 3 — one per button |
+| Clusters | Identify `0x0003`, Descriptor `0x001D`, Switch `0x003B` on endpoints 1 and 2 |
+| Transport | Matter over Thread, **battery** (2x AAA), intermittently connected |
+| SoC | Qorvo QPG6200L |
+
+Works: both buttons drive whatever you tick for them in the panel. Each button
+is its own endpoint, and the device names them itself — endpoint 1 carries the
+label `button 1` in its `TagList`, endpoint 2 carries `button 2`.
+
+- **It cannot be bound, and this is the one thing to understand about it.**
+  There is no Binding cluster on any endpoint, and `ClientList` is empty on both
+  buttons, so it cannot originate a command at all — it reports that it was
+  pressed and nothing more. Either fact alone is enough. So the Pi is what acts
+  on a press, and **the remote goes quiet whenever the Pi does**, unlike the
+  switch we build, which keeps working because the instruction lives in the
+  bulb-facing binding table.
+- **A long press never sends `MultiPressComplete`.** Measured, from the device's
+  own timestamps:
+
+  ```
+  short press   InitialPress -> ShortRelease (141 ms) -> MultiPressComplete count 1  (+519 ms)
+  double press  the same twice, MultiPressOngoing between  -> MultiPressComplete count 2
+  LONG PRESS    InitialPress -> LongPress (+700 ms) -> LongRelease.  Nothing else.
+  ```
+
+  Listening only for the completion event is the obvious design and it silently
+  ignores every long press.
+- **A double tap passes through `ShortRelease` twice.** Acting on the release is
+  what makes a press feel instant — the completion event is half a second
+  later — but done naively it fires the action twice on a double tap. The panel
+  drops the repeat because `MultiPressOngoing` arrives before the second
+  release.
+- **`FeatureMap` is 30**: MS + MSR + MSL + MSM. `NumberOfPositions` 2,
+  `MultiPressMax` 2, so single and double are the only counts it reports.
+- **It cannot be reflashed.** The debug pads are there — `CLK`, `TX`, `TMS`,
+  `EN` — and the open-source path exists: connectedhomeip's `qpg_platform.gni`
+  names `qpg6200`, the Qorvo support library is a public GitLab repo, and
+  `examples/light-switch-app/qpg` is the same sample this project already runs
+  in its nrfconnect flavour. **Qorvo secure debug is what stops it**: the debug
+  port answers, but every memory read faults with the AHB MEM-AP `CSW` reporting
+  `DeviceEn = 0`, and UART prints `Secure boot Enabled`. Getting past it needs
+  manufacturer-signed credentials.
+
 ## Our own hardware
 
 ### Holyiot nRF54L15 module — switch
