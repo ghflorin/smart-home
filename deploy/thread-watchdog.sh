@@ -64,6 +64,17 @@ THRESHOLD=${THRESHOLD:-2}
 # Quiet period after acting, so the network is given time to come back before
 # being judged again.
 COOLDOWN=${COOLDOWN:-150}
+# Transmit power, in dBm. The RCP comes up at 0 - one milliwatt - and this Pi
+# has no Thread children at all: every device reaches it through somebody
+# else's router, so how loudly it speaks decides whether a long transfer
+# survives. A firmware update died three times at 8%, 13% and 44% at 0 dBm and
+# went straight through at 8. The nRF52840 is specified to +8; ot-ctl will echo
+# a larger number back without transmitting it.
+#
+# Applied here rather than in a config file because there is nowhere to put it:
+# otbr-agent takes no such option and the setting does not survive a restart -
+# including the restarts this script itself performs.
+TXPOWER=${TXPOWER:-8}
 
 CHECK_ONLY=0
 [ "${1:-}" = "--check" ] && CHECK_ONLY=1
@@ -167,6 +178,12 @@ fi
 if [ "$state" = up ]; then
 	# Cache the USB id while we can still resolve it, for the day we cannot.
 	id=$(usb_id_from_tty) && [ -n "$id" ] && usb="$id"
+	# Put the transmit power back if the radio has been through a restart.
+	have=$(timeout 10 "$OT_CTL" txpower 2>/dev/null | head -1 | tr -dc "0-9-")
+	if [ -n "$have" ] && [ "$have" != "$TXPOWER" ]; then
+		timeout 10 "$OT_CTL" txpower "$TXPOWER" >/dev/null 2>&1 \
+			&& say "transmit power set to ${TXPOWER}dBm (was ${have}dBm)"
+	fi
 	if [ "$fails" -gt 0 ] || [ "$stage" -gt 0 ]; then
 		say "thread is back up (after $fails failed check$([ "$fails" = 1 ] || echo s))"
 	fi

@@ -383,6 +383,15 @@ this project are Nordic parts too, and one plugged in for flashing would match
 dongle that has fallen off the bus has no tty left to resolve it from, which is
 exactly when it needs resetting.
 
+It also holds the radio's **transmit power** at `TXPOWER` (8 dBm). The RCP comes
+up at 0 dBm — one milliwatt — and otbr-agent has no option to change that, so
+the setting has nowhere to live but here; it is re-applied within a minute of
+any restart, including the ones this script performs. It matters more than it
+sounds: this Pi has no Thread children of its own, so every device reaches it
+through somebody else's router, and a firmware update that died three times at
+0 dBm went through on the first try at 8. The nRF52840 is specified to +8, and
+`ot-ctl` will echo a larger number back without transmitting it.
+
 Install:
 
 ```bash
