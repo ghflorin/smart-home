@@ -1942,25 +1942,61 @@ SWITCH_EVENTS = {
     0x04: "long-up", 0x05: "counting", 0x06: "complete",
 }
 
-# What a press is worth waiting for. The device closes its multi-press window
-# about half a second after the last release, and that wait is the price of
-# telling a tap from a double tap - there is no way to know at the first tap
-# whether a second one is coming. Half a second on a light is not felt; getting
-# the wrong action is.
-GESTURE_EVENTS = {0x02, 0x06}
+# Whether to wait out the multi-press window, so a double tap can be told from
+# a single one.
+#
+# Measured on the BILRESA: ShortRelease lands 141 ms after the press, and
+# MultiPressComplete - the only event carrying the count - lands 519 ms after
+# THAT. Waiting for it is the only way to know a second tap is not coming, and
+# it is the whole of the delay a person can feel. There is no third option: at
+# the first tap nothing in the protocol says whether another is on its way.
+#
+# Off here, because this house does not use a double tap on this remote and an
+# instant light is worth more than a gesture nobody presses. Turning it back on
+# costs one line and half a second.
+WAIT_FOR_DOUBLE = False
+
+# Endpoints part-way through a repeat tap, and when that was noticed.
+_repeat = {}
+REPEAT_GRACE = 2.0
 
 
-def gesture_of(event_id, data):
+def gesture_of(node, endpoint, event_id, data):
     """The press a person made, or None for the events that only lead up to one."""
     if event_id == 0x02:
+        # Long press is unaffected by any of this: it reports LongPress and
+        # LongRelease and never a MultiPressComplete at all.
         return "long"
-    if event_id == 0x06:
-        n = data.get("totalNumberOfPressesCounted")
-        if n == 1:
-            return "press"
-        if n == 2:
-            return "double"
-        return f"press-{n}" if isinstance(n, int) else None
+
+    if WAIT_FOR_DOUBLE:
+        if event_id == 0x06:
+            n = data.get("totalNumberOfPressesCounted")
+            if n == 1:
+                return "press"
+            if n == 2:
+                return "double"
+            return f"press-{n}" if isinstance(n, int) else None
+        return None
+
+    # Acting on the release instead, which is where the half second goes.
+    #
+    # Done naively that fires TWICE on a double tap - two releases, two actions,
+    # and a light that ends up back where it started. It does not have to:
+    # MultiPressOngoing arrives BEFORE the second release (measured 4 ms
+    # before), so the repeat is known in time to drop it. A double tap then
+    # acts once, promptly, instead of acting twice or not at all.
+    key = (node, endpoint)
+    now = time.time()
+    if event_id == 0x05:
+        _repeat[key] = now
+        return None
+    if event_id == 0x03:
+        when = _repeat.pop(key, 0)
+        # A stale flag - the release that should have cleared it never arrived -
+        # must not swallow the next real press.
+        if when and now - when < REPEAT_GRACE:
+            return None
+        return "press"
     return None
 
 
@@ -1973,9 +2009,22 @@ def gesture_of(event_id, data):
 # decided ONCE and sent to all of them, so two bulbs on one button cannot end up
 # opposite each other - the same reason our own switch sends its state rather
 # than a toggle each.
-DEFAULT_GESTURES = {"press": "toggle", "long": "brighter", "double": None}
-DEFAULT_GESTURES_2 = {"press": "toggle", "long": "dimmer", "double": None}
+DEFAULT_GESTURES = {"press": "toggle", "long": "full"}
+DEFAULT_GESTURES_2 = {"press": "toggle", "long": "full"}
 LEVEL_STEP = 25
+
+# "full" is what our own wall switch does on a long press, and it is copied here
+# deliberately rather than approximated: level 254 and 4000 K, written once.
+#
+# What makes it TEMPORARY is what it does NOT do. It never writes OnLevel, so
+# the bulb still comes back to the schedule's brightness the next time it is
+# switched on, and it never updates the schedule's memo, so the tick still
+# believes it last sent the curve's value. An observed off re-arms the bulb.
+# Going through the panel's ordinary "set this bulb" path would write OnLevel
+# and the memo, and full brightness would then stick for good - which is the one
+# thing "provisionally" has to rule out.
+FULL_LEVEL = 254
+FULL_MIREDS = 250          # 1e6 / 4000 K
 
 _press_q = queue.Queue()
 
@@ -2025,7 +2074,27 @@ def remote_act(node, button, gesture):
         if b is None:
             continue
         ep = int(b.get("endpoint", 1))
-        if action in ONOFF_CMD:
+        if action == "full":
+            err = m_cmd(n, ep, 0x0008, "MoveToLevelWithOnOff",
+                        {"level": FULL_LEVEL, "transitionTime": 0,
+                         "optionsMask": 0, "optionsOverride": 0})
+            # Colour second, and only if the bulb has any: a plain dimmable bulb
+            # has no ColorControl and would answer with an error that means
+            # nothing went wrong.
+            st = state_of(n)
+            if not err and st.get("mireds") is not None:
+                want = FULL_MIREDS
+                lo, hi = st.get("ctMin"), st.get("ctMax")
+                if isinstance(lo, int):
+                    want = max(want, lo)
+                if isinstance(hi, int):
+                    want = min(want, hi)
+                e2 = m_cmd(n, ep, 0x0300, "MoveToColorTemperature",
+                           {"colorTemperatureMireds": want, "transitionTime": 4,
+                            "optionsMask": 1, "optionsOverride": 1})
+                if e2:
+                    log(f"bulb {n}: colour on long press failed: {e2}", "warn")
+        elif action in ONOFF_CMD:
             err = m_cmd(n, ep, 0x0006, ONOFF_CMD[action])
         elif action in ("brighter", "dimmer"):
             err = m_cmd(n, ep, 0x0008, "StepWithOnOff",
@@ -2046,7 +2115,7 @@ def matter_event(node, endpoint, cluster, event_id, data):
     if cluster != SWITCH_CLUSTER:
         return
     name = SWITCH_EVENTS.get(event_id, f"event {event_id}")
-    gesture = gesture_of(event_id, data)
+    gesture = gesture_of(node, endpoint, event_id, data)
     if gesture is None:
         # Logged at debug volume rather than dropped, because the run-up is what
         # tells you WHY a gesture did not arrive when somebody says the button
