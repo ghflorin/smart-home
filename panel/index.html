@@ -3190,6 +3190,10 @@ function switchOpts(sw) {
     return {
       node: sw.node,
       update: !!state.updates[String(sw.node)],
+      // It runs on two AAA cells, so it gets the same gauge as any other
+      // battery device. Nothing announces a flat remote except the remote
+      // quietly not working.
+      batt: battOf((state.bulbs[String(sw.node)] || {}).measured),
       icon: ICONS.switch,
       cls: '',
       name: sw.name,

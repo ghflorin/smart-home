@@ -2284,8 +2284,13 @@ def refresh_bulbs(force: bool = False) -> dict:
     except (OSError, ValueError):
         return {}
 
+    # Remotes are read as well as pressed. They live with the switches because
+    # that is what they are, but a battery reading is a reading like any other,
+    # and leaving them out of here is what hid the battery on a device that runs
+    # on two AAA cells.
     watched = ([("bulb", b) for b in devices.get("bulbs", [])]
-               + [("device", d) for d in devices.get("devices", [])])
+               + [("device", d) for d in devices.get("devices", [])]
+               + [("device", r) for r in switches(devices) if is_remote(r)])
 
     now = time.time()
     # A page load must never wait on the radio, and during an OTA it will if we
