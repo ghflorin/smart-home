@@ -595,20 +595,34 @@ SWITCH_DISCRIMINATOR = os.environ.get("SWITCH_DISCRIMINATOR", "3840")
 
 def known_rooms(devices: dict) -> list:
     """The known rooms: the ones declared explicitly plus the ones devices use.
-    The comparison is case-insensitive, so 'Bedroom' does not show up next to
-    'bedroom'."""
+
+    THE DECLARED LIST IS THE ORDER, and it is returned in the order it is
+    written. It used to be sorted here on the way out, which is why the page
+    always read alphabetically no matter what the file said - and why arranging
+    the rooms was impossible rather than merely missing.
+
+    A room that only a device mentions is still listed, but after everything
+    declared and alphabetically among its own kind: a room that turns up by
+    itself belongs at the end, not in the middle of an arrangement somebody
+    made. The comparison is case-insensitive, so 'Bedroom' does not show up next
+    to 'bedroom'.
+    """
     seen, out = {}, []
-    src = list(devices.get("rooms", []))
-    # Every device, switches included. Reading only the bulbs meant a room
-    # holding nothing but switches vanished from the list the moment you stopped
-    # declaring it explicitly.
-    src += [d.get("where", "") for d in all_devices(devices)]
-    for r in src:
+    for r in devices.get("rooms", []):
         r = (r or "").strip()
         if r and r.casefold() not in seen:
             seen[r.casefold()] = r
             out.append(r)
-    return sorted(out, key=str.casefold)
+    # Every device, switches included. Reading only the bulbs meant a room
+    # holding nothing but switches vanished from the list the moment you stopped
+    # declaring it explicitly.
+    extra = []
+    for d in all_devices(devices):
+        r = (d.get("where") or "").strip()
+        if r and r.casefold() not in seen:
+            seen[r.casefold()] = r
+            extra.append(r)
+    return out + sorted(extra, key=str.casefold)
 
 
 RE_SVG_SIZE = re.compile(r'<svg\s+width="(\d+)"\s+height="(\d+)"')
@@ -3347,6 +3361,28 @@ class Handler(BaseHTTPRequestHandler):
                 for d in entries(nodes):
                     d["where"] = where
 
+            if op == "arrange":
+                # The order the rooms appear in, top to bottom. Rooms only, not
+                # what is in them - `order` below is the one that moves devices.
+                #
+                # A name we do not know is ignored rather than created, and a
+                # room the caller left out keeps its place at the end instead of
+                # disappearing: an arrangement sent by a page that was open
+                # while a room was added elsewhere must not delete that room.
+                want, seen = [], set()
+                for r in body.get("rooms") or []:
+                    r = str(r).strip()
+                    real = fold.get(r.casefold())
+                    if real and real.casefold() not in seen:
+                        seen.add(real.casefold())
+                        want.append(real)
+                want += [r for r in known_rooms(devices)
+                         if r.casefold() not in seen]
+                devices["rooms"] = want
+                save_devices(devices)
+                log(f"rooms arranged: {', '.join(want) or 'none'}", "ok")
+                return self._send({"ok": True, "rooms": want, "devices": devices})
+
             if op == "order":
                 # What a drop is: here is a room, and here is everything in it,
                 # in the order it should appear. One op covers both moving a
@@ -3365,7 +3401,6 @@ class Handler(BaseHTTPRequestHandler):
                                   ", ".join(str(n) for n in unknown)}, status=400)
                 if name and name.casefold() not in fold:
                     rooms.append(name)
-                    rooms.sort(key=str.casefold)
 
                 def put(node: int, pos: int):
                     for d in entries({node}):
@@ -3391,7 +3426,6 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send({"error": f"'{fold[name.casefold()]}' already exists"},
                                       status=409)
                 rooms.append(name)
-                rooms.sort(key=str.casefold)
                 log(f"room added: {name}", "ok")
 
             elif op == "rename":
@@ -3404,7 +3438,6 @@ class Handler(BaseHTTPRequestHandler):
                 rooms[:] = [to if r.casefold() == name.casefold() else r for r in rooms]
                 if to.casefold() not in {r.casefold() for r in rooms}:
                     rooms.append(to)
-                rooms.sort(key=str.casefold)
                 # The devices come along. A room is a name, and the devices only
                 # ever hold a copy of it - leave them behind and they end up in a
                 # room that no longer exists.
@@ -3429,7 +3462,6 @@ class Handler(BaseHTTPRequestHandler):
                                   ", ".join(str(n) for n in sorted(unknown))}, status=400)
                 if name.casefold() not in fold:
                     rooms.append(name)
-                    rooms.sort(key=str.casefold)
                 current = set(members_of(name))
                 move(want - current, name)
                 move(current - want, "")   # taken out of this room, put in none
@@ -3772,7 +3804,6 @@ class Handler(BaseHTTPRequestHandler):
             rooms = devices.setdefault("rooms", [])
             if where and where.casefold() not in {r.casefold() for r in rooms}:
                 rooms.append(where)
-                rooms.sort(key=str.casefold)
 
             # msNode is written at the same moment the device is created, not
             # patched in afterwards: without it nothing can address the device

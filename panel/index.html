@@ -613,6 +613,44 @@
     margin: 20px 0 10px;
     text-align: left;
   }
+  .rrow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .rrow:last-child { border-bottom: 0; }
+  .rrow .rname { flex: 1; text-align: left; }
+  .rrow .rcount {
+    font-size: 11px;
+    color: var(--ink-faint);
+    min-width: 14px;
+    text-align: right;
+  }
+  .rrow .rgrip {
+    width: 20px;
+    height: 20px;
+    display: grid;
+    place-items: center;
+    color: var(--ink-faint);
+    cursor: grab;
+    /* Or the browser scrolls the sheet instead of moving the row. */
+    touch-action: none;
+  }
+  .rrow .rgrip svg { width: 16px; height: 16px; }
+  .rrow .rgrip:hover { color: var(--link); }
+  .rrow { transition: transform .14s ease; }
+  .rrow.dragging {
+    background: var(--line);
+    cursor: grabbing;
+    border-radius: 8px;
+    position: relative;
+    z-index: 2;
+    transition: none;
+  }
+  @media (prefers-reduced-motion: reduce) { .rrow { transition: none; } }
+  .rrow.dragging .rgrip { cursor: grabbing; }
   .fw .fwv b { font-weight: 600; color: var(--ink-dim); }
   .fw .fwv b.new { color: var(--link); }
   /* Something is happening, and the row should look like it even in the
@@ -2624,6 +2662,12 @@ const ICONS = {
   // device, and it is somewhere else. Drawn slightly heavier than the rest
   // because it is worn at badge size in the corner of a tile, not at button
   // size, and 1.6 disappears at fourteen pixels.
+  // Six dots: the one shape everybody already reads as "take hold of this".
+  grip: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/>
+    <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+    <circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>`,
+
   cloudDown: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
     stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d="M7.6 14.4a3.6 3.6 0 0 1-.2-7.2 5 5 0 0 1 9.4-1 3.4 3.4 0 0 1 .8 6.7"/>
@@ -3260,6 +3304,12 @@ function buildToolbar() {
   DOM.lockAll = [act('lock all', ev => setLockAll(true, ev.target), 'bulk'),
                  act('unlock all', ev => setLockAll(false, ev.target), 'bulk')];
 
+  // Ordering rooms is one decision about the whole house, so it is one screen
+  // rather than a control repeated in every room's sheet - rearranging seven
+  // rooms should not mean opening seven sheets. It sits with the other things
+  // that act on what is already on the page.
+  DOM.arrange = act('arrange rooms', () => arrangeRooms(), 'plain');
+
   const sizer = document.createElement('div');
   sizer.className = 'sizer';
   DOM.sizer = [['s', ICONS.sizeS, 'small tiles'],
@@ -3287,6 +3337,11 @@ function paintToolbar() {
   const has = DOM.lockAll[0].parentNode === acts;
   if (want && !has) { acts.append(...DOM.lockAll); }
   else if (!want && has) { DOM.lockAll.forEach(b => b.remove()); }
+  // Nothing to arrange with one room, and nothing to arrange with none.
+  const rooms = (state.devices.rooms || []).length;
+  const hasArr = DOM.arrange.parentNode === acts;
+  if (rooms > 1 && !hasArr) { acts.append(DOM.arrange); }
+  else if (rooms <= 1 && hasArr) { DOM.arrange.remove(); }
   DOM.sizer.forEach(b => b.classList.toggle('on', b.dataset.size === tileSize));
   // The header is static markup, so its state is painted from here.
   const sched = $('#go-sched');
@@ -5508,6 +5563,132 @@ function buildScheduleView() {
 // This sheet does the two things a drag cannot: name it, and get rid of it.
 // Which devices are in it is answered by dragging them there, where the answer
 // is also the question - you can see the room you are dropping into.
+/* The order the rooms appear in, top to bottom.
+ *
+ * Up and down rather than dragging: the list is short, the rows are small, and
+ * a drag that has to work on a phone next to a light switch is a lot of machinery
+ * for moving seven things. The arrows also say what will happen before you
+ * commit to it, which a drag does not.
+ *
+ * Nothing is written until save, so a wrong move costs a second press and not a
+ * round trip.
+ */
+function arrangeRooms() {
+  const sheet = $('#sheet');
+  let order = (state.devices.rooms || []).slice();
+
+  sheet.innerHTML = `<h2>rooms</h2>
+    <div class="who">the order they appear on the page</div>
+    <div class="pick" id="rl"></div>
+    <button class="go">save</button>`;
+  $('#overlay').classList.add('on');
+
+  const list = sheet.querySelector('#rl');
+  const draw = () => {
+    list.innerHTML = '';
+    order.forEach(name => {
+      const row = document.createElement('div');
+      row.className = 'rrow';
+      row.dataset.name = name;
+      const grip = document.createElement('span');
+      grip.className = 'rgrip';
+      grip.innerHTML = ICONS.grip;
+      grip.title = 'drag to reorder';
+      const label = document.createElement('span');
+      label.className = 'rname';
+      label.textContent = name;
+      const n = document.createElement('span');
+      n.className = 'rcount';
+      const members = allDevices().filter(d => (d.where || '') === name).length;
+      n.textContent = members ? members : '';
+      row.append(grip, label, n);
+      list.append(row);
+    });
+  };
+  draw();
+
+  /* Dragging, by hand rather than with the HTML5 drag API: that one has no
+   * touch support at all, and this has to work on the phone somebody is holding
+   * while standing in the room they are naming.
+   *
+   * NOTHING MOVES IN THE DOM UNTIL YOU LET GO. The first version reordered as
+   * you dragged, which shifts every row under the pointer, which re-triggers the
+   * test that caused the shift - the row flickered between two places several
+   * times a second and you could not see where it would land. Here the geometry
+   * is measured once at the start and never changes: the row you hold follows
+   * the pointer, the others slide by exactly one row height to open the gap, and
+   * the list is rebuilt once on release.
+   */
+  let drag = null;
+
+  list.addEventListener('pointerdown', ev => {
+    const grip = ev.target.closest('.rgrip');
+    if (!grip) { return; }
+    const rows = [...list.querySelectorAll('.rrow')];
+    const row = grip.closest('.rrow');
+    const from = rows.indexOf(row);
+    const box = row.getBoundingClientRect();
+    /* Row pitch from two rows rather than one height, so the gap between them
+     * is included whatever the padding turns out to be. */
+    const pitch = rows.length > 1
+      ? rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top
+      : box.height;
+
+    drag = { row, rows, from, to: from, y0: ev.clientY, pitch };
+    row.classList.add('dragging');
+    try { grip.setPointerCapture(ev.pointerId); } catch (err) { /* synthetic */ }
+    ev.preventDefault();
+  });
+
+  list.addEventListener('pointermove', ev => {
+    if (!drag) { return; }
+    const dy = ev.clientY - drag.y0;
+    drag.row.style.transform = `translateY(${dy}px)`;
+
+    /* Which slot the row is over now. Rounding means it commits at the halfway
+     * point, which is where the gap visibly opens. */
+    const moved = Math.round(dy / drag.pitch);
+    const to = Math.max(0, Math.min(drag.rows.length - 1, drag.from + moved));
+    if (to === drag.to) { return; }
+    drag.to = to;
+
+    drag.rows.forEach((r, i) => {
+      if (r === drag.row) { return; }
+      let shift = 0;
+      if (drag.from < to && i > drag.from && i <= to) { shift = -drag.pitch; }
+      if (drag.from > to && i >= to && i < drag.from) { shift = drag.pitch; }
+      r.style.transform = shift ? `translateY(${shift}px)` : '';
+    });
+  });
+
+  const endDrag = () => {
+    if (!drag) { return; }
+    const { row, rows, from, to } = drag;
+    rows.forEach(r => { r.style.transform = ''; });
+    row.classList.remove('dragging');
+    drag = null;
+    if (to === from) { return; }
+    order.splice(to, 0, order.splice(from, 1)[0]);
+    draw();
+  };
+  list.addEventListener('pointerup', endDrag);
+  list.addEventListener('pointercancel', endDrag);
+
+  sheet.querySelector('.go').onclick = async e => {
+    const btn = e.target;
+    btn.disabled = true;
+    btn.textContent = 'saving\u2026';
+    const j = await room({ op: 'arrange', rooms: order });
+    if (j.error) {
+      btn.disabled = false;
+      btn.textContent = 'save';
+      return setStatus(j.error, 'err');
+    }
+    closeSheet();
+    if (j.devices) { adoptDevices(j.devices); render(); } else { await load(); }
+  };
+}
+
 function editRoom(name) {
   const sheet = $('#sheet');
   const all = [...state.switches, ...(state.devices.bulbs || [])];
