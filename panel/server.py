@@ -2120,6 +2120,21 @@ def remote_act(node, button, gesture):
             return
         if err:
             log(f"bulb {n}: {action} from button {button} failed: {err}", "warn")
+            continue
+        # A long press is a person asking for full light NOW, and it should last
+        # as long as the same request made from the panel does.
+        #
+        # Taken from the ACTION rather than from the bulb's level, which is the
+        # difference between knowing and guessing: we are the ones who sent the
+        # command, so there is no inference to get wrong. Watching for a bulb
+        # that "looks like 254" would also fire on a scene, on somebody else's
+        # controller, and on the schedule's own brightest hour.
+        #
+        # Our own wall switch cannot do this: it commands the bulb directly and
+        # carries no Switch cluster, so nothing reports the press. Its long press
+        # still lasts only until the curve next moves.
+        if action == "full":
+            set_override(n, True)
     log(f"node {node} button {button}: {action} on "
         f"{len(targets)} bulb{'' if len(targets) == 1 else 's'}", "ok")
 
