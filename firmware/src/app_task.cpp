@@ -7,6 +7,7 @@
 #include "app_task.h"
 
 #include "automation.h"
+#include "battery.h"
 #include "light_ctrl.h"
 #include "lock_state.h"
 #include "lock_cluster.h"
@@ -257,6 +258,7 @@ CHIP_ERROR AppTask::Init()
 		LockState::Init();
 		LockCluster::Init();
 		Automation::Init();
+		Battery::Init();
 		return CHIP_NO_ERROR;
 	} }));
 

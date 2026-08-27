@@ -1,3 +1,6 @@
+#include <zephyr/dt-bindings/adc/adc.h>
+#include <zephyr/dt-bindings/adc/nrf-saadc-nrf54l.h>
+
 /*
  * Copyright (c) 2024 Nordic Semiconductor ASA
  *
@@ -36,4 +39,38 @@
 
 &wdt31 {
 	status = "okay";
+};
+
+/*
+ * Reading the cell, with nothing added to the board.
+ *
+ * The nRF54L's ADC can measure its own analogue supply - NRF_SAADC_AVDD - so
+ * the cell is read through the chip instead of through a resistor divider
+ * soldered across it. That is what makes this worth doing at all: the switches
+ * are already built and sealed, and a divider would draw current for ever,
+ * which on a coin cell is the one expense you cannot amortise.
+ *
+ * Gain 1/4 against the 900 mV internal reference puts full scale at 3.6 V. A
+ * fresh CR2032 sits at 3.0-3.3 V, so it fits with headroom and still spends
+ * most of the range on the part of the curve that matters.
+ */
+&adc {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 10)>;
+		zephyr,input-positive = <NRF_SAADC_AVDD>;
+		zephyr,resolution = <12>;
+	};
+};
+
+/ {
+	zephyr,user {
+		io-channels = <&adc 0>;
+	};
 };

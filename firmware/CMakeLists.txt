@@ -38,6 +38,7 @@ target_sources(app PRIVATE
     src/status_led.cpp
     src/lock_cluster.cpp
     src/lock_state.cpp
+    src/battery.cpp
 )
 
 chip_configure_data_model(app
