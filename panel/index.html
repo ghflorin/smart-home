@@ -5866,10 +5866,18 @@ function editRemote(sw) {
     <div class="pick" data-button="${ep}">${renderPick(
         bulbs, new Set((per[String(ep)] || [])), sw.where, 'no bulbs')}</div>`;
 
-  sheet.innerHTML = `<h2>bindings</h2>
-    <div class="who">${esc(sw.name)} &middot; node ${sw.node} &middot; remote</div>
+  // The heading is the name, and the name is editable there, exactly as it is
+  // on a bulb or a sensor. This sheet is what opens when you tap the tile, so
+  // it is the device's page - "bindings" described the form rather than the
+  // thing, and left no way to rename it at all.
+  sheet.innerHTML = `<h2></h2>
+    <div class="who"></div>
     ${section(1)}${section(2)}
     <button class="go">save</button>`;
+
+  nameable(sheet, sw, () => editRemote(sw));
+  sheet.querySelector('.who').textContent =
+    `remote \u00b7 node ${sw.node}` + (sw.where ? ` \u00b7 ${sw.where}` : '');
   $('#overlay').classList.add('on');
 
   sheet.querySelector('.go').onclick = async (e) => {
