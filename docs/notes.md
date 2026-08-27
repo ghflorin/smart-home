@@ -237,12 +237,17 @@ NCS v3.0.0, Zephyr SDK 0.17.4, macOS arm64:
 
 | Board | FLASH | RAM |
 |---|---|---|
-| holyiot_25015 | 87.5% (621 KB / **710 KB slot**) | 66.5% (170 KB / 256 KB) |
-| holyiot_25008 | 87.1% (619 KB / **710 KB slot**) | 66.5% (170 KB / 256 KB) |
+| holyiot_25015 | 88.6% (629 KB / **710 KB slot**) | 66.8% (171 KB / 256 KB) |
+| holyiot_25008 | 88.3% (627 KB / **710 KB slot**) | 66.8% (171 KB / 256 KB) |
 | nrf54l15dk | 54.4% (795 KB / 1426 KB) | 67.5% (256 KB) |
 
 On the Holyiot modules FLASH is measured against **one image slot**, not the whole
-RRAM: OTA needs two. About 89 KB of headroom is left.
+RRAM: OTA needs two. About 81 KB of headroom is left.
+
+Reading the coin cell costs **23 KB** of that — the PowerSource cluster and the
+ADC driver, measured as 619 KB before and 642 KB after on the 25008. Worth
+knowing before adding the next thing: the slot is the ceiling, and it is the
+same slot OTA has to fit an image into.
 
 Logging is compiled out on Holyiot (`CONFIG_LOG=n`) — the 83 KB that saves is
 exactly what makes two slots fit. The module does have a UART on P1.04/P1.05, so

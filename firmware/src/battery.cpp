@@ -61,6 +61,7 @@ constexpr int64_t kIntervalMs = 60 * 60 * 1000;
 const struct adc_dt_spec kAdc = ADC_DT_SPEC_GET_BY_IDX(DT_PATH(zephyr_user), 0);
 
 k_timer sTimer;
+struct k_work sWork;
 int32_t sLastMv = -1;
 
 int32_t ReadMillivolts()
@@ -138,9 +139,19 @@ void Measure()
 	DeviceLayer::SystemLayer().ScheduleLambda([mv] { Publish(mv); });
 }
 
-void TimerHandler(k_timer *)
+/* A k_timer handler runs in the timer INTERRUPT, where neither of the two
+ * things a measurement does is allowed: adc_read() may block on the driver's
+ * lock, and scheduling onto the Matter thread allocates. So the timer does the
+ * one thing it may - hand the job to a workqueue - and the reading happens in
+ * thread context. */
+void WorkHandler(struct k_work *)
 {
 	Measure();
+}
+
+void TimerHandler(k_timer *)
+{
+	k_work_submit(&sWork);
 }
 
 } /* namespace */
@@ -158,10 +169,21 @@ void Init(void)
 		return;
 	}
 
-	Measure();
-
+	/* NOTHING IS READ OR PUBLISHED HERE.
+	 *
+	 * This runs from the post-server-init callback, before the event loop is
+	 * turning, and the first version measured and pushed attributes straight
+	 * from it. The image that did so was transferred and applied correctly and
+	 * then failed to come up: MCUboot reverted to the previous one, which is
+	 * the bootloader doing its job and the reason the switch kept working.
+	 *
+	 * A battery reading is worth nothing in the first half minute of a device
+	 * that has been running for weeks, so it waits for the timer like every
+	 * reading after it. Init only arranges for that to happen.
+	 */
+	k_work_init(&sWork, WorkHandler);
 	k_timer_init(&sTimer, TimerHandler, nullptr);
-	k_timer_start(&sTimer, K_MSEC(kIntervalMs), K_MSEC(kIntervalMs));
+	k_timer_start(&sTimer, K_SECONDS(30), K_MSEC(kIntervalMs));
 }
 
 int32_t LastMillivolts(void)
