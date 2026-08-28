@@ -1760,11 +1760,19 @@ def already_have(installed_code, offered_code) -> bool:
     is already running, and the tile keeps drawing a cloud over a device with
     nothing to fetch.
 
-    Unknown means "say nothing": if either number is missing, the offer stands
-    rather than being hidden, because a missed update is worse than a stray icon.
+    Unknown means NO OFFER. That was the other way round at first - better a
+    stray icon than a missed update - and the house disagreed: matter-server
+    restarting drops its subscriptions, every sleepy switch reads as unreachable
+    for a minute or two, and with no installed version to compare against a
+    local descriptor was offered to all of them at once. Ten devices on 3.0.7
+    were told about 3.0.4, and the sheet drew it as "firmware null -> 3.0.4".
+
+    An offer nothing can be compared to is not an offer, it is a guess. Devices
+    do report their version; not having it means the device is not answering
+    just now, and it will be back.
     """
     if not isinstance(installed_code, int) or not isinstance(offered_code, int):
-        return False
+        return True
     return offered_code <= installed_code
 
 

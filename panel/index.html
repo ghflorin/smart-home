@@ -4018,8 +4018,12 @@ function firmwareBox(sheet, dev) {
       return;
     }
     const w = line('');
-    w.innerHTML = 'firmware <b>' + esc(fw.installed) + '</b> \u2192 <b class="new">'
-                + esc(fw.available) + '</b>';
+    // The version it is on can be missing while the device is briefly out of
+    // reach. The server no longer offers an update without one, so this should
+    // not happen - and if it ever does again, saying "unknown" is honest, where
+    // "firmware null" reads as something broken.
+    w.innerHTML = 'firmware <b>' + esc(fw.installed || 'unknown')
+                + '</b> \u2192 <b class="new">' + esc(fw.available) + '</b>';
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'fwgo';
