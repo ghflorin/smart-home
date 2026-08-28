@@ -331,6 +331,19 @@ The tell is a secondary slot byte-identical to the primary. Read both headers ov
 SWD: the version lives at offset 20 of the MCUboot header, which sits at the start
 of the slot (`0xE000` and `0xC0000`), not at the start of the application.
 
+**The version the device reports drops the build-metadata tail.** NCS binds
+SoftwareVersionString to `APP_VERSION_EXTENDED_STRING`, so a VERSION file of
+3.0.7 is reported as "3.0.7+0" - the tweak is appended even when it is zero,
+which it always is here. `src/chip_project_config.h` defines
+`CONFIG_CHIP_DEVICE_SOFTWARE_VERSION_STRING` to `APP_VERSION_STRING` instead;
+the platform config already checks for that symbol, and having a VERSION file is
+what removes it, so nothing is being overridden. The number is untouched - only
+the text changes.
+
+The OTA image's own header still carries "+0", because NCS builds that string in
+CMake. Nothing displays it: the panel shows what the local descriptor says, and
+those are written by hand - so write them without the tail too.
+
 **So: build OTA images in a clean build directory.** `west build -d build-ota`
 after `rm -rf build-ota`. An incremental build is fine for flashing over SWD,
 where the version only has to be right in what you read back, and wrong for
