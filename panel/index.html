@@ -3927,7 +3927,15 @@ function firmwareBox(sheet, dev) {
       return;
     }
     if (!fw.available) {
-      if (!failed) { line('firmware ' + (fw.installed || '?') + ' \u00b7 up to date'); }
+      // "up to date" is a claim about a comparison, and there is no comparison
+      // without a version to compare against. When the Pi has not read one yet -
+      // just after it restarts, or while a sleepy device is quiet - saying it
+      // anyway put "firmware ? - up to date" on screen, which asserts the one
+      // thing we do not know.
+      if (!failed) {
+        line(fw.installed ? 'firmware ' + fw.installed + ' \u00b7 up to date'
+                          : 'firmware version not known yet');
+      }
       return;
     }
     const w = line('');
