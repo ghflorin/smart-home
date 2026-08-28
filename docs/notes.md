@@ -244,6 +244,13 @@ NCS v3.0.0, Zephyr SDK 0.17.4, macOS arm64:
 On the Holyiot modules FLASH is measured against **one image slot**, not the whole
 RRAM: OTA needs two. About 81 KB of headroom is left.
 
+**The usable ceiling is 0xB0000 (720896 B), not the whole 710 KB slot.** MCUboot
+aligns its image trailer to a 4096-byte sector, so an image that ends above that
+overlaps it and the bootloader refuses to boot anything: `FIH_PANIC` in
+`main.c:611`, PC frozen around `0x5230`, and a switch that does nothing until it
+is reflashed. `imgtool` does not catch this - it checks `image + trailer <= slot`
+and lets 722288 through.
+
 Reading the coin cell costs **23 KB** of that — the PowerSource cluster and the
 ADC driver, measured as 619 KB before and 642 KB after on the 25008. Worth
 knowing before adding the next thing: the slot is the ceiling, and it is the
