@@ -1866,13 +1866,22 @@ def m_read(node, endpoint, cluster, attr, timeout=45.0):
     ms = ms_of(node)
     if ms is None:
         return None, f"node {node} is not on matter-server"
+    path = f"{int(endpoint)}/{int(cluster)}/{int(attr)}"
     try:
-        return MS.call("read_attribute",
-                       {"node_id": ms,
-                        "attribute_path": f"{int(endpoint)}/{int(cluster)}/{int(attr)}"},
-                       timeout=timeout), None
+        r = MS.call("read_attribute",
+                    {"node_id": ms, "attribute_path": path}, timeout=timeout)
     except MatterError as exc:
         return None, str(exc)
+    # matter-server answers with a MAP keyed by the path, not the bare value.
+    #
+    # Handing that map back made the one comparison that uses it meaningless: a
+    # non-empty dict is truthy, so `bool(back) != locked` was False for every
+    # lock and True for every unlock. Locking looked like it worked, unlocking
+    # always reported "the value did not apply" - and the device had done both,
+    # correctly, all along.
+    if isinstance(r, dict):
+        return r.get(path), None
+    return r, None
 
 
 def matter_map(devices: dict) -> dict:
@@ -3196,7 +3205,14 @@ class Handler(BaseHTTPRequestHandler):
             # succeeded, not the switches we happen to hold an old opinion
             # about. A switch unplugged an hour ago is "not answering", even
             # though we still know its table.
-            health = {"total": len(sw_list), "reachable": 0,
+            # Remotes are not counted. They are switches in the sense that they
+            # are pressed, not in the sense this line means: a bought remote
+            # sleeps until somebody touches it, so it reads as "not answering"
+            # almost always, and the banner would have said one switch was
+            # missing for ever. Nothing is locked or bound ON a remote either -
+            # what it drives is kept here, not written into it.
+            lockable = [x for x in sw_list if not is_remote(x)]
+            health = {"total": len(lockable), "reachable": 0,
                       "matter": _matter_ok}
             for sw in sw_list:
                 st = state_of(sw["node"])
@@ -3214,7 +3230,7 @@ class Handler(BaseHTTPRequestHandler):
                     out[key] = flat
                 else:
                     out[key] = st.get("binding") or []
-                if st.get("ok"):
+                if st.get("ok") and not is_remote(sw):
                     health["reachable"] += 1
             self._send({"bySwitch": out, "byButton": by_button,
                         "remotes": remotes, "raw": None, "health": health,
@@ -3299,7 +3315,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path == "/api/lock":
             devices = load_devices()
-            all_nodes = [x["node"] for x in switches(devices)]
+            # A remote carries no lock cluster, so "lock all" must not try: it
+            # would report a failure for a device that was never lockable.
+            all_nodes = [x["node"] for x in switches(devices) if not is_remote(x)]
             targets = all_nodes if body.get("all") else [int(n) for n in body.get("switches", [])]
             if not targets:
                 return self._send({"error": "no switch selected"}, status=400)
