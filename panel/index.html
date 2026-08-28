@@ -853,6 +853,7 @@
    * beside the icon, in the row layout it lands on top of the name - hence the
    * reserved space. */
   .grid[data-size="s"] .tile.badged .tname { padding-right: 46px; }
+  .grid[data-size="s"] .tile.badged-wide .tname { padding-right: 70px; }
   .tbadge {
     position: absolute;
     top: 10px;
@@ -865,6 +866,12 @@
     border-radius: 6px;
     padding: 2px 6px;
   }
+  /* Out of the battery's corner when there is a battery, the same way the
+     update icon steps aside. The badge is the one that moves: it is the wider
+     of the two, and a gauge is read by position as much as by colour - a cell
+     that wanders depending on what else the tile has to say is a cell you have
+     to find before you can read it. */
+  .tbadge.beside-batt { right: 34px; }
 
 
   /* ---------- the toolbar: rooms on the left, tile size on the right ------ */
@@ -3066,11 +3073,14 @@ function paintTile(el, o) {
       el.append(p.badge);
     }
     setText(p.badge, o.badge);
+    p.badge.classList.toggle('beside-batt', !!p.batt);
     el.classList.add('badged');
+    el.classList.toggle('badged-wide', !!p.batt);
   } else if (p.badge) {
     p.badge.remove();
     p.badge = null;
     el.classList.remove('badged');
+    el.classList.remove('badged-wide');
   }
 }
 
