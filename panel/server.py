@@ -1394,6 +1394,25 @@ def our_of(ms_node) -> int | None:
     return None
 
 
+def answering(node) -> bool:
+    """Is this device worth spending a sixty-second write on?
+
+    Bulbs are mains-powered Thread routers: they are either there or they are
+    not, so `ok` false on one is a fact rather than a sleepy device's ordinary
+    miss - which is why this waits out SLEEPY_GRACE before believing it.
+
+    One unplugged lamp used to cost a full write_acl timeout on EVERY binding
+    change and EVERY switch removal, because both rewrite the ACL on all of the
+    bulbs. A minute of a dialog saying nothing, and then the whole operation
+    reported as failed although every other device had taken the write - and a
+    switch that could not be removed from the panel at all.
+    """
+    st = state_of(node)
+    if st.get("ok") is not False:
+        return True
+    return time.time() - float(st.get("okAt") or 0) < SLEEPY_GRACE
+
+
 def write_acl(node, subject_nodes, timeout=60.0):
     """Who may drive this device: the admin, plus the listed switches.
 
@@ -3728,6 +3747,7 @@ class Handler(BaseHTTPRequestHandler):
             # One ACL per bulb: every switch that controls it. A bulb can be
             # controlled by several switches at once.
             all_bulbs = devices.get("bulbs", [])
+            skipped = []
             step_no += 1
             log(f"{step_no}/{total} rewriting the ACL on all {len(all_bulbs)} "
                 f"bulbs. All of them, not just the checked ones: an unchecked "
@@ -3738,6 +3758,14 @@ class Handler(BaseHTTPRequestHandler):
                                  if b["node"] in s3)
                 log(f"bulb {b['node']} ({b.get('name', '?')}): controlled by "
                     f"{', '.join(str(x) for x in allowed) or 'no switch'}", "info")
+                # A bulb that is not there cannot be told anything, and waiting
+                # out its timeout does not make it more there. Skipped, not
+                # failed: the rest of the house is still worth writing.
+                if not answering(b["node"]):
+                    log(f"bulb {b['node']} is not answering - its ACL is left "
+                        f"as it is", "warn")
+                    skipped.append(b["node"])
+                    continue
                 e = write_acl(b["node"], allowed)
                 if e:
                     errors.append(f"ACL {b['node']}: {e}")
@@ -3767,8 +3795,14 @@ class Handler(BaseHTTPRequestHandler):
                           meta={"readAt": time.time(), "okAt": time.time(),
                                      "ok": True, "err": None})
 
+            if skipped:
+                log(f"{len(skipped)} bulb"
+                    f"{'' if len(skipped) == 1 else 's'} did not answer and "
+                    f"kept the access they had - redo this once they are back",
+                    "warn")
             return self._send({"switch": sw_node, "bulbs": want,
-                               "errors": errors or None})
+                               "errors": errors or None,
+                               "skipped": skipped or None})
 
         if self.path == "/api/commission":
             log("--- commissioning ---", "step")
@@ -4064,6 +4098,10 @@ class Handler(BaseHTTPRequestHandler):
                         table, _e = read_binding(s2, ep2)
                         if b["node"] in {e["node"] for e in (table or [])}:
                             allowed.append(s2)
+                    if not answering(b["node"]):
+                        log(f"bulb {b['node']} is not answering - its ACL keeps "
+                            f"a switch that is going away", "warn")
+                        continue
                     err = write_acl(b["node"], sorted(allowed))
                     if err:
                         warnings.append(f"ACL {b['node']}: {err}")
