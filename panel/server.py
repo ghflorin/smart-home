@@ -291,7 +291,9 @@ MEASURED = [
     (0x0045, 0x0000, "leak",         "water",        "",         1),
     (0x0045, 0x0000, "freeze",       "freeze",       "",         1),
     (0x0045, 0x0000, "rain",         "rain",         "",         1),
-    # PowerSource, on ENDPOINT 0 - see read_measurements. A battery device that
+    # PowerSource. Bought devices carry it on endpoint 0; our own switch carries
+    # it on an endpoint of its own - read_measurements walks whatever the node
+    # reports, so neither is hard-coded here. A battery device that
     # will not say how much it has left is a device that stops one day without
     # warning.
     #
@@ -1057,7 +1059,20 @@ def refresh_switch(sw: dict) -> list:
     # None of the paths answered = the switch did not answer. We keep the old
     # values but mark the read as failed: better "unknown since when" than
     # reporting zero bindings for a switch that is asleep.
+    #
+    # Decided BEFORE the readings are folded in, deliberately: a battery is not
+    # evidence that the switch answered the questions this function asked.
     ok = bool(values)
+
+    # The battery, which is not among the attributes read_switch_state asks for -
+    # it lives on a PowerSource endpoint of its own, and this walks whatever the
+    # node reports rather than a fixed endpoint. Switches used to skip this
+    # entirely, so the gauge had nothing to draw and the tile stayed blank while
+    # the firmware was reporting perfectly well. Costs one cache read.
+    measured = read_measurements(sw)
+    if measured:
+        values["measured"] = measured
+
     return state_put(node, values=values,
                      meta={"readAt": time.time(), "ok": ok,
                            "err": None if ok else "no response"})
@@ -2346,9 +2361,16 @@ def refresh_bulbs(force: bool = False) -> dict:
     # that is what they are, but a battery reading is a reading like any other,
     # and leaving them out of here is what hid the battery on a device that runs
     # on two AAA cells.
+    # Our own switches ride along as well, but only to be REPORTED: refresh_switch
+    # owns them and reads their battery with everything else, on its own timer.
+    # They are in this map because the tiles read their state from it and nowhere
+    # else, so a switch missing from it has nowhere to put a reading - which is
+    # exactly why the gauge stayed blank while the firmware reported perfectly
+    # well. Same shape of hole as the remotes above, one layer further out.
     watched = ([("bulb", b) for b in devices.get("bulbs", [])]
                + [("device", d) for d in devices.get("devices", [])]
-               + [("device", r) for r in switches(devices) if is_remote(r)])
+               + [("device", r) for r in switches(devices) if is_remote(r)]
+               + [("switch", s) for s in switches(devices) if not is_remote(s)])
 
     now = time.time()
     # A page load must never wait on the radio, and during an OTA it will if we
@@ -2368,6 +2390,8 @@ def refresh_bulbs(force: bool = False) -> dict:
             "info")
     with _bulb_lock:
         for kind, dev in watched:
+            if kind == "switch":
+                continue
             # ... and a ceiling even when nothing is updating, so one slow
             # device cannot hold the whole page open.
             if quiet or time.time() > deadline:
