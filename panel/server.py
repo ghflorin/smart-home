@@ -820,6 +820,18 @@ def set_role(node: int, role: int) -> dict:
                 int(role), timeout=60.0)
     if e:
         return {"node": node, "ok": False, "error": e}
+
+    # Read it back, the same way set_locked does, and for a worse reason: the
+    # role decides what the button DOES. A lock whose role never landed is a
+    # switch that draws a padlock, saves a list of switches to lock, and then
+    # sends OnOff when you press it - every part of the panel agreeing about
+    # something the device was never told.
+    back, _ = m_read(node, SCHED_ENDPOINT, SCHED_CLUSTER_ID, _ATTRS["role"])
+    if back is not None and int(back) != int(role):
+        log(f"node {node}: the write went through but the role reads back as "
+            f"{back} - it is NOT a {ROLE_NAMES.get(role, role)}", "err")
+        return {"node": node, "ok": False, "error": "the role did not apply"}
+
     state_put(node, values={"role": role},
               meta={"readAt": time.time(), "okAt": time.time(),
                                      "ok": True, "err": None})
@@ -1388,13 +1400,16 @@ def m_write(node, endpoint, cluster, attr, value, timeout=45.0):
     if ms is None:
         return f"node {node} is not on matter-server"
     try:
-        MS.call("write_attribute",
-                {"node_id": ms,
-                 "attribute_path": f"{int(endpoint)}/{int(cluster)}/{int(attr)}",
-                 "value": value}, timeout=timeout)
-        return None
+        res = MS.call("write_attribute",
+                      {"node_id": ms,
+                       "attribute_path": f"{int(endpoint)}/{int(cluster)}/{int(attr)}",
+                       "value": value}, timeout=timeout)
     except MatterError as exc:
         return str(exc)
+    # The device's own answer, which arrives as a RESULT and not as an exception.
+    # See write_fault: a refused write finishes quietly, and everything that
+    # only watched for exceptions believed it.
+    return write_fault(res)
 
 
 # Which fabric matter-server is on, as the DEVICE numbers them. chip-tool
@@ -3763,7 +3778,13 @@ class Handler(BaseHTTPRequestHandler):
             # switches had none until now, because nobody wrote anything to
             # them.
             if sw.get("role") == "lock":
-                targets = [x for x in switches(devices) if x["node"] in want]
+                # Never a remote, whatever the page asked for. A lock locks by
+                # writing our own attribute on the switch, and a bought remote
+                # has nothing to write to - it is an event source. The page
+                # already leaves them out of the list; this is the half that
+                # cannot be fooled by a stale page.
+                targets = [x for x in switches(devices)
+                           if x["node"] in want and not is_remote(x)]
                 log(f"lock: binding switch {sw_node} to {len(targets)} switches", "step")
                 errors = []
                 for t in targets:

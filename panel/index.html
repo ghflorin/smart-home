@@ -6294,8 +6294,12 @@ function editLinks(swNode) {
 
   // A lock does not control bulbs, it controls switches. Same editor, different
   // list - and it leaves itself out, so it cannot lock itself.
+  // Remotes are left out as well. A lock works by writing our own attribute on
+  // the switches it locks, and a bought remote carries no client cluster to
+  // write to - it only sends events. Offering it would be offering an action
+  // that cannot happen.
   const items = isLock
-    ? state.switches.filter(x => x.node !== swNode)
+    ? state.switches.filter(x => x.node !== swNode && !state.remotes.has(x.node))
     : (state.devices.bulbs || []);
   const sheet = $('#sheet');
 

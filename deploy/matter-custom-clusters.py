@@ -50,6 +50,7 @@ try:
     from dataclasses import dataclass
 
     from chip import ChipUtility
+    from chip.tlv import uint
     from chip.clusters.ClusterObjects import (
         ALL_ATTRIBUTES,
         ClusterAttributeDescriptor,
@@ -86,9 +87,16 @@ try:
 
         @ChipUtility.classproperty
         def attribute_type(cls) -> ClusterObjectFieldDescriptor:  # noqa: N805
-            return ClusterObjectFieldDescriptor(Type=int)
+            # uint, NOT int. The attribute is declared INT8U on the device, and
+            # a plain `int` is encoded as a SIGNED TLV integer - which the
+            # server refuses with CONSTRAINT_ERROR (135). Nothing said so: the
+            # write returns the status rather than raising it, so the panel
+            # recorded the switch as a lock, drew the padlock, saved the list of
+            # switches to lock, and the device stayed a light switch throughout.
+            # Every INT8U in the SDK's own generated code uses this type.
+            return ClusterObjectFieldDescriptor(Type=uint)
 
-        value: int = 0
+        value: uint = 0
 
     # setdefault, not assignment: if a future SDK ever generates this cluster
     # itself, its own definition wins and this becomes dead weight rather than a
