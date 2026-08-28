@@ -2068,6 +2068,17 @@ BULB_ATTRS = {
     (0x0300, 0x0007): ("mireds", int),
     (0x0300, 0x400B): ("ctMin", int),
     (0x0300, 0x400C): ("ctMax", int),
+    (0x0300, 0x0000): ("hue", int),
+    (0x0300, 0x0001): ("sat", int),
+    (0x0300, 0x0008): ("colorMode", int),
+    # Not a bulb either: this is a SWITCH being locked or unlocked, and the
+    # panel is not the one doing it - a lock writes the attribute straight to
+    # its switches over Thread and the Pi never sees the command. Without these
+    # two the state only caught up on the next periodic sweep, so pressing a
+    # lock changed nine devices and the whole page went on showing them
+    # unlocked. Which reads, exactly, as "the button did nothing".
+    (SCHED_CLUSTER_ID, _ATTRS["locked"]): ("locked", bool),
+    (SCHED_CLUSTER_ID, _ATTRS["role"]): ("role", int),
 }
 
 
