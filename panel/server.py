@@ -1440,6 +1440,36 @@ def answering(node) -> bool:
     return time.time() - float(st.get("okAt") or 0) < SLEEPY_GRACE
 
 
+def write_fault(result):
+    """Whatever a write came back with, if it was not success.
+
+    matter-server's write calls RETURN the device's answer instead of raising
+    it: a device that refuses an attribute replies with a status, the call
+    completes normally, and code that only watches for exceptions calls that a
+    success. That is exactly how a lock reported "now locks 10 switches" over a
+    binding table that stayed empty - the device said no and nobody read it.
+
+    Shapes vary with the SDK version, so this is deliberately forgiving: a list
+    or a single item, capitalised keys or not, a status that is a number or a
+    small object around one. Anything it cannot make sense of is treated as
+    success, because inventing a failure is worse than missing one.
+    """
+    if not result:
+        return None
+    bad = []
+    for item in (result if isinstance(result, list) else [result]):
+        if not isinstance(item, dict):
+            continue
+        status = item.get("Status", item.get("status"))
+        if isinstance(status, dict):
+            status = status.get("Status", status.get("status"))
+        if status in (None, 0):
+            continue
+        where = item.get("Path", item.get("path"))
+        bad.append(f"status {status}" + (f" at {where}" if where else ""))
+    return "; ".join(bad) or None
+
+
 def write_acl(node, subject_nodes, timeout=60.0):
     """Who may drive this device: the admin, plus the listed switches.
 
@@ -1461,10 +1491,11 @@ def write_acl(node, subject_nodes, timeout=60.0):
         entries.append({"privilege": 4, "authMode": 2, "subjects": subjects,
                         "targets": None, "fabricIndex": MS_FABRIC})
     try:
-        MS.call("set_acl_entry", {"node_id": ms, "entry": entries}, timeout=timeout)
-        return None
+        res = MS.call("set_acl_entry", {"node_id": ms, "entry": entries},
+                      timeout=timeout)
     except MatterError as exc:
         return str(exc)
+    return write_fault(res)
 
 
 def write_binding(switch, entries, timeout=60.0):
@@ -1477,16 +1508,31 @@ def write_binding(switch, entries, timeout=60.0):
         target = ms_of(e["node"])
         if target is None:
             return f"binding target {e['node']} is not on matter-server"
-        targets.append({"node": target, "group": None,
-                        "endpoint": int(e.get("endpoint", 1)),
-                        "cluster": int(e["cluster"]), "fabricIndex": MS_FABRIC})
+        one = {"node": target, "group": None,
+               "endpoint": int(e.get("endpoint", 1)), "fabricIndex": MS_FABRIC}
+        # The cluster is OPTIONAL, and leaving it out is not laziness.
+        #
+        # A binding that names a cluster is only accepted when the LOCAL endpoint
+        # carries that cluster as a client - src/app/clusters/bindings/
+        # bindings.cpp, IsValidBinding - and endpoint 1 has clients for OnOff,
+        # LevelControl and ColorControl, which is why bulb bindings work. It has
+        # no client for our own cluster, so naming it got the write refused with
+        # CONSTRAINT_ERROR every time.
+        #
+        # An entry with no cluster is valid, and BindingManager still matches it:
+        # `iter->clusterId.value_or(cluster) == cluster` treats a missing cluster
+        # as "any". So the lock's bindings say node and endpoint, and nothing
+        # else needs to change.
+        if e.get("cluster") is not None:
+            one["cluster"] = int(e["cluster"])
+        targets.append(one)
     try:
-        MS.call("set_node_binding",
-                {"node_id": ms, "endpoint": int(switch.get("endpoint", 1)),
-                 "bindings": targets}, timeout=timeout)
-        return None
+        res = MS.call("set_node_binding",
+                      {"node_id": ms, "endpoint": int(switch.get("endpoint", 1)),
+                       "bindings": targets}, timeout=timeout)
     except MatterError as exc:
         return str(exc)
+    return write_fault(res)
 
 
 def translate_binding(raw) -> list:
@@ -3726,9 +3772,10 @@ class Handler(BaseHTTPRequestHandler):
                         errors.append(f"ACL {t['node']}: {e}")
                 # A lock targets endpoint 2 and our own cluster, not endpoint 1
                 # and OnOff: it does not turn anything on, it writes a state.
+                # No cluster on these entries - see write_binding for why the
+                # device refuses one that names our own.
                 e = write_binding(sw, [{"node": t["node"],
-                                        "endpoint": SCHED_ENDPOINT,
-                                        "cluster": int(SCHED_CLUSTER, 16)}
+                                        "endpoint": SCHED_ENDPOINT}
                                        for t in targets])
                 if e:
                     errors.append(f"binding {sw_node}: {e}")
