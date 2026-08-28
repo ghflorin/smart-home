@@ -262,44 +262,56 @@ exactly what makes two slots fit. The module does have a UART on P1.04/P1.05, so
 a console can be brought out on wires, but re-enabling `CONFIG_LOG` means OTA no
 longer fits. For development, `nrf54l15dk` is more convenient.
 
-## Over-the-air updates are transferred but never adopted
+## Over-the-air updates
 
-**The transfer works. The adoption does not.** Four complete transfers of 642 to
-714 KB, no stalls, real progress reported throughout - and after every one the
-device came back on the version it started with.
+Updates work. They did not for a long time, and there were **two** causes stacked
+on top of each other - the first hid the second, which is why several plausible
+hypotheses (the battery feature, the debug console, image size, the NCS confirm
+guard) were each tried and each wrong. None of them was ever the problem.
 
-The measurement that matters is the control: an image **identical to the running
-firmware except for its version number** - the same 642076 bytes, no new code -
-was transferred, applied, and reverted exactly like the rest. So this is not
-about anything we added. Not the battery feature, not the debug console, not the
-image size, and not the signature.
+**The bootloader saw a shorter flash than the application did.** `nrf54l15.dtsi`
+reserves part of the RRAM for the FLPR coprocessor, leaving the application core
+1428 KB. `boards/holyiot_*.overlay` takes it all back - 1524 KB - because the
+partition map needs the room. MCUboot builds separately and never got the same
+overlay, so it thought flash ended at `0x165000` while `mcuboot_secondary` runs
+to `0x172000`, and counted the slot short:
 
-What the device reports afterwards: `BootReason` = 5 (SoftwareUpdateCompleted)
-and `RebootCount` up by **two**, which is the signature of a test-swap that ran
-and was then taken back - the new image boots, gets far enough to persist state,
-and MCUboot reverts it on the following reset.
-
-One lead, tried and **not** sufficient: NCS confirms a new image in
-`nrf/samples/matter/common/src/app/matter_init.cpp`, but only past
-
-```c
-VerifyOrReturn(mcuboot_swap_type() == BOOT_SWAP_TYPE_REVERT);
+```
+W: Cannot upgrade: not a compatible amount of sectors
+D: slot0 sectors: 178, slot1 sectors: 165, usable slot0 sectors: 173
 ```
 
-a guard with an explicit exception for nRF53 ("we use permanent swap so we can
-skip it") and none for nRF54L. Calling `boot_write_img_confirmed()` from the
-application ourselves, early in `AppTask::Init`, changed nothing - it still
-reverted.
+165 x 4096 = `0xA5000`, which is exactly `0xC0000` to `0x165000` - the secondary
+slot truncated at the old end of flash. Swap-using-move requires the secondary to
+hold at least as many sectors as the usable primary, so every update was refused
+before it began. `sysbuild/mcuboot/boards/holyiot_*.overlay` gives the bootloader
+the same map; NCS does the same for its own nRF54L15 DK.
 
-Where to look next, without more guessing: read the MCUboot trailer out of the
-secondary slot over SWD and see what is actually written there and what the
-bootloader makes of it. That is a fact rather than a hypothesis, and three
-hypotheses have now been wrong.
+**The version is fixed when the build is configured, not when it is compiled.**
+`CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION` defaults to the VERSION file through a
+Kconfig default, so it is read once and cached. Bump VERSION, rebuild into the
+same directory, and imgtool still signs the old number while the Matter wrapper
+around it carries the new one. The device then downloads an image that announces
+3.0.4 and contains 3.0.0, swaps it in correctly, and comes back on the version it
+started with - which looks exactly like a failed update and is not one.
+
+The tell is a secondary slot byte-identical to the primary. Read both headers over
+SWD: the version lives at offset 20 of the MCUboot header, which sits at the start
+of the slot (`0xE000` and `0xC0000`), not at the start of the application.
+
+**So: build OTA images in a clean build directory.** `west build -d build-ota`
+after `rm -rf build-ota`. An incremental build is fine for flashing over SWD,
+where the version only has to be right in what you read back, and wrong for
+anything that travels.
 
 Note that `ota/update.sh` cannot be used for any of this: it drives the update
 with chip-tool on a fabric that no longer exists. Updates go through
-matter-server's local update descriptors - see `deploy/matter-custom-clusters.py`
-for the shape of that machinery.
+matter-server's local update descriptors, which are JSON files dropped in
+`/opt/smarthome/updates` - one `modelVersion` object each, with `otaUrl` relative
+to that directory (`file:///name.ota`, since only the leading slash is stripped),
+`otaChecksum` as base64 sha256 and `otaChecksumType: 1`. They are read at startup
+only, so matter-server has to be restarted after adding one. See
+`deploy/matter-custom-clusters.py` for the shape of the surrounding machinery.
 
 ## Board definitions
 

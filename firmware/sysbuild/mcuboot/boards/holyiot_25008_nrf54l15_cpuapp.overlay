@@ -1,0 +1,26 @@
+/*
+ * The bootloader has to see the same flash the application does.
+ *
+ * nrf54l15.dtsi hands part of the RRAM to the FLPR coprocessor, leaving the
+ * application core 1428 KB. boards/<board>.overlay takes it all back - 1524 KB -
+ * because the partition map needs the room, and MCUboot never got the same
+ * treatment.
+ *
+ * So the bootloader saw flash ending at 0x165000 while mcuboot_secondary runs to
+ * 0x172000, and counted the slot short:
+ *
+ *     W: Cannot upgrade: not a compatible amount of sectors
+ *     D: slot0 sectors: 178, slot1 sectors: 165, usable slot0 sectors: 173
+ *
+ * 165 x 4096 = 0xA5000, which is exactly 0xC0000 to 0x165000 - the secondary
+ * slot truncated at the old end of flash. Swap-using-move needs the secondary to
+ * hold at least as many sectors as the usable primary, so every update was
+ * refused before it began: transferred, written, marked for swap, and then never
+ * swapped. Nothing reached the application to explain it, and the version simply
+ * never changed.
+ *
+ * NCS does this for its own nRF54L15 DK - see the overlay next to this one.
+ */
+&cpuapp_rram {
+	reg = <0x0 DT_SIZE_K(1524)>;
+};
