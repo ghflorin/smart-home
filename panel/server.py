@@ -1118,6 +1118,14 @@ COLOR_CLUSTER_ID = 0x0300
 COLOR_TEMP_ATTR = 0x0007
 COLOR_CT_MIN_ATTR = 0x400B   # ColorTempPhysicalMinMireds - the COOLEST it goes
 COLOR_CT_MAX_ATTR = 0x400C   # ...MaxMireds - the warmest
+COLOR_HUE_ATTR = 0x0000      # CurrentHue, 0..254 around the wheel
+COLOR_SAT_ATTR = 0x0001      # CurrentSaturation, 0..254
+COLOR_MODE_ATTR = 0x0008     # 0 = hue/sat, 1 = x/y, 2 = colour temperature
+COLOR_FEATURES_ATTR = 0xFFFC
+# Bit 0 of the ColorControl FeatureMap: the bulb can do hue and saturation.
+# Asked for rather than assumed - a tunable-white bulb has ColorControl too, and
+# offering it a colour picker would be offering something it cannot do.
+COLOR_FEATURE_HS = 1 << 0
 
 _bulb_lock = threading.Lock()
 
@@ -1142,6 +1150,10 @@ def refresh_bulb(bulb: dict) -> list:
     mireds = m_get(attrs, endpoint, COLOR_CLUSTER_ID, COLOR_TEMP_ATTR)
     ct_min = m_get(attrs, endpoint, COLOR_CLUSTER_ID, COLOR_CT_MIN_ATTR)
     ct_max = m_get(attrs, endpoint, COLOR_CLUSTER_ID, COLOR_CT_MAX_ATTR)
+    hue = m_get(attrs, endpoint, COLOR_CLUSTER_ID, COLOR_HUE_ATTR)
+    sat = m_get(attrs, endpoint, COLOR_CLUSTER_ID, COLOR_SAT_ATTR)
+    mode = m_get(attrs, endpoint, COLOR_CLUSTER_ID, COLOR_MODE_ATTR)
+    feats = m_get(attrs, endpoint, COLOR_CLUSTER_ID, COLOR_FEATURES_ATTR)
 
     if on is None:
         # No answer. We keep the last value rather than showing "off" for a bulb
@@ -1168,6 +1180,21 @@ def refresh_bulb(bulb: dict) -> list:
         values["ctMin"] = int(ct_min)
     if isinstance(ct_max, int) and ct_max:
         values["ctMax"] = int(ct_max)
+    # Colour, for the bulbs that have it.
+    #
+    # ColorMode is the one that decides what the bulb is actually SHOWING: a
+    # lamp holds a hue and a colour temperature at the same time, and only one of
+    # them is lit. Without it the panel would read a perfectly good hue off a
+    # bulb burning plain white and draw the picker sitting on a colour nothing
+    # in the room is.
+    if isinstance(feats, int):
+        values["hasColor"] = bool(feats & COLOR_FEATURE_HS)
+    if isinstance(hue, int):
+        values["hue"] = int(hue)
+    if isinstance(sat, int):
+        values["sat"] = int(sat)
+    if isinstance(mode, int):
+        values["colorMode"] = int(mode)
     # Whoever turned it off - the panel, the wall switch, a power cut - this is
     # where the panel finds out, so this is where a hold ends.
     note_power(node, bool(on))
@@ -2468,6 +2495,9 @@ def refresh_bulbs(force: bool = False) -> dict:
             row.update({"on": st.get("on"), "level": st.get("level"),
                         "mireds": st.get("mireds"), "onlevel": st.get("onlevel"),
                         "ctMin": st.get("ctMin"), "ctMax": st.get("ctMax"),
+                        "hue": st.get("hue"), "sat": st.get("sat"),
+                        "colorMode": st.get("colorMode"),
+                        "hasColor": st.get("hasColor"),
                         "held": overridden(dev["node"])})
         else:
             row["measured"] = st.get("measured")
@@ -4203,14 +4233,22 @@ class Handler(BaseHTTPRequestHandler):
             action = str(body.get("action", "")).strip().lower()
             level = body.get("level")
             mireds = body.get("mireds")
+            hue = body.get("hue")
+            sat = body.get("sat")
             if action and action not in ("on", "off", "toggle"):
                 return self._send({"error": "unknown action"}, status=400)
-            if not action and level is None and mireds is None:
+            # Hue and saturation are one gesture, not two: a hue with no
+            # saturation says nothing about what the lamp should look like.
+            if (hue is None) != (sat is None):
+                return self._send({"error": "'hue' and 'sat' go together"},
+                                  status=400)
+            if not action and level is None and mireds is None and hue is None:
                 return self._send({"error": "nothing to do"}, status=400)
             if not node:
                 return self._send({"error": "missing 'node'"}, status=400)
 
             what = action or ("level " + str(level) if level is not None else "") \
+                          or ("hue %s/%s" % (hue, sat) if hue is not None else "") \
                           or ("colour " + str(mireds))
             log(f"--- bulb {node}: {what} ---", "step")
 
@@ -4272,6 +4310,33 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send({"error": err}, status=502)
                 with _state_lock:
                     _state.setdefault("bulbs", {}).setdefault(str(node), {})["mireds"] = mir
+                set_override(node, True)
+
+            # A colour, rather than a temperature on the white axis.
+            #
+            # MoveToHueAndSaturation, not the two separate commands: sent apart
+            # they are two transitions, and the lamp visibly travels through a
+            # colour nobody asked for on the way to the one that was.
+            #
+            # Same ExecuteIfOff as the temperature above - setting the colour of
+            # a lamp that is off is exactly when you want it to stick.
+            if hue is not None:
+                h = max(0, min(254, int(hue)))
+                sa = max(0, min(254, int(sat)))
+                err = m_cmd(node, endpoint, 0x0300, "MoveToHueAndSaturation",
+                            {"hue": h, "saturation": sa, "transitionTime": 0,
+                             "optionsMask": 1, "optionsOverride": 1})
+                if err:
+                    log(f"bulb {node}: hue {h}/{sa} failed: {err}", "err")
+                    return self._send({"error": err}, status=502)
+                with _state_lock:
+                    memo = _state.setdefault("bulbs", {}).setdefault(str(node), {})
+                    memo["hue"] = h
+                    memo["sat"] = sa
+                    # The bulb is showing a colour now, whatever it was showing
+                    # before. Said here rather than waited for, so the picker
+                    # does not flick back to the white strip for one repaint.
+                    memo["colorMode"] = 0
                 set_override(node, True)
 
             # Read the state back - all of it, through the same combined read

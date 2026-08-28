@@ -1445,6 +1445,57 @@
   }
   .hk-ct.grabbed .hk-knob { transition: none; }
 
+  /* ---------- the colour wheel ----------
+   * Hue is an angle and saturation is a distance from the middle, so the control
+   * is a disc: the shape says what the two numbers are, and there is no third
+   * axis pretending to exist. Brightness stays on its own strip, where it was.
+   *
+   * Painted with two gradients rather than an image or a canvas: a conic sweep
+   * through the hues, and white poured over the middle for the desaturated end.
+   * Nothing to load and nothing to redraw. */
+  .hk-wheel-pad {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 18px;
+  }
+  .hk-wheel {
+    position: relative;
+    width: 208px;
+    height: 208px;
+    border-radius: 50%;
+    border: 1px solid var(--line-hi);
+    background:
+      radial-gradient(circle closest-side, #fff, rgba(255,255,255,0) 72%),
+      conic-gradient(from 0deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+    touch-action: none;
+    cursor: pointer;
+  }
+  .hk-wheel.grabbed { border-color: var(--ink-faint); }
+  /* Dimmed, not hidden, while the lamp is on the white axis. The wheel is still
+     the way to leave it, so it has to stay usable - it just should not look like
+     it is describing what the bulb is doing, because it is not. */
+  .hk-wheel.white { filter: saturate(.35) opacity(.55); }
+  .hk-wheel.off { filter: grayscale(.55) opacity(.5); }
+  .hk-wheel, .hk-dot { transition: filter .3s ease; }
+  .hk-dot {
+    position: absolute;
+    width: 22px;
+    height: 22px;
+    margin: -11px 0 0 -11px;
+    border-radius: 50%;
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 1px 4px rgba(0,0,0,.4);
+    pointer-events: none;
+    transition: left .18s ease, top .18s ease, background .18s ease;
+  }
+  .hk-wheel.grabbed .hk-dot { transition: background .18s ease; }
+  .hk-wheel.white .hk-dot { opacity: .35; }
+  @media (prefers-reduced-motion: reduce) {
+    .hk-dot, .hk-wheel { transition: none; }
+  }
+
   /* ---------- the light schedule ----------
    * A page of its own. Two curves, both live at once: the filled area is
    * brightness and the line over it is colour temperature, and the fill is
@@ -3206,7 +3257,11 @@ function bulbOpts(b) {
     // level 254 at 2200 K is one channel of the LEDs and a fraction of the
     // output it gives at 4000 K. Without this, "full brightness and still dim"
     // has no visible explanation anywhere on the page.
-    dot: (on === true && st && st.mireds) ? ctColor(st.mireds) : '',
+    // A bulb on a colour is NOT on the white axis, and painting the dot from
+    // the colour temperature it happens to be holding would show a warm white
+    // that is nowhere in the room. ColorMode is what says which of the two it
+    // is currently running.
+    dot: bulbDot(on, st),
     icon: ICONS.bulb,
     // "not read yet" is not "did not answer", and neither is "off". A bulb out
     // of range must never look like a bulb somebody switched off - you would
@@ -4024,6 +4079,10 @@ function openBulb(b) {
         <div class="hk-cap" id="cap-ct"></div>
       </div>
     </div>
+    <div class="hk-wheel-pad" id="wheel-pad" hidden>
+      <div class="hk-wheel" id="hk-wheel"><div class="hk-dot"></div></div>
+      <div class="hk-cap" id="cap-col"></div>
+    </div>
     ${sheetActions(b)}
     <div class="links" id="drivers"></div>
     <div class="links" id="sched-of"></div>`;
@@ -4039,6 +4098,14 @@ function openBulb(b) {
   const pct = sheet.querySelector('.hk-pct');
   const capL = sheet.querySelector('#cap-lvl');
   const capC = sheet.querySelector('#cap-ct');
+  const wheelPad = sheet.querySelector('#wheel-pad');
+  const wheel = sheet.querySelector('#hk-wheel');
+  const dot = sheet.querySelector('.hk-dot');
+  const capW = sheet.querySelector('#cap-col');
+
+  // Where the finger is on the wheel, while it is down. Same idea as dragLvl
+  // and dragCt: null means "whatever the bulb says".
+  let dragCol = null;
 
   /* The strip's travel is THIS BULB's range, not the Matter range.
    *
@@ -4161,6 +4228,32 @@ function openBulb(b) {
     knob.style.setProperty('--p', hi > lo ? (hi - mir) / (hi - lo) : 0);
     capC.textContent = `${kelvin(mir)} K`;
     capC.title = ctWord(mir);
+
+    /* The wheel exists only for bulbs that say they can do hue and saturation.
+     * A tunable-white lamp carries ColorControl too, so the cluster being there
+     * proves nothing - the FeatureMap is what is asked. Until the bulb has been
+     * read, hasColor is undefined and the wheel stays out of the way rather
+     * than appearing and then vanishing. */
+    wheelPad.hidden = !(cur.hasColor === true || (b.caps && b.caps.color));
+    if (!wheelPad.hidden) {
+      const hs = dragCol || { hue: cur.hue ?? 0, sat: cur.sat ?? 0 };
+      // ColorMode 2 is the white axis: the bulb holds a hue and is not showing
+      // it. Saying so is the difference between a picker that describes the
+      // room and one that describes a memory.
+      const white = !dragCol && cur.colorMode === 2;
+      wheel.classList.toggle('white', white);
+      wheel.classList.toggle('off', on === false);
+      const ang = (hs.hue / 254) * 2 * Math.PI;
+      const rad = Math.min(1, hs.sat / 254) * 50;
+      dot.style.left = `${50 + rad * Math.sin(ang)}%`;
+      dot.style.top = `${50 - rad * Math.cos(ang)}%`;
+      dot.style.background = hsColor(hs.hue, hs.sat);
+      capW.textContent = white ? 'white'
+        : `${Math.round((hs.hue / 254) * 360)}\u00b0 \u00b7 ${Math.round((hs.sat / 254) * 100)}%`;
+      capW.title = white
+        ? 'the bulb is on the white axis - pick a colour to leave it'
+        : 'hue and saturation';
+    }
   };
   paintCtl();
   SHEET_LIVE = paintCtl;
@@ -4251,6 +4344,7 @@ function openBulb(b) {
       el.classList.remove('grabbed');
       dragLvl = null;
       dragCt = null;
+      dragCol = null;
       paintCtl();
     };
   };
@@ -4267,6 +4361,50 @@ function openBulb(b) {
     set: v => { dragCt = Math.round(ctHi() - v * (ctHi() - ctLo())); },
     commit: () => send({ mireds: dragCt }),
   });
+
+  /* The wheel is two-dimensional, so it does not go through grab(): that one
+   * measures a single axis and treats a small movement as a tap. Here a tap IS
+   * the gesture - press a colour and the lamp goes there - so every press sets
+   * a value and there is nothing to tell apart. */
+  const wheelAt = ev => {
+    const r = wheel.getBoundingClientRect();
+    const dx = ev.clientX - (r.left + r.width / 2);
+    const dy = ev.clientY - (r.top + r.height / 2);
+    let ang = Math.atan2(dx, -dy);
+    if (ang < 0) { ang += 2 * Math.PI; }
+    const reach = Math.min(r.width, r.height) / 2;
+    dragCol = {
+      hue: Math.round((ang / (2 * Math.PI)) * 254) % 255,
+      // Clamped, so the rim of the disc is fully saturated rather than a ring
+      // you have to land on exactly.
+      sat: Math.round(Math.min(1, Math.hypot(dx, dy) / reach) * 254),
+    };
+    paintCtl();
+  };
+  wheel.onpointerdown = ev => {
+    ev.preventDefault();
+    wheel.setPointerCapture(ev.pointerId);
+    wheel.classList.add('grabbed');
+    wheelAt(ev);
+  };
+  wheel.onpointermove = ev => {
+    if (!wheel.hasPointerCapture || !wheel.hasPointerCapture(ev.pointerId)) { return; }
+    wheelAt(ev);
+  };
+  wheel.onpointerup = ev => {
+    if (!wheel.hasPointerCapture || !wheel.hasPointerCapture(ev.pointerId)) { return; }
+    wheel.releasePointerCapture(ev.pointerId);
+    wheel.classList.remove('grabbed');
+    if (dragCol) { send({ hue: dragCol.hue, sat: dragCol.sat }); }
+  };
+  wheel.onpointercancel = ev => {
+    if (wheel.hasPointerCapture && wheel.hasPointerCapture(ev.pointerId)) {
+      wheel.releasePointerCapture(ev.pointerId);
+    }
+    wheel.classList.remove('grabbed');
+    dragCol = null;
+    paintCtl();
+  };
 
   /* Which schedule this bulb answers to.
    *
@@ -4744,6 +4882,32 @@ function ctColor(mireds) {
   const m = Math.max(rel[0], rel[1], rel[2]);
   const c = v => Math.max(0, Math.min(255, Math.round(v / m * 255)));
   return `rgb(${c(rel[0])},${c(rel[1])},${c(rel[2])})`;
+}
+
+/* The colour a hue and a saturation actually look like, for the dot on the
+ * wheel and nothing else.
+ *
+ * Mixed towards WHITE rather than dropped in lightness, because that is what
+ * the wheel under it does: the disc is a conic sweep of full-strength hues with
+ * white poured over the middle. hsl() with a falling saturation would head for
+ * grey instead, and the dot would sit on a colour the wheel is not showing. */
+/* What colour to paint a bulb's dot with: the colour it is actually showing.
+ *
+ * A lamp holds a hue and a colour temperature at the same time and lights only
+ * one of them, so the dot has to follow ColorMode rather than whichever number
+ * happens to be set. Mode 2 is the white axis; 0 and 1 are colour. */
+function bulbDot(on, st) {
+  if (on !== true || !st) { return ''; }
+  if (st.colorMode !== 2 && typeof st.hue === 'number') {
+    return hsColor(st.hue, st.sat);
+  }
+  return st.mireds ? ctColor(st.mireds) : '';
+}
+
+function hsColor(hue, sat) {
+  const deg = ((hue || 0) / 254) * 360;
+  const s = Math.min(1, Math.max(0, (sat || 0) / 254));
+  return `color-mix(in srgb, hsl(${deg} 100% 50%) ${Math.round(s * 100)}%, #fff)`;
 }
 
 function ctWord(mireds) {
