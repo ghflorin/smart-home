@@ -3269,6 +3269,12 @@ function switchOpts(sw) {
     state: isLock ? `locks ${n} switch${n === 1 ? '' : 'es'}`
                   : `${n} bulb${n === 1 ? '' : 's'}`,
     badge: isLock ? 'lock' : (locked ? 'locked' : ''),
+    // Our own switches run on a coin cell and report it like any other battery
+    // device. The reading is a lower bound - the firmware brackets the supply
+    // with the power-fail comparator rather than measuring it - so a healthy
+    // cell reads full for most of its life and the gauge only moves near the
+    // end. That is the part worth seeing.
+    batt: battOf((state.bulbs[String(sw.node)] || {}).measured),
     // A lock cannot lock itself: it would leave you no way to unlock the rest
     // from the wall. So its quick action is the other useful one - blink it, so
     // you know which of them it is.
