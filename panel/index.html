@@ -2055,7 +2055,15 @@
   .sheet .chip.wideadd,
   .sheet input,
   .series button { border-radius: 10px; }
-  .sheet .pick { border-radius: 12px; overflow: hidden; }
+  /* Rounded corners without taking the scrolling away.
+   *
+   * `overflow: hidden` here is more specific than the `overflow-y: auto` on
+   * .pick below, so the shorthand set BOTH axes to hidden and the list simply
+   * stopped at its max-height with the rest unreachable - a lock with more
+   * switches than fit could not be told about the ones past the fold. The
+   * corners still clip: any non-visible overflow makes the radius a clipping
+   * box, and hidden on one axis is enough. */
+  .sheet .pick { border-radius: 12px; overflow-x: hidden; overflow-y: auto; }
 
   .sheet h2 {
     margin: 0 0 4px;
