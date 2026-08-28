@@ -5,18 +5,19 @@
 /*
  * What is left in the cell, reported through Matter's PowerSource cluster.
  *
- * There is no divider on the board and none was added: the nRF54L's ADC reads
- * its own analogue supply, so the measurement costs a few microseconds of ADC
- * and nothing at all when idle. See the `&adc` block in the board overlays.
+ * There is no divider on the board and none was added: the supply is bracketed
+ * with the power-fail comparator, which costs a few register writes and nothing
+ * at all when idle. The nRF54L's ADC cannot see VDD - see battery.cpp.
  */
 namespace Battery {
 
-/* Sets up the ADC, publishes a first reading, then repeats hourly. Safe to call
- * when the ADC is missing from devicetree - it logs and does nothing further,
- * so a board without the overlay still boots. */
+/* Adds the PowerSource endpoint, then measures every hour starting half a
+ * minute after boot. */
 void Init(void);
 
-/* The last voltage read, in millivolts, or -1 before the first reading. */
+/* The last reading, in millivolts, as a LOWER BOUND - 2700 means "at least
+ * 2.7 V". -1 before the first reading, and also when the supply is under the
+ * comparator's lowest step. */
 int32_t LastMillivolts(void);
 
 } /* namespace Battery */

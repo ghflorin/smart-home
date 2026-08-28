@@ -51,6 +51,38 @@ The CASE session to the bulb does expire — Matter evicts idle sessions — so 
 first press after a long pause costs a few hundred ms while it is rebuilt.
 `light_ctrl.cpp` handles that; it cannot avoid it.
 
+### Measuring what is left in the cell
+
+**The nRF54L's ADC cannot see its own supply.** `NRF_SAADC_AVDD` sounds like it
+should, and nrfx says otherwise in one line - "internal 0.9 V analog supply
+rail". The hardware agreed: the first version of `battery.cpp` reported 903 mV
+off a 3 V cell, which is the reading working correctly on the wrong signal. This
+SoC exposes two internal ADC inputs, AVDD and DVDD, and both are regulated rails
+that hold still while the battery drains. There is no VDD input.
+
+What does see the supply is the **power-fail comparator**. `POFCON` takes a
+threshold from 1.7 to 2.8 V in 0.1 V steps and `POFSTAT` says whether VDD is
+below it, so walking the thresholds down and stopping at the first one the supply
+still clears brackets it to within 100 mV - no external parts, no standing
+current, and it ships as a firmware update rather than a rework.
+
+So `BatVoltage` is a **lower bound**: 2700 means "at least 2.7 V", and a healthy
+cell reads 2800 because that is as high as the comparator looks. The ceiling
+costs nothing - a lithium coin cell sits near 3 V for most of its life and then
+falls off a cliff, and the cliff is entirely inside 2.8 to 2.2 V.
+
+One consequence worth knowing before testing: **the low end cannot be exercised
+on the bench.** Anything above 2.8 V - a debug probe at 3.3 V, a fresh cell at
+3.0 V - reads the top step, and every threshold reports "above". Seeing the
+comparator discriminate takes a cell that has actually aged, or a supply that can
+be turned down.
+
+The cluster itself is a **dynamic endpoint**, endpoint 3, carrying the Power
+Source device type, for the same reason `lock_cluster.cpp` uses one: PowerSource
+belongs on the root endpoint, the root endpoint comes from ZAP, and regenerating
+the data model is not worth it. Endpoint numbers are read once, at commissioning,
+so they are not free to renumber later.
+
 ## Brightness, and what a level actually means
 
 **The range is 1..254**, and the bulb says so itself — its LevelControl cluster

@@ -1629,6 +1629,23 @@ def radio_up_for() -> float:
         return -1.0
 
 
+def already_have(installed_code, offered_code) -> bool:
+    """Is the offer the version the device is already running, or older?
+
+    matter-server compares versions for updates it finds on the ledger and does
+    NOT compare them for local descriptors - `check_for_update` simply returns
+    the highest one on file. So our own switch keeps being offered the image it
+    is already running, and the tile keeps drawing a cloud over a device with
+    nothing to fetch.
+
+    Unknown means "say nothing": if either number is missing, the offer stands
+    rather than being hidden, because a missed update is worse than a stray icon.
+    """
+    if not isinstance(installed_code, int) or not isinstance(offered_code, int):
+        return False
+    return offered_code <= installed_code
+
+
 def firmware_for(node, fresh=False) -> dict:
     """What is installed on a node, and what the vendor is offering.
 
@@ -1652,6 +1669,9 @@ def firmware_for(node, fresh=False) -> dict:
     out = {
         "node": node,
         "installed": m_get(attrs, 0, 0x0028, 0x000A),
+        # The number, alongside the string: only the number can be compared.
+        # "3.0.10+0" sorts below "3.0.4+0" as text and above it as a version.
+        "installedCode": m_get(attrs, 0, 0x0028, 0x0009),
         "updatePossible": m_get(attrs, 0, 0x002A, 0x0001),
     }
     try:
@@ -1660,7 +1680,7 @@ def firmware_for(node, fresh=False) -> dict:
         out["error"] = str(exc)
         return fw_live(node, out)
 
-    if upd:
+    if upd and not already_have(out.get("installedCode"), upd.get("software_version")):
         out["available"] = upd.get("software_version_string")
         out["availableCode"] = upd.get("software_version")
         out["notes"] = upd.get("release_notes_url")

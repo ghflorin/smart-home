@@ -10,6 +10,6 @@
 /* One dynamic endpoint: the lock endpoint, declared in src/lock_cluster.cpp.
  * Without this, MAX_ENDPOINT_COUNT stays equal to the number of fixed endpoints
  * and emberAfSetDynamicEndpoint has nowhere to put it. */
-#define CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT 1
+#define CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT 2
 
 
