@@ -2,10 +2,9 @@
 #
 # Flash over SWD using a Raspberry Pi Pico as the probe.
 #
-#   ./scripts/flash.sh                 # holyiot_25015 (the switch)
-#   ./scripts/flash.sh holyiot_25008
+#   ./scripts/flash.sh                 # holyiot_25008, the switch
 #   ./scripts/flash.sh xenon            # the border router's radio
-#   ./scripts/flash.sh holyiot_25015 --erase chip   # also wipes commissioning
+#   ./scripts/flash.sh --erase chip     # also wipes commissioning
 #
 # Same programmer for both - only the chip differs (nrf54l vs nrf52840).
 #
@@ -42,7 +41,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TARGET=${1:-holyiot_25015}
+TARGET=${1:-holyiot_25008}
 shift || true
 
 # The pyocd target name is "nrf54l", NOT "nrf54l15".

@@ -3,20 +3,18 @@
 # Build. Assumes bootstrap.sh has already run.
 #
 # Usage:
-#   ./scripts/build.sh                    # holyiot_25015 (default)
-#   ./scripts/build.sh holyiot_25008      # the other module
+#   ./scripts/build.sh                    # holyiot_25008, the switch
 #   ./scripts/build.sh nrf54l15dk         # Nordic DK, for debugging over shell/RTT
-#   ./scripts/build.sh holyiot_25015 -p   # pristine
+#   ./scripts/build.sh holyiot_25008 -p   # pristine
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NCS_DIR=${NCS_DIR:-$HOME/ncs}
-TARGET=${1:-holyiot_25015}
+TARGET=${1:-holyiot_25008}
 shift || true
 
 case "$TARGET" in
-	holyiot_25015) BOARD="holyiot_25015/nrf54l15/cpuapp" ;;
 	holyiot_25008) BOARD="holyiot_25008/nrf54l15/cpuapp" ;;
 	nrf54l15dk)    BOARD="nrf54l15dk/nrf54l15/cpuapp" ;;
 	*)             BOARD="$TARGET" ;;

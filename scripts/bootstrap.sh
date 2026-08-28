@@ -62,6 +62,6 @@ base plus our own modules). Do NOT copy the sample over it again - that would
 overwrite CMakeLists.txt, Kconfig.sysbuild and the hooks in src/app_task.cpp.
 
 Build:
-  ./scripts/build.sh holyiot_25015     # or holyiot_25008 / nrf54l15dk
+  ./scripts/build.sh                   # or nrf54l15dk
 
 EOF
