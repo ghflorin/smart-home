@@ -262,6 +262,45 @@ exactly what makes two slots fit. The module does have a UART on P1.04/P1.05, so
 a console can be brought out on wires, but re-enabling `CONFIG_LOG` means OTA no
 longer fits. For development, `nrf54l15dk` is more convenient.
 
+## Over-the-air updates are transferred but never adopted
+
+**The transfer works. The adoption does not.** Four complete transfers of 642 to
+714 KB, no stalls, real progress reported throughout - and after every one the
+device came back on the version it started with.
+
+The measurement that matters is the control: an image **identical to the running
+firmware except for its version number** - the same 642076 bytes, no new code -
+was transferred, applied, and reverted exactly like the rest. So this is not
+about anything we added. Not the battery feature, not the debug console, not the
+image size, and not the signature.
+
+What the device reports afterwards: `BootReason` = 5 (SoftwareUpdateCompleted)
+and `RebootCount` up by **two**, which is the signature of a test-swap that ran
+and was then taken back - the new image boots, gets far enough to persist state,
+and MCUboot reverts it on the following reset.
+
+One lead, tried and **not** sufficient: NCS confirms a new image in
+`nrf/samples/matter/common/src/app/matter_init.cpp`, but only past
+
+```c
+VerifyOrReturn(mcuboot_swap_type() == BOOT_SWAP_TYPE_REVERT);
+```
+
+a guard with an explicit exception for nRF53 ("we use permanent swap so we can
+skip it") and none for nRF54L. Calling `boot_write_img_confirmed()` from the
+application ourselves, early in `AppTask::Init`, changed nothing - it still
+reverted.
+
+Where to look next, without more guessing: read the MCUboot trailer out of the
+secondary slot over SWD and see what is actually written there and what the
+bootloader makes of it. That is a fact rather than a hypothesis, and three
+hypotheses have now been wrong.
+
+Note that `ota/update.sh` cannot be used for any of this: it drives the update
+with chip-tool on a fabric that no longer exists. Updates go through
+matter-server's local update descriptors - see `deploy/matter-custom-clusters.py`
+for the shape of that machinery.
+
 ## Board definitions
 
 `firmware/boards/holyiot/` covers **Holyiot 25008** and **25015**, started from
