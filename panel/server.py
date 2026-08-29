@@ -1047,7 +1047,19 @@ def refresh_switch(sw: dict) -> list:
     attrs, err = read_switch_state(node, endpoint)
 
     if attrs is None:
-        _matter_ok = False
+        # A device that is asleep or out of range is NOT the Matter service
+        # being down, and saying so put "matter service is not answering" across
+        # the whole panel because one button in one room had a flat cell. The
+        # service answered perfectly - it answered "that node is not available",
+        # which is a different sentence entirely.
+        #
+        # Anything else - a closed socket, an unknown node - really is about the
+        # service, and still says so.
+        about_device = any(w in (err or "").lower()
+                           for w in ("not reachable", "not (yet) available",
+                                     "no response", "no such node"))
+        if not about_device:
+            _matter_ok = False
         state_put(node, meta={"readAt": time.time(), "ok": False, "err": err})
         return []
     _matter_ok = True
@@ -3852,14 +3864,53 @@ class Handler(BaseHTTPRequestHandler):
                     f"switches that control it, so the ones I am not editing "
                     f"have to be known too - otherwise I would cut off their "
                     f"access.", "step")
+            unknown = []
             for s2 in switches(devices):
                 if s2["node"] == sw_node:
                     desired[s2["node"]] = set(want)
+                    continue
+                # A remote has no binding table to read - it sends events and
+                # the PANEL does the commanding, as admin - so it belongs in no
+                # bulb's ACL. Locks are already out of `others` for the same
+                # kind of reason; this loop walks every switch, so it has to say
+                # so itself.
+                if is_remote(s2) or s2.get("role") == "lock":
+                    continue
+                table, _e = read_binding(
+                    s2["node"],
+                    s2.get("entry_endpoint", s2.get("endpoint", 1)))
+                if table is not None:
+                    desired[s2["node"]] = {e["node"] for e in table}
+                    continue
+                # It did not ANSWER. That is not the same as controlling
+                # nothing, and treating it as such is how a switch that happened
+                # to be asleep while you edited a different one lost its access
+                # to every bulb in the house: its own table was fine, the ACLs
+                # simply stopped naming it, and it went on lighting its LED and
+                # commanding nothing.
+                #
+                # Our own last reading is the honest stand-in. Switches are
+                # sleepy by design, so this is the ordinary case, not the odd
+                # one.
+                held = state_of(s2["node"]).get("binding")
+                if held is not None:
+                    desired[s2["node"]] = {e["node"] for e in held}
+                    log(f"switch {s2['node']} did not answer - keeping the "
+                        f"{len(held)} bulb{'' if len(held) == 1 else 's'} we "
+                        f"last saw it controlling", "warn")
                 else:
-                    table, _e = read_binding(
-                        s2["node"],
-                        s2.get("entry_endpoint", s2.get("endpoint", 1)))
-                    desired[s2["node"]] = {e["node"] for e in (table or [])}
+                    unknown.append(s2["node"])
+
+            # Nothing known and no answer: refuse. Writing the ACLs now would
+            # revoke a switch we simply have never read, and the only sign would
+            # be a button that stops working days later.
+            if unknown:
+                names = ", ".join(str(n) for n in unknown)
+                log(f"cannot rewrite the ACLs: switch {names} has never been "
+                    f"read, so its access would be removed by guessing", "err")
+                return self._send(
+                    {"error": f"switch {names} did not answer and has never "
+                              f"been read - try again once it has"}, status=503)
 
             # One ACL per bulb: every switch that controls it. A bulb can be
             # controlled by several switches at once.
