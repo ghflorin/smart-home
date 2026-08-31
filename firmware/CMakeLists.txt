@@ -39,6 +39,7 @@ target_sources(app PRIVATE
     src/lock_cluster.cpp
     src/lock_state.cpp
     src/battery.cpp
+    src/switch_cluster.cpp
 )
 
 chip_configure_data_model(app

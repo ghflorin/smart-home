@@ -8,6 +8,7 @@
 
 #include "automation.h"
 #include "battery.h"
+#include "switch_cluster.h"
 #include "light_ctrl.h"
 #include "lock_state.h"
 #include "lock_cluster.h"
@@ -132,6 +133,10 @@ void AppTask::DimmerTriggerEventHandler()
 		Automation::OnButtonShortPress();
 	}
 
+	/* Said out loud AFTER the light has been dealt with. The report is for
+	 * whoever is listening; the lamp is not waiting on it. */
+	SwitchCluster::Released(sWasDimmerTriggered);
+
 	Instance().CancelTimer(Timer::Dimmer);
 	Instance().CancelTimer(Timer::DimmerTrigger);
 	sWasDimmerTriggered = false;
@@ -145,6 +150,7 @@ void AppTask::TimerEventHandler(const Timer &timerType)
 		LOG_INF("long press");
 		sWasDimmerTriggered = true;
 		Automation::OnButtonLongPress();
+		SwitchCluster::LongHeld();
 		Instance().CancelTimer(Timer::DimmerTrigger);
 		break;
 	case Timer::Dimmer:
@@ -177,6 +183,9 @@ void AppTask::ButtonEventHandler(Nrf::ButtonState state, Nrf::ButtonMask hasChan
 	if ((APPLICATION_BUTTON_MASK & state & hasChanged)) {
 		LOG_INF("Button has been pressed, keep in this state for at least 500 ms to change light sensitivity of bound lighting devices.");
 		Instance().StartTimer(Timer::DimmerTrigger, kDimmerTriggeredTimeout);
+		/* Posted, unlike the two below: this runs on the button's own
+		 * callback, and logging an event belongs to the Matter thread. */
+		Nrf::PostTask([] { SwitchCluster::Pressed(); });
 	} else if ((APPLICATION_BUTTON_MASK & hasChanged)) {
 		Nrf::PostTask([] { DimmerTriggerEventHandler(); });
 #ifdef CONFIG_CHIP_ICD_UAT_SUPPORT
@@ -259,6 +268,7 @@ CHIP_ERROR AppTask::Init()
 		LockCluster::Init();
 		Automation::Init();
 		Battery::Init();
+		SwitchCluster::Init();
 		return CHIP_NO_ERROR;
 	} }));
 
