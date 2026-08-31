@@ -523,8 +523,20 @@ def detect_caps(node: int, endpoint: int = 1, ms=None) -> dict:
     # chip-tool answered in nested JSON that had to be walked for the number;
     # here the attribute IS the number.
     fm = int(fmap)
+    # `color` means HUE AND SATURATION, not "some colour bit is set".
+    #
+    # IKEA's white-spectrum lamps advertise XY as well - featureMap 24, which is
+    # XY plus colour temperature - while being unable to render a colour at all.
+    # The names say it plainly: KAJPLATS E27 **WS** reads 24, KAJPLATS E27 **CWS**
+    # reads 31. Counting XY as colour put a colour wheel on every tunable-white
+    # bulb in the house.
+    #
+    # Hue and saturation is also what the panel actually sends, so this is not
+    # only the honest bit - it is the one that matches what the control can do.
+    # XY is kept separately: a lamp that has it still needs ColorControl bound.
     return {"ct": bool(fm & CC_COLOR_TEMP),
-            "color": bool(fm & (CC_HUE_SAT | CC_XY)),
+            "color": bool(fm & CC_HUE_SAT),
+            "xy": bool(fm & CC_XY),
             "featureMap": fm}
 
 
@@ -534,7 +546,10 @@ def clusters_for(bulb: dict) -> tuple:
     fill up the log."""
     caps = bulb.get("caps") or {}
     out = [6, 8]  # OnOff, LevelControl
-    if caps.get("ct") or caps.get("color"):
+    # Any colour feature at all, not just the one the wheel drives: a
+    # white-spectrum lamp has no hue and still needs ColorControl bound, or the
+    # schedule cannot set its colour temperature.
+    if caps.get("ct") or caps.get("color") or caps.get("xy"):
         out.append(768)  # ColorControl 0x0300
     return tuple(out)
 

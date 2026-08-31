@@ -4256,7 +4256,16 @@ function openBulb(b) {
      * proves nothing - the FeatureMap is what is asked. Until the bulb has been
      * read, hasColor is undefined and the wheel stays out of the way rather
      * than appearing and then vanishing. */
-    wheelPad.hidden = !(cur.hasColor === true || (b.caps && b.caps.color));
+    /* What the bulb answered beats what the registry remembers - and when it
+     * has not answered yet, the FEATURE MAP beats the stored `color`, which was
+     * once computed as "hue or xy" and so is true for every tunable-white lamp
+     * commissioned before that was corrected. Bit 0 is hue and saturation,
+     * which is exactly what this wheel sends. */
+    const caps = b.caps || {};
+    const canColour = typeof cur.hasColor === 'boolean' ? cur.hasColor
+      : (typeof caps.featureMap === 'number' ? (caps.featureMap & 1) === 1
+                                             : !!caps.color);
+    wheelPad.hidden = !canColour;
     if (!wheelPad.hidden) {
       const hs = dragCol || { hue: cur.hue ?? 0, sat: cur.sat ?? 0 };
       // ColorMode 2 is the white axis: the bulb holds a hue and is not showing
