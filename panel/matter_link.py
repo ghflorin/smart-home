@@ -230,6 +230,16 @@ class MatterCall:
         self._seq = 0
         self._lock = threading.Lock()
 
+    def close(self):
+        """Give the socket back. For the callers that own one of their own."""
+        with self._lock:
+            try:
+                if self._conn is not None:
+                    self._conn.close()
+            except Exception:  # noqa: BLE001 - closing a dead socket is fine
+                pass
+            self._conn = None
+
     def _connect(self):
         conn = ws_connect(self._url, open_timeout=10, ping_interval=20)
         conn.recv(timeout=15)          # the server's hello, which we know already

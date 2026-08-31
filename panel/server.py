@@ -1847,8 +1847,25 @@ def firmware_update(node, version):
         # No timeout worth naming: this downloads an image and then waits for a
         # sleepy device to fetch and apply it. The device's own UpdateState is
         # what the panel watches, not this call returning.
-        MS.call("update_node", {"node_id": ms, "software_version": version},
-                timeout=3600.0)
+        # ON A SOCKET OF ITS OWN.
+        #
+        # MatterCall runs one command at a time under a lock, and says why: the
+        # panel has no work that benefits from overlapping commands. That was
+        # true of every command until this one. An update is a SINGLE call that
+        # lasts eight minutes, and while it held the lock nothing else could
+        # reach matter-server at all - no bulb could be read, no switch
+        # identified, and /api/bulbs did not answer inside ninety seconds. The
+        # tiles showed "reading..." for the whole transfer, which reads as
+        # twenty slow bulbs rather than one busy socket.
+        #
+        # Nothing else changes: still one command at a time on the shared
+        # connection, and this one simply stops standing in its way.
+        updater = MatterCall(MATTER_WS, log)
+        try:
+            updater.call("update_node", {"node_id": ms, "software_version": version},
+                         timeout=3600.0)
+        finally:
+            updater.close()
     except MatterError as exc:
         with _fw_lock:
             _ota_running.discard(node)
