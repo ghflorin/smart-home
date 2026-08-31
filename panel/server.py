@@ -2256,6 +2256,38 @@ def remote_act(node, button, gesture):
     entry = next((x for x in switches(devices) if x["node"] == node), None)
     if entry is None:
         return
+
+    # OUR OWN switch: it has already done the work.
+    #
+    # A press on one of these goes straight to the bulb over Thread, bound
+    # device to device, and the Pi is not in the path at all - which is the
+    # whole point, and why it still works with the Pi unplugged. But the panel
+    # DOES hear the press, because the switch reports it on the Switch cluster
+    # and matter-server subscribes to that.
+    #
+    # Hearing it is what was missing. A long press sets the lamp to full, and
+    # the schedule, knowing nothing about it, wrote the curve's brightness back
+    # on its next tick - so the light you asked for lasted seconds. Nothing was
+    # wrong with either half; they simply never spoke.
+    #
+    # So this sends nothing. It only records that somebody used the lamp, which
+    # is exactly what the schedule needs to stand back. If the Pi is off, the
+    # long press still works - it is just not remembered, which is the right way
+    # round for a house whose switches do not depend on a server.
+    if not is_remote(entry):
+        if gesture != "long":
+            return
+        held = sorted({e["node"] for e in (state_of(node).get("binding") or [])})
+        known = {b["node"] for b in devices.get("bulbs", [])}
+        held = [n for n in held if n in known]
+        for n in held:
+            set_override(n, True)
+        if held:
+            log(f"switch {node}: long press - holding {len(held)} bulb"
+                f"{'' if len(held) == 1 else 's'} at what it asked for for "
+                f"{HOLD_MAX_SEC // 60} min", "ok")
+        return
+
     targets = remote_buttons(entry).get(str(button)) or []
     action = remote_action(entry, button, gesture)
     if not targets or not action:
@@ -2899,7 +2931,11 @@ def bulbs_of(sw: dict, devices: dict) -> list:
 #
 # So the hold has a ceiling as well. Whichever arrives first ends it: the light
 # goes off, or this runs out. Set it to 0 to make switching off the only way.
-HOLD_MAX_SEC = int(os.environ.get("PANEL_HOLD_MAX_SEC", str(3 * 3600)))
+#
+# Half an hour, because that is how long asking for a light means anything. Long
+# enough to cover what you got up to do, short enough that the schedule has the
+# evening back before you have wondered why the lamp is stuck.
+HOLD_MAX_SEC = int(os.environ.get("PANEL_HOLD_MAX_SEC", str(30 * 60)))
 
 ONLEVEL_STEP = int(os.environ.get("PANEL_ONLEVEL_STEP", "8"))
 MIRED_STEP = int(os.environ.get("PANEL_MIRED_STEP", "3"))

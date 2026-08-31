@@ -4239,7 +4239,7 @@ function openBulb(b) {
     capL.textContent = cur.held ? (on ? 'on · held' : 'off · held')
       : on ? 'on' : (cur.on === false ? 'off' : '\u2014');
     capL.title = cur.held
-      ? 'set by hand — the schedule leaves it alone until you switch it off' : '';
+      ? 'set by hand — the schedule leaves it alone for half an hour, or until you switch it off' : '';
 
     // The handle's travel is inset by its own height, so at either end it sits
     // fully inside the strip. Positioned by its centre it was drawn half
