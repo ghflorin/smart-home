@@ -42,7 +42,21 @@ fi
 
 # Everything after the board name goes to CMake, not to west: that is where
 # things like -DEXTRA_CONF_FILE=debug-rtt.conf belong.
-west build -b "$BOARD" --sysbuild \
+#
+# Except -p. It is west's own flag, and passing it through to CMake got
+#   CMake Error: Unknown argument -p
+# from a script whose own usage line offers it. Pulled out here instead.
+WEST_ARGS=()
+REST=()
+for arg in "$@"; do
+	case "$arg" in
+		-p|--pristine|--pristine=*) WEST_ARGS+=("$arg") ;;
+		*) REST+=("$arg") ;;
+	esac
+done
+set -- ${REST+"${REST[@]}"}
+
+west build -b "$BOARD" --sysbuild ${WEST_ARGS+"${WEST_ARGS[@]}"} \
 	-d "$REPO_ROOT/build-${TARGET}" \
 	"$REPO_ROOT/firmware" \
 	-- -DBOARD_ROOT="$REPO_ROOT/firmware" \
