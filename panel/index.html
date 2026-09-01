@@ -3288,14 +3288,21 @@ function bulbOpts(b) {
   else if (st) { text = 'no answer'; }
   else { text = 'reading…'; }
 
-  // How high the tile fills. On with no level read back fills completely: we
-  // know it is lit and nothing more, and a half-full tile would be a number we
-  // invented.
-  // And the fill, so the tile and the sheet's panel stand at the same height for
-  // the same bulb. The floor keeps a bulb that is on but at its minimum from
-  // looking off.
+  /* How high the tile fills - from the SAME number the text shows.
+   *
+   * These were computed separately, and the two reports that make up "the light
+   * came on" arrive about a second apart: OnOff first, CurrentLevel after. In
+   * that gap `level` still holds the floor the bulb sat at while it was off, so
+   * the text fell back to onlevel and said 100% while the fill took the floor
+   * literally and dropped to 5%. Switching a lamp on went 100 - 5 - 100 on the
+   * way to standing still, and it was not the bulb: it reports once, cleanly.
+   *
+   * On with no level known at all still fills completely: we know it is lit and
+   * nothing more, and a half-full tile would be a number we invented. The floor
+   * keeps a bulb that is on but genuinely at its minimum from looking off - one
+   * dimmed to 1 by hand has an onlevel of 1 to match, so it lands there too. */
   const lvl = on !== true ? 0
-    : (st && typeof st.level === 'number' ? Math.max(0.05, perceived(st.level)) : 1);
+    : (lvlNow === null ? 1 : Math.max(0.05, perceived(lvlNow)));
 
   return {
     node: b.node,
