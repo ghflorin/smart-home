@@ -487,8 +487,10 @@
     transition: height .55s cubic-bezier(.3,0,.2,1);
   }
   /* Full: the hairline has nothing above it left to separate, so it reads as a
-     stray rule along the edge instead of as a level. */
-  .tile .fill.full { border-top-color: transparent; }
+     stray rule along the edge instead of as a level.
+     Empty: the same problem at the other end - a rule along the bottom of a dark
+     tile, marking a level of nothing. */
+  .tile .fill.full, .tile .fill.zero { border-top-color: transparent; }
 
   /* Both fills get a compositing layer of their own.
    *
@@ -3074,18 +3076,34 @@ function paintTile(el, o) {
   // (a switch), which is not the same thing.
   if (o.level) {
     if (!p.fill) {
+      /* Born empty, and only then given its height.
+       *
+       * The fill used to be REMOVED when the lamp went dark and built again when
+       * it came back - and a freshly inserted element has nothing to transition
+       * from, so switching a light on jumped straight to the final height while
+       * every other change faded. The animation looked broken because half the
+       * time there was none.
+       *
+       * Reading offsetHeight between the two is what makes it real: without a
+       * forced reflow the browser folds both into one style pass and sees a
+       * single value, which is the same jump by a different route. */
       p.fill = document.createElement('div');
-      p.fill.className = 'fill';
+      p.fill.className = 'fill zero';
+      p.fill.style.setProperty('--lvl', 0);
       el.append(p.fill);
+      void p.fill.offsetHeight;
+      p.lvl = 0;
     }
+    p.fill.classList.remove('zero');
     if (p.lvl !== o.level) { p.fill.style.setProperty('--lvl', o.level); p.lvl = o.level; }
     // At the top there is nothing above the line for it to separate, so it
     // stops being a level marker and becomes a stray rule along the edge.
     p.fill.classList.toggle('full', o.level >= 0.995);
   } else if (p.fill) {
-    p.fill.remove();
-    p.fill = null;
-    p.lvl = null;
+    // Kept, not removed: it has to be here to fade back up next time.
+    if (p.lvl !== 0) { p.fill.style.setProperty('--lvl', 0); p.lvl = 0; }
+    p.fill.classList.remove('full');
+    p.fill.classList.add('zero');
   }
 
   if (o.badge) {
