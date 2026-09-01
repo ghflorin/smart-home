@@ -3880,14 +3880,28 @@ function wireForget(sheet, dev) {
     clearTimeout(armed);
     btn.disabled = true;
     btn.textContent = 'removing…';
+    /* Long, because it genuinely is: the Pi takes the device out of every
+     * binding table and rewrites the ACL on every bulb before it unpairs, and a
+     * sleepy switch answers when it next wakes. Two minutes is past the worst of
+     * that and far short of for ever, which is what this used to wait. */
     let j;
     try {
       j = await (await api('/api/forget', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ node: dev.node })
-      })).json();
-    } catch (err) { j = { error: String(err) }; }
+      }, 120000)).json();
+    } catch (err) {
+      // No answer is not the same as nothing happened. Ask the house.
+      const here = await stillHere(dev.node);
+      if (here === false) {
+        j = { name: dev.name, unpaired: null };
+      } else {
+        j = { error: here === null
+          ? 'no answer, and the panel could not be reached to check'
+          : String(err) };
+      }
+    }
     btn.disabled = false;
     if (j.error) {
       disarm();
@@ -3896,9 +3910,14 @@ function wireForget(sheet, dev) {
       return;
     }
     closeSheet();
-    setStatus(j.unpaired
-      ? `${j.name} removed`
-      : `${j.name} removed here, but it did not answer the unpair \u2014 factory reset it before using it elsewhere`,
+    // null means the reply never came back AND the registry says it is gone: it
+    // was removed, and whether the unpair itself landed is the one thing that
+    // cannot be claimed.
+    setStatus(j.unpaired === null
+      ? `${j.name} removed \u2014 the panel did not answer in time, so factory reset it before using it elsewhere`
+      : j.unpaired
+        ? `${j.name} removed`
+        : `${j.name} removed here, but it did not answer the unpair \u2014 factory reset it before using it elsewhere`,
       j.unpaired ? 'ok' : 'warn');
     load();
   };
@@ -6965,13 +6984,37 @@ function markBusy(delta) {
 
 // Every fetch to the API goes through here, so the activity dot stays correct
 // without marking it by hand at every call.
-async function api(url, opts) {
+async function api(url, opts, timeoutMs) {
   markBusy(+1);
+  const ctl = timeoutMs ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : null;
   try {
-    return await fetch(url, opts);
+    return await fetch(url, ctl ? { ...opts, signal: ctl.signal } : opts);
   } finally {
+    if (timer) { clearTimeout(timer); }
     markBusy(-1);
     pollLog();          // picks up whatever was logged during the call
+  }
+}
+
+/* Is this device still in the house?
+ *
+ * Asked when a removal gives no answer. The work happens on the Pi whether or
+ * not the reply reaches us - twice now the panel restarted mid-request, the
+ * device was unpaired and gone, and the sheet sat on "removing…" for ever,
+ * because a fetch that is never answered is never rejected either.
+ *
+ * So the outcome is checked rather than waited for. The registry is what the
+ * page itself is drawn from: if the device has left it, it has left. */
+async function stillHere(node) {
+  try {
+    const d = await (await api('/api/devices', undefined, 15000)).json();
+    for (const k of ['bulbs', 'switches', 'devices']) {
+      if ((d[k] || []).some(x => x.node === node)) { return true; }
+    }
+    return false;
+  } catch (err) {
+    return null;          // could not find out, which is not the same as "gone"
   }
 }
 
