@@ -2315,9 +2315,11 @@ def remote_act(node, button, gesture):
         for n in held:
             set_override(n, True)
         if held:
+            until = f"for {HOLD_MAX_SEC // 60} min" if HOLD_MAX_SEC \
+                else "until it is switched off"
             log(f"switch {node}: long press - holding {len(held)} bulb"
-                f"{'' if len(held) == 1 else 's'} at what it asked for for "
-                f"{HOLD_MAX_SEC // 60} min", "ok")
+                f"{'' if len(held) == 1 else 's'} at what it asked for "
+                f"{until}", "ok")
         return
 
     targets = remote_buttons(entry).get(str(button)) or []
@@ -2961,13 +2963,18 @@ def bulbs_of(sw: dict, devices: dict) -> list:
 # in the morning, and it sits out the whole day, because the one event that ends
 # a hold never comes.
 #
-# So the hold has a ceiling as well. Whichever arrives first ends it: the light
-# goes off, or this runs out. Set it to 0 to make switching off the only way.
+# There is a ceiling available, and it is deliberately OFF: switching the light
+# off is the only thing that ends a hold.
 #
-# Half an hour, because that is how long asking for a light means anything. Long
-# enough to cover what you got up to do, short enough that the schedule has the
-# evening back before you have wondered why the lamp is stuck.
-HOLD_MAX_SEC = int(os.environ.get("PANEL_HOLD_MAX_SEC", str(30 * 60)))
+# The blind spot is real - a lamp left on all day sits out the whole day on one
+# nudge at nine in the morning - and it is the behaviour that was asked for, for
+# a good reason. A timer means the light changes under you at a moment you did
+# not choose and cannot predict, which is the thing a hold exists to prevent. Off
+# and on again is a decision you make with your hand, so the schedule comes back
+# exactly when you meant it to.
+#
+# Set PANEL_HOLD_MAX_SEC to a number of seconds to put the ceiling back.
+HOLD_MAX_SEC = int(os.environ.get("PANEL_HOLD_MAX_SEC", "0"))
 
 ONLEVEL_STEP = int(os.environ.get("PANEL_ONLEVEL_STEP", "8"))
 MIRED_STEP = int(os.environ.get("PANEL_MIRED_STEP", "3"))

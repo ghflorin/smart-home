@@ -853,7 +853,6 @@
    * beside the icon, in the row layout it lands on top of the name - hence the
    * reserved space. */
   .grid[data-size="s"] .tile.badged .tname { padding-right: 46px; }
-  .grid[data-size="s"] .tile.badged-wide .tname { padding-right: 70px; }
   .tbadge {
     position: absolute;
     top: 10px;
@@ -866,12 +865,14 @@
     border-radius: 6px;
     padding: 2px 6px;
   }
-  /* Out of the battery's corner when there is a battery, the same way the
-     update icon steps aside. The badge is the one that moves: it is the wider
-     of the two, and a gauge is read by position as much as by colour - a cell
-     that wanders depending on what else the tile has to say is a cell you have
-     to find before you can read it. */
-  .tbadge.beside-batt { right: 34px; }
+  /* UNDER the corner, not beside it.
+     Moving sideways worked while there were two things up there; with a battery
+     AND an update icon the badge was pushed into the icon instead. Going down
+     one row settles it for good: the gauge and the icon keep the corner, which
+     is where the eye looks for them, and the badge gets a line of its own that
+     nothing else competes for. Its position no longer depends on what else the
+     tile happens to be saying. */
+  .tbadge { top: 32px; }
 
 
   /* ---------- the toolbar: rooms on the left, tile size on the right ------ */
@@ -3073,14 +3074,11 @@ function paintTile(el, o) {
       el.append(p.badge);
     }
     setText(p.badge, o.badge);
-    p.badge.classList.toggle('beside-batt', !!p.batt);
     el.classList.add('badged');
-    el.classList.toggle('badged-wide', !!p.batt);
   } else if (p.badge) {
     p.badge.remove();
     p.badge = null;
     el.classList.remove('badged');
-    el.classList.remove('badged-wide');
   }
 }
 
@@ -4239,7 +4237,7 @@ function openBulb(b) {
     capL.textContent = cur.held ? (on ? 'on · held' : 'off · held')
       : on ? 'on' : (cur.on === false ? 'off' : '\u2014');
     capL.title = cur.held
-      ? 'set by hand — the schedule leaves it alone for half an hour, or until you switch it off' : '';
+      ? 'set by hand — the schedule leaves it alone until you switch the light off' : '';
 
     // The handle's travel is inset by its own height, so at either end it sits
     // fully inside the strip. Positioned by its centre it was drawn half
