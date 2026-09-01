@@ -19,11 +19,28 @@
  *
  * WHAT THE NUMBER MEANS. It is a LOWER BOUND, not a measurement: 2700 means "at
  * least 2.7 V", and a fresh cell reads 2800 because that is as high as the
- * comparator looks. That ceiling costs nothing here. A lithium coin cell holds
- * close to 3 V for most of its life and then falls off a cliff, so everything
- * worth knowing happens between 2.8 V and 2.2 V - which is the whole range the
- * comparator covers. The percentage is scaled across it and is a rough guide;
- * BatChargeLevel is what to trust when it says Warning.
+ * comparator looks. That ceiling costs nothing: a lithium coin cell holds close
+ * to 3 V for most of its life, so "at least 2.8" is the whole of its good years.
+ *
+ * WHERE EMPTY IS, AND WHY IT MOVED. It was 2.2 V, the point below which the
+ * SoC's radio cannot transmit reliably. That is a fact about the chip and it is
+ * the wrong end of the problem. Two cells measured 2.6 V at rest and could not
+ * keep their switch attached to Thread at all - the lamp still lit its LED and
+ * commanded nothing, because a tired cell holds its voltage until the radio asks
+ * for current and then collapses. On the old scale those cells read 66 percent
+ * and "ok", and the first warning would have come 100 mV after they were already
+ * useless.
+ *
+ * So empty is 2.6 V: measured, not derived. Three steps is all the resolution a
+ * 100 mV comparator has left over a window this narrow, and three honest states
+ * beat a smooth number that is wrong:
+ *
+ *     2800  full, ok         - anything from here up, which is most of the life
+ *     2700  half, warning    - the last step before it stops working
+ *     2600  empty, critical  - observed to drop off the network
+ *
+ * BatChargeLevel is what to trust; the percentage exists because that is what
+ * interfaces draw.
  *
  * WHY HOURLY. A CR2032 does not move in a minute. The sweep itself is nearly
  * free - a few register writes and at most 1.2 ms of settling - but the switch
@@ -85,16 +102,15 @@ constexpr uint32_t kFeatureBattery = 1u << 1; /* BAT */
 /* The endpoints this power source actually powers: all of them. */
 constexpr EndpointId kPowered[] = { 0, 1, 2, 3 };
 
-/* Full is 2.8 V because that is the highest the comparator looks, and a healthy
- * CR2032 sits above it for most of its life. Below roughly 2.2 V a Thread radio
- * can no longer transmit reliably, so that is treated as empty rather than the
- * cell's own paper end-of-life. The two thresholds in between are where the
- * interface should start saying something.
- */
+/* See "WHERE EMPTY IS" above: these come from two cells that failed at 2.6 V,
+ * not from the cell's paper curve or the SoC's transmit floor. */
 constexpr int32_t kFullMv = 2800;
-constexpr int32_t kEmptyMv = 2200;
-constexpr int32_t kWarningMv = 2500;
-constexpr int32_t kCriticalMv = 2300;
+constexpr int32_t kEmptyMv = 2600;
+/* At or below these. Warning fires one comparator step before empty, which is
+ * the only warning this resolution can give - and one step is still days on a
+ * cell that has been holding 2.8 V for a year. */
+constexpr int32_t kWarningMv = 2700;
+constexpr int32_t kCriticalMv = 2600;
 
 /* Matter reports this in HALF percent: 0..200. */
 constexpr uint8_t kMaxHalfPercent = 200;
@@ -277,9 +293,9 @@ void Publish(int32_t mv)
 						    (kFullMv - kEmptyMv));
 	}
 
-	if (mv < kCriticalMv) {
+	if (mv <= kCriticalMv) {
 		sLevel = PowerSource::BatChargeLevelEnum::kCritical;
-	} else if (mv < kWarningMv) {
+	} else if (mv <= kWarningMv) {
 		sLevel = PowerSource::BatChargeLevelEnum::kWarning;
 	} else {
 		sLevel = PowerSource::BatChargeLevelEnum::kOk;
