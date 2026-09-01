@@ -330,9 +330,20 @@ void OnButtonLongPress(void)
 	 * No mode is needed at all now: to get back to the schedule for the
 	 * current time, turn the bulb off and on. It comes up at the value the
 	 * Raspberry Pi wrote for the current slot, because the bulb holds it, not
-	 * the switch. */
+	 * the switch.
+	 *
+	 * BRIGHTNESS ONLY. It used to set 4000 K as well, and colour is the one
+	 * thing that does not recover: brightness comes back on its own because
+	 * OnLevel decides what the bulb returns to and this never touches it,
+	 * while colour has no OnLevel at all. The bulb simply kept whatever it was
+	 * last given, so a long press left a lamp at 4000 K against a curve asking
+	 * for 2400 K until the curve drifted far enough for the schedule to
+	 * re-send - measured at four and a half minutes at dusk, and on the midday
+	 * plateau the curve does not drift, so it stood for hours.
+	 *
+	 * Wanting more light is not wanting a different white. So the long press
+	 * asks for more light, and the time of day keeps deciding its colour. */
 	LightCtrl::SetLevel(254, 2);
-	LightCtrl::SetColorTemp(250, 2);  /* 4000K, task lighting */
 	StatusLed::Flash(StatusLed::kTeal, 130, 2);
 }
 

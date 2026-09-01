@@ -2252,7 +2252,6 @@ LEVEL_STEP = 25
 # and the memo, and full brightness would then stick for good - which is the one
 # thing "provisionally" has to rule out.
 FULL_LEVEL = 254
-FULL_MIREDS = 250          # 1e6 / 4000 K
 
 _press_q = queue.Queue()
 
@@ -2313,7 +2312,9 @@ def remote_act(node, button, gesture):
         known = {b["node"] for b in devices.get("bulbs", [])}
         held = [n for n in held if n in known]
         for n in held:
-            set_override(n, True)
+            # The switch set the brightness and left the colour alone, so the
+            # hold does the same and the curve keeps the white.
+            set_override(n, True, ("level",))
         if held:
             until = f"for {HOLD_MAX_SEC // 60} min" if HOLD_MAX_SEC \
                 else "until it is switched off"
@@ -2337,25 +2338,13 @@ def remote_act(node, button, gesture):
             continue
         ep = int(b.get("endpoint", 1))
         if action == "full":
+            # Brightness only - the same thing our own wall switch does, and for
+            # the same reason. Wanting more light is not wanting a different
+            # white, and colour is the one thing that does not recover: OnLevel
+            # brings the brightness back and there is no OnLevel for colour.
             err = m_cmd(n, ep, 0x0008, "MoveToLevelWithOnOff",
                         {"level": FULL_LEVEL, "transitionTime": 0,
                          "optionsMask": 0, "optionsOverride": 0})
-            # Colour second, and only if the bulb has any: a plain dimmable bulb
-            # has no ColorControl and would answer with an error that means
-            # nothing went wrong.
-            st = state_of(n)
-            if not err and st.get("mireds") is not None:
-                want = FULL_MIREDS
-                lo, hi = st.get("ctMin"), st.get("ctMax")
-                if isinstance(lo, int):
-                    want = max(want, lo)
-                if isinstance(hi, int):
-                    want = min(want, hi)
-                e2 = m_cmd(n, ep, 0x0300, "MoveToColorTemperature",
-                           {"colorTemperatureMireds": want, "transitionTime": 4,
-                            "optionsMask": 1, "optionsOverride": 1})
-                if e2:
-                    log(f"bulb {n}: colour on long press failed: {e2}", "warn")
         elif action in ONOFF_CMD:
             err = m_cmd(n, ep, 0x0006, ONOFF_CMD[action])
         elif action in ("brighter", "dimmer"):
@@ -2382,7 +2371,9 @@ def remote_act(node, button, gesture):
         # carries no Switch cluster, so nothing reports the press. Its long press
         # still lasts only until the curve next moves.
         if action == "full":
-            set_override(n, True)
+            # Brightness only: a long press said nothing about the colour, so
+            # the curve goes on deciding it.
+            set_override(n, True, ("level",))
     log(f"node {node} button {button}: {action} on "
         f"{len(targets)} bulb{'' if len(targets) == 1 else 's'}", "ok")
 
@@ -2980,7 +2971,28 @@ ONLEVEL_STEP = int(os.environ.get("PANEL_ONLEVEL_STEP", "8"))
 MIRED_STEP = int(os.environ.get("PANEL_MIRED_STEP", "3"))
 
 
-def set_override(node, on: bool):
+# What a hold can cover. The schedule writes exactly two things, so a hold can
+# stand in front of exactly two things.
+HOLD_FACETS = ("level", "mireds")
+
+
+def held_facets(node) -> set:
+    """Which of the schedule's writes this bulb is standing in front of.
+
+    Empty when nothing is held. A hold covers ONLY what was actually set: a long
+    press asks for more light and says nothing about colour, so the time of day
+    goes on deciding the white while the brightness stays where the hand put it.
+    """
+    if not overridden(node):
+        return set()
+    with _state_lock:
+        what = _state.get("bulbs", {}).get(str(node), {}).get("heldWhat")
+    # Written before facets existed, so it held everything - which is what an
+    # entry with nothing recorded meant, and still means.
+    return set(what) if what else set(HOLD_FACETS)
+
+
+def set_override(node, on: bool, facets=None):
     """Remember that somebody set this bulb by hand - or stopped.
 
     Only sending on change was not enough. It stops the schedule stamping on a
@@ -3001,15 +3013,20 @@ def set_override(node, on: bool):
     is only ever released once the lamp has been seen lit under it.
     """
     lit = state_of(node).get("on") is True if on else False
+    want = set(facets) if facets else set(HOLD_FACETS)
     with _state_lock:
         entry = _state.setdefault("bulbs", {}).setdefault(str(node), {})
         if on:
+            # Added to, not replaced: set the brightness by hand and then the
+            # colour, and both are yours. Only an off clears them.
+            entry["heldWhat"] = sorted(set(entry.get("heldWhat") or ()) | want)
             entry["override"] = time.time()
             if lit or "heldLit" not in entry:
                 entry["heldLit"] = lit
         else:
             entry.pop("override", None)
             entry.pop("heldLit", None)
+            entry.pop("heldWhat", None)
     state_save()
 
 
@@ -3027,6 +3044,7 @@ def release_hold(node, why: str) -> bool:
             return False
         entry.pop("override", None)
         entry.pop("heldLit", None)
+        entry.pop("heldWhat", None)
         for k in ("onlevel", "level", "mireds"):
             entry.pop(k, None)
     state_save()
@@ -4509,7 +4527,7 @@ class Handler(BaseHTTPRequestHandler):
                         # bulb was still at the curve's brightness.
                         memo["onlevel"] = lvl
                         memo["level"] = lvl
-                set_override(node, True)
+                set_override(node, True, ("level",))
 
             # optionsMask=1, optionsOverride=1 -> ExecuteIfOff, so the colour
             # lands even with the bulb off, which is when it matters most.
@@ -4523,7 +4541,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send({"error": err}, status=502)
                 with _state_lock:
                     _state.setdefault("bulbs", {}).setdefault(str(node), {})["mireds"] = mir
-                set_override(node, True)
+                set_override(node, True, ("mireds",))
 
             # A colour, rather than a temperature on the white axis.
             #
@@ -4550,7 +4568,9 @@ class Handler(BaseHTTPRequestHandler):
                     # before. Said here rather than waited for, so the picker
                     # does not flick back to the white strip for one repaint.
                     memo["colorMode"] = 0
-                set_override(node, True)
+                # The schedule's colour write is the thing that would undo this,
+                # so that is the facet to stand in front of.
+                set_override(node, True, ("mireds",))
 
             # Read the state back - all of it, through the same combined read
             # the poll uses. A confirmed command does not mean the bulb did what
