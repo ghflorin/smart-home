@@ -477,33 +477,31 @@
     background: var(--lit);
     border-top: 1px solid color-mix(in srgb, var(--amber) 55%, transparent);
     pointer-events: none;
-    /* Slow, because it is the bulb catching up, not the interface reacting. */
-    transition: height .55s cubic-bezier(.3,0,.2,1);
+    /* No transition. It used to ease over half a second - "the bulb catching up,
+       not the interface reacting" - and the cost was visible: animating HEIGHT
+       inside a rounded overflow:hidden clip left horizontal repaint bands that
+       accumulated for as long as the value kept moving. A compositing layer was
+       added to work around that; removing the animation removes the cause, and
+       the level simply appears where it is. */
   }
   /* Full: the hairline has nothing above it left to separate, so it reads as a
      stray rule along the edge instead of as a level. */
   .tile .fill.full { border-top-color: transparent; }
 
-  /* Both fills get a compositing layer of their own.
+  /* The compositing layer that used to be here is gone with the animation.
    *
-   * The horizontal bands reported across a tile are repaint residue, not
-   * elements: there is exactly one .fill per tile and one .hk-fill per sheet,
-   * and the surfaces behind them are opaque, so nothing can be showing
-   * through. What is left is the fill itself - a 24%-alpha box whose HEIGHT
-   * animates inside a rounded overflow:hidden clip. A renderer that composites
-   * each frame over the last instead of replacing it leaves a band at every
-   * intermediate height, and they accumulate for as long as the value keeps
-   * moving - which is why they showed up while the Thread radio was down and
-   * the level was flapping. On its own layer the frame is replaced.
+   * The horizontal bands across a tile were repaint residue from a 24%-alpha box
+   * whose HEIGHT animated inside a rounded overflow:hidden clip: a renderer that
+   * composites each frame over the last leaves a band at every intermediate
+   * height, and they accumulate for as long as the value keeps moving. Forcing
+   * each fill onto its own layer replaced the frame instead - a remedy for the
+   * symptom, and one that cost a compositing layer per tile on a page that can
+   * hold thirty of them.
    *
-   * Not reproducible in Chromium, so this is the remedy for the class of bug
-   * rather than a fix confirmed against the artefact. */
-  .tile .fill, .hk-fill {
-    transform: translateZ(0);
-    will-change: height;
-  }
-  /* Their clips become stacking contexts to match, so a composited child
-     cannot paint outside the rounded corner it belongs to. */
+   * Nothing animates now, so there are no intermediate heights to leave behind.
+   *
+   * The clips stay stacking contexts: cheap, and it keeps a child from painting
+   * outside the rounded corner it belongs to. */
   .tile, .hk-lvl { isolation: isolate; }
 
   /* The battery gauge: a small cell in the tile's top corner.
