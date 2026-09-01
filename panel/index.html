@@ -4736,11 +4736,16 @@ async function identify(btn) {
 // The bulbs grouped by room, with the switch's own room first - that is usually
 // where the ones you want are. The rest stay reachable further down.
 function renderPick(bulbs, bound, ownRoom, empty = 'no bulbs',
-                    ownLabel = 'the switch\'s room') {
+                    ownLabel = 'the switch\'s room', lastRoom = null) {
   if (!bulbs.length) return `<div class="empty" style="padding:14px">${empty}</div>`;
   const groups = {};
   bulbs.forEach(b => (groups[b.where || ''] ||= []).push(b));
   const names = Object.keys(groups).sort((a, b) => {
+    // The switch's own room first, and anything pinned to the bottom last -
+    // today that is the group of entries pointing at devices the house no
+    // longer has, which belong at the end of a list of real ones.
+    if (a === lastRoom) return 1;
+    if (b === lastRoom) return -1;
     if (a === ownRoom) return -1;
     if (b === ownRoom) return 1;
     return a.localeCompare(b);
@@ -6312,6 +6317,24 @@ function editLinks(swNode) {
   const items = isLock
     ? state.switches.filter(x => x.node !== swNode && !state.remotes.has(x.node))
     : (state.devices.bulbs || []);
+
+  /* An entry pointing at something that is no longer here.
+   *
+   * The table lives on the DEVICE. Removing a bulb or a switch takes it out of
+   * every table that names it - unless that switch happened to be asleep at the
+   * time, and ours are asleep by design. The entry then survives, aimed at a
+   * node id nothing answers to, and the list could not draw it: it has no name
+   * and no room, because the thing it names is gone.
+   *
+   * So it was invisible AND could not be unticked, and the only way out was to
+   * save the sheet and let the replace-the-whole-table write drop it. That
+   * works, and it asks you to trust something you cannot see. Better to show
+   * it, at the bottom, where it can be unticked like anything else. */
+  const GONE = 'no longer in the house';
+  const here = new Set(items.map(x => x.node));
+  const orphans = [...bound].filter(n => !here.has(n))
+    .map(n => ({ node: n, name: 'removed device', where: GONE }));
+  const shown = orphans.length ? items.concat(orphans) : items;
   const sheet = $('#sheet');
 
   sheet.innerHTML = `<h2>bindings</h2>
@@ -6321,8 +6344,9 @@ function editLinks(swNode) {
       <button data-role="0" class="${isLock ? '' : 'on'}">controls bulbs</button>
       <button data-role="1" class="${isLock ? 'on' : ''}">lock</button>
     </div>
-    <div class="pick">${renderPick(items, bound, sw.where,
-        isLock ? 'no other switch to lock' : 'no bulbs')}</div>
+    <div class="pick">${renderPick(shown, bound, sw.where,
+        isLock ? 'no other switch to lock' : 'no bulbs',
+        'the switch\'s room', orphans.length ? GONE : null)}</div>
     <button class="go">save</button>
     <div class="note">${isLock ? `
       Check the switches this lock locks. When pressed, it sends all of them its
