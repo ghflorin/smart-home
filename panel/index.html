@@ -562,6 +562,15 @@
   .tile .batt.low i, .tile .batt.low::after { background: var(--amber); }
   .tile .batt.critical { opacity: 1; border-color: var(--bad); }
   .tile .batt.critical i, .tile .batt.critical::after { background: var(--bad); }
+  /* Held over from a device that stopped answering. Faded, because the bar is a
+     measurement and this one is a memory: the charge it shows was true when the
+     device last spoke and says nothing about now. Faded rather than hidden - a
+     cell that read low before a switch went quiet is the most useful thing on
+     the tile, and the reason it is worth keeping at all. */
+  .tile .batt.stale { opacity: .45; }
+  .tile .batt.stale i { opacity: .35; }
+  .tile .batt.stale.critical { animation: none; }
+
   /* Critical is the one state worth moving for, and slowly - it is a battery,
      not an alarm. */
   .tile .batt.critical { animation: battpulse 2.4s ease-in-out infinite; }
@@ -3024,6 +3033,7 @@ function paintTile(el, o) {
     }
     p.batt.classList.toggle('low', o.batt.state === 'low');
     p.batt.classList.toggle('critical', o.batt.state === 'critical');
+    p.batt.classList.toggle('stale', !!o.batt.stale);
     setAttr(p.batt, 'title', o.batt.title);
   } else if (p.batt) {
     p.batt.remove();
@@ -3140,7 +3150,28 @@ function headlineMeasure(measured) {
 /* The battery reading, if this device has one. `battery` is a percentage;
  * `batteryState` is the device's own verdict, which is what decides the colour -
  * a bulb that says "critical" at 30% knows something the percentage does not. */
-function battOf(measured) {
+/* How long ago, in the roundest terms that are still useful. */
+function heardAgo(at) {
+  const secs = Math.max(0, Date.now() / 1000 - (at || 0));
+  if (secs < 90) { return 'just now'; }
+  if (secs < 3600) { return `${Math.round(secs / 60)} min ago`; }
+  if (secs < 86400) { return `${Math.round(secs / 3600)} h ago`; }
+  return `${Math.round(secs / 86400)} d ago`;
+}
+
+/* The gauge stays when the device stops answering, and says so.
+ *
+ * A device that has fallen off the network is exactly when its last battery
+ * reading matters most - a flat cell does not report "flat", it stops
+ * reporting anything, and the symptom is a switch that seems alive and reaches
+ * nothing. Keeping the last figure on the tile turns "not answering" into
+ * something you can act on, and saying WHEN it was read stops that figure from
+ * being read as current.
+ *
+ * The reading itself is a lower bound, so a cell can measure full and still be
+ * too tired to transmit - which is why the age is on the label rather than a
+ * verdict about the cell. */
+function battOf(measured, st) {
   if (!measured || typeof measured.battery !== 'number') { return null; }
   const pct = Math.round(measured.battery);
   const state = measureText('batteryState', measured.batteryState);
@@ -3148,8 +3179,11 @@ function battOf(measured) {
     : (pct <= 10 ? 'critical' : pct <= 25 ? 'low' : 'ok');
   const volts = typeof measured.batteryVolts === 'number'
     ? ` \u00b7 ${measured.batteryVolts.toFixed(2)} V` : '';
-  return { pct, state: said,
-           title: `battery ${pct}%` + (said === 'ok' ? '' : ' \u2014 ' + said) + volts };
+  const stale = st && st.ok === false
+    ? ` \u2014 not answering, last read ${heardAgo(st.readAt)}` : '';
+  return { pct, state: said, stale: !!stale,
+           title: `battery ${pct}%` + (said === 'ok' ? '' : ' \u2014 ' + said)
+                  + volts + stale };
 }
 
 /* Readings where `true` is the thing you did not want to happen.
@@ -3187,7 +3221,7 @@ function deviceOpts(d) {
     // one thing that always applies - make it show you which one it is.
     quickTitle: 'identify \u2014 ' + d.name,
     onQuick: q => identifySwitch(d, q),
-    batt: battOf(measured),
+    batt: battOf(measured, st),
     update: !!state.updates[String(d.node)],
     openTitle: 'readings for ' + d.name,
     onOpen: () => openDevice(d),
@@ -3306,7 +3340,8 @@ function switchOpts(sw) {
       // It runs on two AAA cells, so it gets the same gauge as any other
       // battery device. Nothing announces a flat remote except the remote
       // quietly not working.
-      batt: battOf((state.bulbs[String(sw.node)] || {}).measured),
+      batt: battOf((state.bulbs[String(sw.node)] || {}).measured,
+                   state.bulbs[String(sw.node)]),
       icon: ICONS.switch,
       cls: '',
       name: sw.name,
@@ -3343,7 +3378,8 @@ function switchOpts(sw) {
     // with the power-fail comparator rather than measuring it - so a healthy
     // cell reads full for most of its life and the gauge only moves near the
     // end. That is the part worth seeing.
-    batt: battOf((state.bulbs[String(sw.node)] || {}).measured),
+    batt: battOf((state.bulbs[String(sw.node)] || {}).measured,
+                 state.bulbs[String(sw.node)]),
     // A lock cannot lock itself: it would leave you no way to unlock the rest
     // from the wall. So its quick action is the other useful one - blink it, so
     // you know which of them it is.
