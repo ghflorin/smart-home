@@ -278,8 +278,28 @@ void OnButtonShortPress(void)
 	}
 
 	if (LockState::IsLocked()) {
-		/* Completely dead, on purpose: not even a blink. A visible
-		 * response would turn a locked switch into a toy. */
+		/* OFF ONLY. A locked switch can still put the light out; it can
+		 * never bring it back.
+		 *
+		 * The lock exists so a child cannot play with the lights, and
+		 * that is a one-way problem: turning a lamp off is not the thing
+		 * being prevented, and being unable to do it is its own trap -
+		 * a locked switch that leaves a room lit means walking to the
+		 * panel, or unlocking the house, to do the one harmless thing.
+		 *
+		 * Off, not Toggle, and that is the whole mechanism: the switch
+		 * has never known whether the bulb is lit - it cannot, when the
+		 * panel or another ecosystem may have changed it - so a toggle
+		 * here would turn the light ON half the time, which is exactly
+		 * what the lock is for. An explicit Off needs no knowledge and
+		 * has no such half.
+		 *
+		 * No LED. It was silent before so a dead switch would not become
+		 * a toy, and that still holds where it matters: press it with
+		 * the light already off and nothing whatever happens. When
+		 * something does happen, the room going dark says so better than
+		 * a blink could. */
+		LightCtrl::Off();
 		return;
 	}
 

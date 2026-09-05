@@ -137,8 +137,13 @@ them without taking them off the wall. Both pieces of state — locked, and the
 role — live **in the switch**, in non-volatile memory: lock them, cut the power,
 and they do not unlock themselves when it comes back.
 
-A locked switch does not respond to a press **and does not blink either**. A
-visible response would turn a locked switch into a toy.
+A locked switch can still turn a light **off**, and can never turn one on. That
+is the direction the lock is for: a child cannot put the lights on, and anybody
+can still put one out without walking to the panel.
+
+It does not blink, either way. Press it with the light already off and nothing
+whatever happens, which is what keeps a locked switch from becoming a toy; when
+something does happen, the room going dark says so.
 
 Two ways to do it, and they work together:
 

@@ -173,15 +173,20 @@ whether the switch is waiting to be added. Everything else is an event.
 | teal | two short flashes | commissioning succeeded |
 | amber `#ffa726` | 1 s pulse, full brightness | Identify — same colour and rhythm as the panel's button |
 | teal | one short flash | short press: the `Toggle` went out |
-| teal | two flashes | long press: full brightness + 4000 K sent |
+| teal | two flashes | long press: full brightness sent |
 | red / teal | two flashes | a lock-role switch locked / unlocked the others |
 | nothing, not even on a press | — | the switch is locked |
 
 The flash after a short press is deliberately **neutral**: the switch does not
 know which way the bulb toggled, and pretending otherwise would be a lie.
 
-A locked switch and a dead one look the same from the wall, since the LED is dark
-while idle anyway. The panel tells them apart.
+A locked switch is silent whichever way it goes, so a locked one and a dead one
+look the same from the wall - the LED is dark while idle anyway. The panel tells
+them apart, and so does the light: a locked switch still turns a lit lamp OFF,
+because the lock exists to stop a child putting the lights ON, and being unable
+to put one out is its own trap. It sends Off rather than Toggle, which is the
+whole mechanism - the switch has never known whether the bulb is lit, so a toggle
+would turn it on half the time.
 
 **Why there is no permanent indicator.** An LED held on under PWM needs HFCLK
 running and costs ~1.5 mA in the peripheral alone, however faint — days of

@@ -792,7 +792,10 @@ def validate_schedule(points: list):
 #
 # Two small pieces of state on every switch, in the same custom cluster as the
 # schedule:
-#   Locked  - the switch ignores presses and turns its status LED fully off
+#   Locked  - the switch can only turn a light OFF, and its status LED goes
+#             fully off. See OnButtonShortPress: a press sends Off rather
+#             than Toggle, so a child cannot put a light on and anyone can
+#             still put one out.
 #   Role    - 0 light, 1 lock
 #
 # Both live IN the switch, not here: if you lock the switches and the power
