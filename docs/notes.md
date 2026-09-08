@@ -221,6 +221,51 @@ share a period, which is exactly right for RGB, where only duty differs. At 0% o
 100% the driver stops the peripheral and parks the pin, so an LED that is off
 draws no current.
 
+## A lock reaches every switch it is bound to
+
+A lock-role switch writes its state to each of its targets over Thread, and for a
+long time it did that through Matter's own `BindingManager`. That walk gives up
+on the whole rest of the table the moment one entry cannot be started:
+
+```
+error = mPendingNotificationMap.AddPendingNotification(...);
+SuccessOrExit(error);
+error = EstablishConnection(...);
+SuccessOrExit(error);
+```
+
+`EstablishConnection` returns `NO_MEMORY` as soon as the pools that hold one
+outgoing session per peer are full, and those pools are sized for a switch that
+drives two bulbs. A lock has as many peers as the house has switches. So it ran
+out of room partway down its own table, and every entry after that point was
+skipped **in silence** - nothing logs it, and the lock believes it told everyone.
+
+The symptom is the giveaway: it is always the same switches, always the ones at
+the end of the table. Here the kitchen was ninth of ten. It stayed locked while
+the rest of the house unlocked, and it was the newest button, which sent the
+search after the ACL and the binding table - both of which were perfectly fine.
+
+Read the binding table on the lock and the `Locked` attribute on each target, and
+the shape is unmistakable: entries one to eight agree with the lock, nine and ten
+do not.
+
+So `light_ctrl.cpp` walks the table itself for this one action, three targets at a
+time - comfortably inside `CONFIG_CHIP_MAX_ACTIVE_CASE_CLIENTS`, so a slot is
+never refused, and the whole house is still done in seconds rather than one
+switch at a time. A target that cannot be reached now costs that target and
+nothing else, which matters because there is usually one button somewhere with a
+flat cell.
+
+A bulb that misses a command is a light that did not come on, and you press
+again. A switch that misses the lock state is a switch that stays dead to its
+owner until somebody works out why - which is why the lock gets its own fan-out
+and the bulbs do not.
+
+`MATTER_BINDING_TABLE_SIZE` went from Matter's default of 10 to 16 at the same
+time, in `src/chip_project_config.h`. Ten switches plus the lock had filled the
+table exactly, and the eleventh would have had nowhere to go. It also sizes the
+pending notification map, which is the other half of the walk above.
+
 ## The accelerometer
 
 Not used, and on battery that matters, so the driver is compiled in and the

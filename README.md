@@ -161,6 +161,13 @@ Two ways to do it, and they work together:
   switch cannot lock itself and does not appear in its own target list — you would
   have no way to unlock the rest from the wall.
 
+  It also writes its targets itself, a few at a time, rather than handing the
+  table to Matter's `BindingManager` — which gives up on everything after the
+  first target it cannot open a session to. A lock has as many targets as the
+  house has switches, so it ran out of room partway down its own table and the
+  last switches on it were never told anything. See
+  [`docs/notes.md`](docs/notes.md#a-lock-reaches-every-switch-it-is-bound-to).
+
 In Matter terms a lock switch writes an attribute on endpoint 2 of the others, so
 its targets need an ACL entry with Manage privilege. The panel writes it when you
 save a lock's bindings.
