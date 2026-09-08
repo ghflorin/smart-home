@@ -7,6 +7,15 @@
 #pragma once
 
 #define CHIP_CONFIG_CONTROLLER_MAX_ACTIVE_DEVICES 2
+
+/* How many devices one switch can be bound to. Matter's default is 10, and a
+ * LOCK is bound to every other switch in the house - so ten switches plus the
+ * lock itself already filled the table and the eleventh could not be added at
+ * all. The write simply had nowhere to go.
+ *
+ * Costs about one entry's worth of RAM each, and it also raises the pending
+ * notification map, which is sized from the same number. */
+#define MATTER_BINDING_TABLE_SIZE 16
 /* Three dynamic endpoints: the lock's vendor cluster (src/lock_cluster.cpp),
  * the battery (src/battery.cpp) and the button itself (src/switch_cluster.cpp).
  * Without this, MAX_ENDPOINT_COUNT stays equal to the number of fixed endpoints

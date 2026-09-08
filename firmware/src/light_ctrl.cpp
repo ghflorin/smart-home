@@ -11,6 +11,7 @@
  */
 #include "light_ctrl.h"
 
+#include <app/CASESessionManager.h>
 #include <app/server/Server.h>
 #include <app/util/binding-table.h>
 #include <controller/InvokeInteraction.h>
@@ -263,10 +264,10 @@ void DeviceChangedCallback(const EmberBindingTableEntry &binding,
 			sessionHandle, remoteEp, value, ctx);
 		break;
 	}
-	case LightCtrl::Action::WriteLock: {
-		WriteAttr<LockedAttrTypeInfo>(sessionHandle, remoteEp, ctx->req.locked, ctx);
+	case LightCtrl::Action::WriteLock:
+		/* Unreachable: the lock has a fan-out of its own and never asks
+		 * BindingManager to walk the table. See WriteLockToTargets. */
 		break;
-	}
 	}
 }
 
@@ -276,11 +277,181 @@ void DeviceContextReleaseHandler(void *context)
 	ReleaseCtx(static_cast<BindingCtx *>(context));
 }
 
+/* ------------------------------------------------------ the lock's fan-out
+ *
+ * WHY THE LOCK DOES NOT GO THROUGH BindingManager.
+ *
+ * NotifyBoundClusterChanged walks the binding table for us, and abandons the
+ * whole REST of the table the moment one entry cannot be started:
+ *
+ *     error = mPendingNotificationMap.AddPendingNotification(...);
+ *     SuccessOrExit(error);
+ *     error = EstablishConnection(...);
+ *     SuccessOrExit(error);
+ *
+ * EstablishConnection hands back NO_MEMORY the moment the pools that hold one
+ * outgoing session per peer are full, and those pools are sized for a switch
+ * that drives two bulbs. A lock has as many peers as the house has switches -
+ * ten of them here - so it runs out of room partway down its own table, and
+ * every entry after that point is skipped in silence. The lock believes it told
+ * the whole house. The kitchen was ninth of ten: it stayed locked while the
+ * rest of the house unlocked, which is exactly what it looked like from the
+ * corridor.
+ *
+ * A bulb that misses a command is a light that did not come on, and you press
+ * again. A switch that misses the lock state is a switch that stays dead to its
+ * owner until somebody works out why. So the lock walks the table itself, a few
+ * targets at a time: the same session machinery, with the one difference that
+ * is the entire point - a target that cannot be reached costs that target and
+ * nothing else.
+ */
+
+/* Defined below, and called from inside the callbacks above it. */
+void LockPumpLater(void);
+
+/* One target being written. The two callbacks are members because
+ * CASESessionManager keeps them in a list of its own until the session resolves
+ * - they must outlive the call, and no two peers may share one. */
+class LockTarget {
+public:
+	LockTarget() : mConnected(OnConnected, this), mFailed(OnFailed, this) {}
+
+	bool Busy(void) const { return mBusy; }
+
+	void Send(const ScopedNodeId &peer, EndpointId remoteEp, bool locked)
+	{
+		mBusy = true;
+		mRemoteEp = remoteEp;
+		mLocked = locked;
+		Server::GetInstance().GetCASESessionManager()->FindOrEstablishSession(
+			peer, &mConnected, &mFailed);
+	}
+
+private:
+	static void OnConnected(void *context, Messaging::ExchangeManager &,
+				const SessionHandle &session)
+	{
+		auto *self = static_cast<LockTarget *>(context);
+
+		/* Free before the write, not after: the callback has already been
+		 * taken off the manager's list, and the write in flight does not
+		 * touch this slot. Holding it until the switch answers would idle
+		 * two thirds of the fan-out waiting on sleepy radios. */
+		self->mBusy = false;
+
+		CHIP_ERROR err = Controller::WriteAttribute<LockedAttrTypeInfo>(
+			session, self->mRemoteEp, self->mLocked,
+			[](const ConcreteAttributePath &) { LOG_INF("switch took the lock state"); },
+			[](const ConcreteAttributePath *, CHIP_ERROR error) {
+				LOG_WRN("switch refused the lock state: %" CHIP_ERROR_FORMAT,
+					error.Format());
+			});
+		if (err != CHIP_NO_ERROR) {
+			LOG_WRN("lock write not sent: %" CHIP_ERROR_FORMAT, err.Format());
+		}
+		LockPumpLater();
+	}
+
+	static void OnFailed(void *context, const ScopedNodeId &, CHIP_ERROR error)
+	{
+		auto *self = static_cast<LockTarget *>(context);
+		self->mBusy = false;
+		/* Usual cause: that switch is asleep with a flat cell. The others
+		 * still get their write, which is the whole point of this. */
+		LOG_WRN("no session to a switch: %" CHIP_ERROR_FORMAT, error.Format());
+		LockPumpLater();
+	}
+
+	Callback::Callback<OnDeviceConnected> mConnected;
+	Callback::Callback<OnDeviceConnectionFailure> mFailed;
+	EndpointId mRemoteEp = kInvalidEndpointId;
+	bool mLocked = false;
+	bool mBusy = false;
+};
+
+/* How many switches are written at once. Three fits comfortably inside
+ * CONFIG_CHIP_MAX_ACTIVE_CASE_CLIENTS, so a slot is never refused for want of
+ * room - which was the original fault - and the whole house is still done in a
+ * few seconds rather than one switch at a time. */
+constexpr size_t kLockSlots = 3;
+
+LockTarget sLockSlots[kLockSlots];
+bool sLockValue;
+/* How many bound switches this round has already been handed to a slot. The
+ * table is short, so the walk simply skips that many matches each time rather
+ * than carrying an iterator across callbacks. */
+uint8_t sLockSent;
+
+void LockPump(void)
+{
+	auto *sessions = Server::GetInstance().GetCASESessionManager();
+	VerifyOrReturn(sessions != nullptr, LOG_ERR("no CASE session manager"));
+
+	for (LockTarget &slot : sLockSlots) {
+		if (slot.Busy()) {
+			continue;
+		}
+
+		uint8_t seen = 0;
+		bool taken = false;
+		for (auto iter = BindingTable::GetInstance().begin();
+		     iter != BindingTable::GetInstance().end(); ++iter) {
+			if (iter->local != sSwitchEndpoint ||
+			    iter->type != MATTER_UNICAST_BINDING) {
+				continue;
+			}
+			if (seen++ < sLockSent) {
+				continue;
+			}
+			sLockSent++;
+			slot.Send(ScopedNodeId(iter->nodeId, iter->fabricIndex), iter->remote,
+				  sLockValue);
+			taken = true;
+			break;
+		}
+
+		if (!taken) {
+			/* Nothing left to hand out. */
+			return;
+		}
+	}
+}
+
+void LockPumpWorker(intptr_t)
+{
+	LockPump();
+}
+
+void LockPumpLater(void)
+{
+	/* Never straight from a callback: the session manager is walking its own
+	 * callback list at that moment, and starting a new lookup from inside it
+	 * would reach into the list being walked. */
+	DeviceLayer::PlatformMgr().ScheduleWork(LockPumpWorker, 0);
+}
+
+/* Runs on the Matter thread. */
+void WriteLockToTargets(bool locked)
+{
+	/* A press during a round restarts it, so the newest state is the one
+	 * every switch ends up with. Writing a switch twice costs a packet and
+	 * settles on the right answer; skipping one does not. */
+	sLockValue = locked;
+	sLockSent = 0;
+	LockPump();
+}
+
 /* Runs on the Matter thread, via PlatformMgr().ScheduleWork. */
 void BindingWorker(intptr_t context)
 {
 	auto *ctx = reinterpret_cast<BindingCtx *>(context);
 	VerifyOrReturn(ctx != nullptr);
+
+	if (ctx->req.action == LightCtrl::Action::WriteLock) {
+		WriteLockToTargets(ctx->req.locked);
+		ReleaseCtx(ctx);
+		return;
+	}
 
 	if (BindingTable::GetInstance().Size() == 0) {
 		LOG_WRN("binding table is empty - no bulb configured");
