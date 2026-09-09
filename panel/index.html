@@ -43,6 +43,11 @@
 })();
 </script>
 <style>
+  /* The hidden attribute, made to win. On its own it is a plain
+   * `display: none` from the user-agent sheet, which loses to any class that
+   * sets a display of its own - so `wheelPad.hidden = true` left the colour
+   * wheel sitting on a white bulb, `display: flex` and all. */
+  [hidden] { display: none !important; }
   /* ---------- palette ----------
    * Everything colored on the page goes through these variables. If you add
    * hardcoded colors below, the light theme breaks silently. For accent shades

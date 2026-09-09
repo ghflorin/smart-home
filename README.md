@@ -161,12 +161,19 @@ Two ways to do it, and they work together:
   switch cannot lock itself and does not appear in its own target list — you would
   have no way to unlock the rest from the wall.
 
-  It also writes its targets itself, a few at a time, rather than handing the
-  table to Matter's `BindingManager` — which gives up on everything after the
-  first target it cannot open a session to. A lock has as many targets as the
-  house has switches, so it ran out of room partway down its own table and the
-  last switches on it were never told anything. See
+  It also writes its targets itself, three at a time and with three goes at
+  each, rather than handing the table to Matter's `BindingManager` — which gives
+  up on everything after the first target it cannot open a session to. A lock
+  has as many targets as the house has switches, so it ran out of room partway
+  down its own table and the last switches on it were never told anything. See
   [`docs/notes.md`](docs/notes.md#a-lock-reaches-every-switch-it-is-bound-to).
+
+  And the panel finishes the job. The lock reports its own state when pressed;
+  the panel hears that, waits a few seconds for the switch's own writes to land,
+  and writes the same value to any target that still disagrees — reading it back,
+  as it always does. A switch that was asleep with a flat cell catches up the
+  moment it can be reached. Which also means locking the lock itself from the
+  panel locks the house: its state *is* the house's state.
 
 In Matter terms a lock switch writes an attribute on endpoint 2 of the others, so
 its targets need an ACL entry with Manage privilege. The panel writes it when you

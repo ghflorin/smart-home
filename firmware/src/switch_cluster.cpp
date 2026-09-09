@@ -155,33 +155,45 @@ void Init(void)
 	AttributeAccessInterfaceRegistry::Instance().Register(&sAttrAccess);
 }
 
+/* Every one of these arrives from the button, on the main thread - the loop in
+ * AppTask::StartApp that drains Nrf::PostTask. The data model and the event log
+ * belong to the Matter thread, so each is handed over rather than run in place.
+ * LightCtrl::Post has always done the same for the bulb commands. The one
+ * argument travels as the intptr_t the scheduler already carries. */
+
 void Pressed(void)
 {
-	SetPosition(kPressed);
-	Switch::Events::InitialPress::Type event;
-	event.newPosition = kPressed;
-	Emit(event, "press");
+	DeviceLayer::PlatformMgr().ScheduleWork([](intptr_t) {
+		SetPosition(kPressed);
+		Switch::Events::InitialPress::Type event;
+		event.newPosition = kPressed;
+		Emit(event, "press");
+	}, 0);
 }
 
 void LongHeld(void)
 {
-	Switch::Events::LongPress::Type event;
-	event.newPosition = kPressed;
-	Emit(event, "long press");
+	DeviceLayer::PlatformMgr().ScheduleWork([](intptr_t) {
+		Switch::Events::LongPress::Type event;
+		event.newPosition = kPressed;
+		Emit(event, "long press");
+	}, 0);
 }
 
 void Released(bool wasLong)
 {
-	SetPosition(kReleased);
-	if (wasLong) {
-		Switch::Events::LongRelease::Type event;
-		event.previousPosition = kPressed;
-		Emit(event, "long release");
-	} else {
-		Switch::Events::ShortRelease::Type event;
-		event.previousPosition = kPressed;
-		Emit(event, "short release");
-	}
+	DeviceLayer::PlatformMgr().ScheduleWork([](intptr_t arg) {
+		SetPosition(kReleased);
+		if (arg != 0) {
+			Switch::Events::LongRelease::Type event;
+			event.previousPosition = kPressed;
+			Emit(event, "long release");
+		} else {
+			Switch::Events::ShortRelease::Type event;
+			event.previousPosition = kPressed;
+			Emit(event, "short release");
+		}
+	}, wasLong ? 1 : 0);
 }
 
 } /* namespace SwitchCluster */

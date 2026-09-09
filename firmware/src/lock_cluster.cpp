@@ -3,7 +3,9 @@
 #include "lock_state.h"
 
 #include <app-common/zap-generated/ids/Clusters.h>
+#include <app/reporting/reporting.h>
 #include <app/util/attribute-storage.h>
+#include <platform/CHIPDeviceLayer.h>
 
 #include <cstring>
 
@@ -81,6 +83,15 @@ void Init(void)
 	if (err != CHIP_NO_ERROR) {
 		LOG_ERR("cannot add the lock endpoint: %s", ErrorStr(err));
 	}
+}
+
+void ReportLocked(void)
+{
+	/* The button runs on the main thread; reporting touches the data model,
+	 * which only the Matter thread may do. */
+	DeviceLayer::PlatformMgr().ScheduleWork(
+		[](intptr_t) { MatterReportingAttributeChangeCallback(kEndpointId, kClusterId, kLockedAttr); },
+		0);
 }
 
 } /* namespace LockCluster */

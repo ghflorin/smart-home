@@ -1097,6 +1097,8 @@ def refresh_switch(sw: dict) -> list:
         values["locked"] = bool(locked_raw)
     if isinstance(role_raw, int):
         values["role"] = int(role_raw)
+    if "locked" in values:
+        note_lock(node, values["locked"], values.get("role"))
 
     # None of the paths answered = the switch did not answer. We keep the old
     # values but mark the read as failed: better "unknown since when" than
@@ -2157,6 +2159,78 @@ def power_watch() -> None:
             log(f"bulb {node}: power watch failed: {exc}", "warn")
 
 
+# ------------------------------------------------- finishing a lock's press
+#
+# A lock-role switch writes its state to each of its targets itself, over
+# Thread, and there is no version of that which reaches every switch every
+# time: one is asleep with a flat cell, one is three hops away behind a bulb
+# that just rebooted. The switch retries (firmware/src/light_ctrl.cpp), which is
+# most of the answer. This is the rest of it.
+#
+# The lock reports its own state when it is pressed. The Pi hears that, gives
+# the switch's own fan-out a few seconds to land, then writes the same value to
+# any target that still disagrees - through set_lock, which reads the value
+# back. In the usual case nothing disagrees and this writes nothing at all.
+#
+# Edge-triggered on the LOCK's state, deliberately: a switch locked by hand from
+# the panel must not be undone a moment later for disagreeing with a lock it is
+# bound to. Only a change ON the lock counts as a press. Which also means
+# locking the lock itself from the panel locks the house - its state IS the
+# house's state, and the tile says so.
+_lock_q = queue.Queue()
+_lock_seen = {}
+LOCK_SETTLE_SEC = float(os.environ.get("PANEL_LOCK_SETTLE_SEC", "6"))
+
+
+def note_lock(node: int, locked: bool, role=None) -> None:
+    """A switch's locked state, as just heard. If it is a lock's, and it moved,
+    queue the follow-up."""
+    if role is None:
+        role = state_of(node).get("role")
+    if role != ROLE_LOCK:
+        return
+    was = _lock_seen.get(node)
+    _lock_seen[node] = locked
+    # The first value is where we start from, not a press.
+    if was is None or was == locked:
+        return
+    _lock_q.put((node, locked))
+
+
+def lock_watch() -> None:
+    """Write a lock's new state to the targets its own fan-out did not reach."""
+    while True:
+        node, locked = _lock_q.get()
+        try:
+            time.sleep(LOCK_SETTLE_SEC)
+            # Presses that came in while we waited: the newest state per lock
+            # wins, and one pass does for all of them.
+            pending = {node: locked}
+            while True:
+                try:
+                    n, v = _lock_q.get_nowait()
+                except queue.Empty:
+                    break
+                pending[n] = v
+            for node, locked in pending.items():
+                targets = [e.get("node") for e in (state_of(node).get("binding") or [])]
+                missed = [n for n in targets
+                          if n and n != node and state_of(n).get("locked") != locked]
+                if not missed:
+                    log(f"lock {node}: every switch heard it", "ok")
+                    continue
+                log(f"lock {node}: {len(missed)} switch"
+                    f"{'' if len(missed) == 1 else 'es'} did not hear it - "
+                    + ", ".join(str(n) for n in missed), "warn")
+                for n in missed:
+                    try:
+                        set_lock(n, locked)
+                    except Exception as exc:  # noqa: BLE001 - the next one still gets its turn
+                        log(f"node {n}: {exc}", "warn")
+        except Exception as exc:  # noqa: BLE001 - one press does not stop the thread
+            log(f"lock {node}: follow-up failed: {exc}", "warn")
+
+
 SWITCH_CLUSTER = 0x003B
 
 # Measured on a BILRESA, whose two buttons are endpoints 1 and 2. The gesture is
@@ -2424,6 +2498,8 @@ def matter_value(node, cluster, attr, val, pushed=True):
         if pushed:
             sub_heard(node)
         state_put(node, values={key: v}, meta=live)
+        if pushed and key == "locked":
+            note_lock(node, v)
         # The wall switch is the only thing that turns these lights on and off
         # most of the time, and this is the only place the panel hears about it.
         # Without this the hold never ends and the colour never rejoins the
@@ -4724,6 +4800,7 @@ if __name__ == "__main__":
     threading.Thread(target=power_watch, name="power", daemon=True).start()
     threading.Thread(target=firmware_watch, name="firmware", daemon=True).start()
     threading.Thread(target=press_watch, name="presses", daemon=True).start()
+    threading.Thread(target=lock_watch, name="lock", daemon=True).start()
     try:
         devs = load_devices()
         if migrate_remotes(devs):
