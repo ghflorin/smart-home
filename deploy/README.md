@@ -122,15 +122,10 @@ mount. On bare metal it dies at startup with `CHIP Error 0x000000AD: Open file
 failed` and a traceback naming neither the path nor the reason.
 `smarthome-matter.service` creates it in `ExecStartPre`.
 
-**Only for firmware OTA**, build chip-tool as well — it is not needed to run the
-house, and should stay disabled:
-
-```bash
-# Clones the Matter sources (~2-3 GB) and builds them. On a Pi 4 this takes hours.
-# Run it under tmux/screen so you do not lose it if the SSH session drops.
-cd /opt/smarthome && ./ota/setup.sh
-sudo cp deploy/smarthome-chiptool.logrotate /etc/logrotate.d/smarthome
-```
+chip-tool is **not needed** on the Pi. Firmware updates go through matter-server,
+which brings its own OTA provider; `smarthome-chiptool.service` is only there
+for poking at a device by hand, and stays disabled. The signing key comes from
+`./ota/setup.sh`, run on the machine that builds the firmware.
 
 If your user is not `pi`, change `User=` / `Group=` in **every** `.service` file,
 including the `ExecStartPre` in `smarthome-matter.service`. systemd fails with
@@ -138,6 +133,15 @@ including the `ExecStartPre` in `smarthome-matter.service`. systemd fails with
 which unit is at fault — it just restart-loops.
 
 The panel is then at `http://smarthome.local:8080`.
+
+**From a phone, use `http://smarthome.localdomain:8080` instead** — or the Pi's
+address, with a reservation for it in the router so it stays put. The `.local`
+name is answered over mDNS, a multicast the Pi sends once and the access point
+delivers to a phone in power save when it feels like it: it resolves most of the
+time and times out the rest, and it never resolves at all on many Android
+phones. `smarthome.localdomain` is the same name from the router's own DNS,
+which registers the Pi when it hands out the lease, and a phone asks that DNS
+the ordinary way. Add it to the home screen and it opens like an app.
 
 ### Attestation certificates
 

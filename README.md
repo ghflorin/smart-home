@@ -239,6 +239,9 @@ Border router, matter-server, the panel and the systemd units that keep them up:
 
 ### 3. Then, from the panel
 
+Open `http://smarthome.localdomain:8080` — that name, rather than `.local`, if it
+is a phone; [`deploy/README.md`](deploy/README.md) says why.
+
 1. **Add the bulbs.** The pairing code is on the box or the bulb itself.
 2. **Add the switch.** No code to type — it is ours, and the panel knows its
    passcode.
