@@ -12,6 +12,11 @@ User=pi
 Group=pi
 WorkingDirectory=/opt/smarthome/panel
 Environment=PANEL_PORT=8080
+# Port 80 too, so the address needs no port and a browser that upgrades it to
+# https on its own is refused on 443 at once instead of hanging on 8080. The
+# capability is what lets a non-root process bind a port below 1024; nothing
+# else about the process changes.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 Environment=MATTER_WS=ws://127.0.0.1:5580/ws
 # Skips attestation certificate verification during commissioning.
 #
