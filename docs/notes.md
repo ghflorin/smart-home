@@ -261,6 +261,31 @@ again. A switch that misses the lock state is a switch that stays dead to its
 owner until somebody works out why - which is why the lock gets its own fan-out
 and the bulbs do not.
 
+**One go is not enough either.** The first version of that walk sent once and
+moved on, and the next press left the two switches in Remus behind - the same
+two, both in the room furthest from the lock. The common failure on a sleepy
+mesh is not "no session" but "the write timed out": the session was stale (the
+switch rebooted for an update, or simply dropped it), MRP ran out of retries and
+marked it defunct. So a slot now holds its target until the WRITE is answered
+and goes up to three times, and `FindOrEstablishSession` opens a fresh session
+the second time because the defunct one no longer counts.
+
+**And the Pi finishes the job.** The lock reports its own `Locked` when pressed
+(`LockCluster::ReportLocked`, from the button path - a write from the hub is
+reported by the stack itself). `lock_watch` in `panel/server.py` hears it, waits
+`LOCK_SETTLE_SEC` for the switch's own writes to land, and writes the value to
+any target that still disagrees, through `set_lock`, which reads it back. In the
+usual case it writes nothing. It is edge-triggered on the lock's own state, so
+locking one switch by hand from the panel is not undone for disagreeing with a
+lock it is bound to.
+
+**A thread note, found on the way.** The button is handled on the main thread -
+the loop in `AppTask::StartApp` that drains `Nrf::PostTask` - and not on the
+Matter thread. `LightCtrl::Post` has always crossed over with `ScheduleWork`;
+the Switch cluster's events and its `CurrentPosition` report were being logged
+straight from the button, without the stack lock. They worked, which is how it
+went unnoticed. They cross over now too.
+
 `MATTER_BINDING_TABLE_SIZE` went from Matter's default of 10 to 16 at the same
 time, in `src/chip_project_config.h`. Ten switches plus the lock had filled the
 table exactly, and the eleventh would have had nowhere to go. It also sizes the

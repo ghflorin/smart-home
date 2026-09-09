@@ -9,6 +9,7 @@
  */
 #include "automation.h"
 #include "light_ctrl.h"
+#include "lock_cluster.h"
 #include "lock_state.h"
 #include "status_led.h"
 
@@ -270,6 +271,9 @@ void OnButtonShortPress(void)
 	if (LockState::GetRole() == LockState::Role::Lock) {
 		bool next = !LockState::IsLocked();
 		LockState::SetLocked(next, true);
+		/* The panel hears this and finishes the job for any switch the
+		 * fan-out below could not reach - see lock_watch in panel/server.py. */
+		LockCluster::ReportLocked();
 		LightCtrl::WriteLock(next);
 		/* The confirmation goes to the lock's own LED, the only one that
 		 * stays alive. */

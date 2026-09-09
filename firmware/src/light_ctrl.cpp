@@ -308,75 +308,121 @@ void DeviceContextReleaseHandler(void *context)
 
 /* Defined below, and called from inside the callbacks above it. */
 void LockPumpLater(void);
+/* The state the current round is writing. */
+bool sLockValue;
 
 /* One target being written. The two callbacks are members because
  * CASESessionManager keeps them in a list of its own until the session resolves
- * - they must outlive the call, and no two peers may share one. */
+ * - they must outlive the call, and no two peers may share one.
+ *
+ * The slot stays busy until the WRITE has been answered, not just until the
+ * session is up: a write that times out is the common failure on a sleepy
+ * mesh (the session was stale, the switch was three hops away behind a bulb
+ * that just rebooted), and the answer to it is to go again - which needs the
+ * slot to still know who it was talking to. MRP marks the session defunct when
+ * it gives up, so the next FindOrEstablishSession opens a fresh one instead of
+ * sending down the same dead pipe. */
 class LockTarget {
 public:
 	LockTarget() : mConnected(OnConnected, this), mFailed(OnFailed, this) {}
 
 	bool Busy(void) const { return mBusy; }
 
-	void Send(const ScopedNodeId &peer, EndpointId remoteEp, bool locked)
+	void Send(const ScopedNodeId &peer, EndpointId remoteEp)
 	{
 		mBusy = true;
+		mPeer = peer;
 		mRemoteEp = remoteEp;
-		mLocked = locked;
-		Server::GetInstance().GetCASESessionManager()->FindOrEstablishSession(
-			peer, &mConnected, &mFailed);
+		mTries = 0;
+		Connect();
 	}
 
 private:
+	/* Three goes at one switch, then it is left for the Pi to catch up - see
+	 * lock_watch in panel/server.py. Enough for a stale session (one go to
+	 * find out, one to redo CASE) and a missed poll. */
+	static constexpr uint8_t kMaxTries = 3;
+
+	void Connect(void)
+	{
+		mTries++;
+		/* Read at every attempt, not once at Send: a second press during a
+		 * retry means the retry should carry the NEW state. */
+		mLocked = sLockValue;
+		Server::GetInstance().GetCASESessionManager()->FindOrEstablishSession(
+			mPeer, &mConnected, &mFailed);
+	}
+
+	void Done(void)
+	{
+		mBusy = false;
+		LockPumpLater();
+	}
+
+	void Failed(const char *what, CHIP_ERROR error)
+	{
+		if (mTries < kMaxTries) {
+			LOG_WRN("%s (%" CHIP_ERROR_FORMAT "), trying again", what, error.Format());
+			/* Never straight from a callback - the session manager may be
+			 * walking its own list at this moment. */
+			DeviceLayer::PlatformMgr().ScheduleWork(RetryWorker,
+								reinterpret_cast<intptr_t>(this));
+			return;
+		}
+		/* Usual cause by now: that switch is asleep with a flat cell. The
+		 * others still get their write, which is the whole point of this. */
+		LOG_WRN("%s (%" CHIP_ERROR_FORMAT "), giving up on this switch", what,
+			error.Format());
+		Done();
+	}
+
+	static void RetryWorker(intptr_t context)
+	{
+		reinterpret_cast<LockTarget *>(context)->Connect();
+	}
+
 	static void OnConnected(void *context, Messaging::ExchangeManager &,
 				const SessionHandle &session)
 	{
 		auto *self = static_cast<LockTarget *>(context);
 
-		/* Free before the write, not after: the callback has already been
-		 * taken off the manager's list, and the write in flight does not
-		 * touch this slot. Holding it until the switch answers would idle
-		 * two thirds of the fan-out waiting on sleepy radios. */
-		self->mBusy = false;
-
 		CHIP_ERROR err = Controller::WriteAttribute<LockedAttrTypeInfo>(
 			session, self->mRemoteEp, self->mLocked,
-			[](const ConcreteAttributePath &) { LOG_INF("switch took the lock state"); },
-			[](const ConcreteAttributePath *, CHIP_ERROR error) {
-				LOG_WRN("switch refused the lock state: %" CHIP_ERROR_FORMAT,
-					error.Format());
+			[self](const ConcreteAttributePath &) {
+				LOG_INF("switch took the lock state");
+				self->Done();
+			},
+			[self](const ConcreteAttributePath *, CHIP_ERROR error) {
+				self->Failed("switch did not take the lock state", error);
 			});
 		if (err != CHIP_NO_ERROR) {
-			LOG_WRN("lock write not sent: %" CHIP_ERROR_FORMAT, err.Format());
+			/* Neither lambda runs when the send itself failed. */
+			self->Failed("lock write not sent", err);
 		}
-		LockPumpLater();
 	}
 
 	static void OnFailed(void *context, const ScopedNodeId &, CHIP_ERROR error)
 	{
-		auto *self = static_cast<LockTarget *>(context);
-		self->mBusy = false;
-		/* Usual cause: that switch is asleep with a flat cell. The others
-		 * still get their write, which is the whole point of this. */
-		LOG_WRN("no session to a switch: %" CHIP_ERROR_FORMAT, error.Format());
-		LockPumpLater();
+		static_cast<LockTarget *>(context)->Failed("no session to a switch", error);
 	}
 
 	Callback::Callback<OnDeviceConnected> mConnected;
 	Callback::Callback<OnDeviceConnectionFailure> mFailed;
+	ScopedNodeId mPeer;
 	EndpointId mRemoteEp = kInvalidEndpointId;
 	bool mLocked = false;
 	bool mBusy = false;
+	uint8_t mTries = 0;
 };
 
 /* How many switches are written at once. Three fits comfortably inside
  * CONFIG_CHIP_MAX_ACTIVE_CASE_CLIENTS, so a slot is never refused for want of
  * room - which was the original fault - and the whole house is still done in a
- * few seconds rather than one switch at a time. */
+ * few seconds rather than one switch at a time. A switch that needs all three
+ * goes holds its slot for the duration; the other two keep the round moving. */
 constexpr size_t kLockSlots = 3;
 
 LockTarget sLockSlots[kLockSlots];
-bool sLockValue;
 /* How many bound switches this round has already been handed to a slot. The
  * table is short, so the walk simply skips that many matches each time rather
  * than carrying an iterator across callbacks. */
@@ -404,8 +450,7 @@ void LockPump(void)
 				continue;
 			}
 			sLockSent++;
-			slot.Send(ScopedNodeId(iter->nodeId, iter->fabricIndex), iter->remote,
-				  sLockValue);
+			slot.Send(ScopedNodeId(iter->nodeId, iter->fabricIndex), iter->remote);
 			taken = true;
 			break;
 		}

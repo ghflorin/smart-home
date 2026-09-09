@@ -19,4 +19,10 @@ namespace LockCluster {
  * has been initialized. */
 void Init(void);
 
+/* Tells the fabric that Locked changed. A write from the hub is reported by the
+ * stack itself; a press on the switch is not, and the panel only ever learned
+ * that a lock had been pressed by noticing its targets change. Call it after
+ * LockState::SetLocked on the button path. Safe from any thread. */
+void ReportLocked(void);
+
 } /* namespace LockCluster */
