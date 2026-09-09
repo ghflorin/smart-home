@@ -132,16 +132,16 @@ including the `ExecStartPre` in `smarthome-matter.service`. systemd fails with
 `status=217/USER` when the account does not exist, and the message does not say
 which unit is at fault — it just restart-loops.
 
-The panel is then at `http://smarthome.local:8080`.
+The panel is then at `http://smarthome.local` — plain http, and no port needed:
+it listens on 80 as well as 8080.
 
-**From a phone, use `http://smarthome.localdomain:8080` instead** — or the Pi's
-address, with a reservation for it in the router so it stays put. The `.local`
-name is answered over mDNS, a multicast the Pi sends once and the access point
-delivers to a phone in power save when it feels like it: it resolves most of the
-time and times out the rest, and it never resolves at all on many Android
-phones. `smarthome.localdomain` is the same name from the router's own DNS,
-which registers the Pi when it hands out the lease, and a phone asks that DNS
-the ordinary way. Add it to the home screen and it opens like an app.
+Leave the port off on a phone. A phone's browser upgrades a typed address to
+https by itself, and https on 8080 — a port that speaks no TLS — is a connection
+that just hangs, which the browser reports as the server not responding. With no
+port the upgrade goes to 443, is refused at once, and the browser falls back to
+http on its own. Add it to the home screen and it opens like an app. If the
+phone is an Android that does not resolve `.local`, the router's own DNS knows
+the Pi as `smarthome.localdomain`.
 
 ### Attestation certificates
 

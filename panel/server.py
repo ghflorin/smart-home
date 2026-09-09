@@ -56,6 +56,16 @@ THREAD_DATASET = pathlib.Path(
     os.environ.get("THREAD_DATASET",
                    str(HERE.parent / "ota" / "state" / "thread-dataset.hex")))
 PANEL_PORT = int(os.environ.get("PANEL_PORT", "8080"))
+# Port 80 as well, when it can be had, so the address needs no port at all.
+#
+# Not cosmetics. A phone's browser upgrades a typed address to https on its
+# own, and https on 8080 - a port that speaks no TLS - is a connection that
+# hangs until the browser gives up: "the server stopped responding", for a
+# server that was fine. With no port in the address the upgrade goes to 443,
+# where nothing listens, is refused at once, and the browser falls back to
+# http before anyone notices. Binding 80 needs CAP_NET_BIND_SERVICE, which the
+# unit file grants; without it this is skipped with a line in the log.
+PANEL_PORT_PLAIN = int(os.environ.get("PANEL_PORT_PLAIN", "80"))
 
 # Skips attestation certificate verification during commissioning.
 #
@@ -4808,4 +4818,15 @@ if __name__ == "__main__":
             log("moved a remote out of the sensor list", "ok")
     except (OSError, ValueError) as exc:
         log(f"could not check for remotes: {exc}", "warn")
-    ThreadingHTTPServer(("0.0.0.0", PANEL_PORT), Handler).serve_forever()
+    servers = [ThreadingHTTPServer(("0.0.0.0", PANEL_PORT), Handler)]
+    if PANEL_PORT_PLAIN and PANEL_PORT_PLAIN != PANEL_PORT:
+        try:
+            servers.append(ThreadingHTTPServer(("0.0.0.0", PANEL_PORT_PLAIN), Handler))
+            print(f"               http://0.0.0.0:{PANEL_PORT_PLAIN}")
+        except OSError as exc:
+            log(f"port {PANEL_PORT_PLAIN} could not be taken ({exc}) - "
+                f"the panel answers on {PANEL_PORT} only", "warn")
+    for extra in servers[1:]:
+        threading.Thread(target=extra.serve_forever,
+                         name=f"http-{extra.server_address[1]}", daemon=True).start()
+    servers[0].serve_forever()
