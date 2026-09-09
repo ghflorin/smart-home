@@ -9,10 +9,10 @@ laptop out of the house and the system keeps running.
 |---|---|---|
 | Border router (otbr-agent + dongle) | **Pi** | has to be up permanently; it is the bridge to Thread |
 | matter-server | **Pi** | the Matter client: commands, reads, subscriptions, commissioning |
-| chip-tool | **Pi**, but **not running** | only for firmware OTA. Leave it disabled — it burns a full CPU core while idle |
+| chip-tool | **Pi**, but **not running** | not needed any more; updates go through matter-server. Leave it disabled — it burns a full CPU core while idle |
 | The panel | **Pi** | you reach it from a browser, on any device in the house |
 | The schedule | **Pi** | the panel service keeps local time and writes `OnLevel` + color temperature into the bulbs on every slot change |
-| The OTA server | **Pi** | started only when you push an update |
+| Firmware updates | **Pi** | matter-server serves them from `/opt/smarthome/updates`; the panel starts each one |
 | **Firmware builds** | Mac (recommended) | see below |
 
 The switch drives the bulb directly, through the binding — **it works with the Pi
@@ -30,11 +30,8 @@ question of resources:
 - The linker needs RAM; on a 2 GB Pi 4 it struggles
 
 The Pi **does not need** a toolchain to distribute an update — all it needs is the
-`matter.ota` file. Build on the Mac, copy the artifact:
-
-```bash
-scp build-holyiot_25015/matter.ota pi@smarthome.local:/opt/smarthome/firmware-images/
-```
+`matter.ota` file and a descriptor next to it. `./ota/publish.sh` builds on the
+Mac and puts both where matter-server looks — see [`ota/README.md`](../ota/README.md).
 
 If you want to build on the Pi anyway, you can — but run `./scripts/bootstrap.sh`
 there and bring patience.

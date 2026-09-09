@@ -344,11 +344,10 @@ NCS v3.0.0, Zephyr SDK 0.17.4, macOS arm64:
 
 | Board | FLASH | RAM |
 |---|---|---|
-| holyiot_25015 | 88.6% (629 KB / **710 KB slot**) | 66.8% (171 KB / 256 KB) |
 | holyiot_25008 | 88.3% (627 KB / **710 KB slot**) | 66.8% (171 KB / 256 KB) |
 | nrf54l15dk | 54.4% (795 KB / 1426 KB) | 67.5% (256 KB) |
 
-On the Holyiot modules FLASH is measured against **one image slot**, not the whole
+On the Holyiot module FLASH is measured against **one image slot**, not the whole
 RRAM: OTA needs two. About 81 KB of headroom is left.
 
 **The usable ceiling is well below the 710 KB slot, and is not yet known.**
@@ -419,27 +418,27 @@ The OTA image's own header still carries "+0", because NCS builds that string in
 CMake. Nothing displays it: the panel shows what the local descriptor says, and
 those are written by hand - so write them without the tail too.
 
-**So: build OTA images in a clean build directory.** `west build -d build-ota`
-after `rm -rf build-ota`. An incremental build is fine for flashing over SWD,
-where the version only has to be right in what you read back, and wrong for
-anything that travels.
+**So: build OTA images pristine.** `ota/publish.sh` does, through
+`scripts/build.sh -p`, and then reads the version back out of the signed image's
+header before it publishes anything. An incremental build is fine for flashing
+over SWD, where the version only has to be right in what you read back, and
+wrong for anything that travels.
 
-Note that `ota/update.sh` cannot be used for any of this: it drives the update
-with chip-tool on a fabric that no longer exists. Updates go through
-matter-server's local update descriptors, which are JSON files dropped in
-`/opt/smarthome/updates` - one `modelVersion` object each, with `otaUrl` relative
-to that directory (`file:///name.ota`, since only the leading slash is stripped),
-`otaChecksum` as base64 sha256 and `otaChecksumType: 1`. They are read at startup
-only, so matter-server has to be restarted after adding one. See
+Updates go through matter-server's local update descriptors, which are JSON
+files in `/opt/smarthome/updates` - one `modelVersion` object each, with
+`otaUrl` relative to that directory (`file:///name.ota`, since only the leading
+slash is stripped), `otaChecksum` as base64 sha256 and `otaChecksumType: 1`.
+They are read at startup only, so matter-server has to be restarted after
+adding one - `publish.sh` does both. See
 `deploy/matter-custom-clusters.py` for the shape of the surrounding machinery.
 
 ## Board definitions
 
-`firmware/boards/holyiot/` covers **Holyiot 25008** and **25015**, started from
+`firmware/boards/holyiot/` covers the **Holyiot 25008**, started from
 [uAmpHome/micro_matter_button](https://github.com/uAmpHome/micro_matter_button)
 and corrected against
 [the official board upstream](https://docs.zephyrproject.org/latest/boards/holyiot/holyiot_25008/doc/index.html).
-When NCS carries these boards upstream, delete these and use the official ones.
+When NCS carries the board upstream, delete this and use the official one.
 
 The community definition declares four green LEDs and no UART; the module really
 has one RGB LED and a UART. Two corrections are load-bearing:
@@ -462,9 +461,8 @@ has one RGB LED and a UART. Two corrections are load-bearing:
   Without it RAM comes out at 89% with almost no headroom. Delete the overlays if
   you ever run code on FLPR.
 
-The physical button is P1.13 on both modules but with a different index: `sw1` on
-25008, `sw0` on 25015, where P1.09 is taken by I2C21 SCL. The remaining
-`gpio-keys` entries are exposed pads, not mounted buttons.
+The physical button is P1.13, alias `sw1`. The remaining `gpio-keys` entries are
+exposed pads, not mounted buttons.
 
 ## Toolchain requirements
 

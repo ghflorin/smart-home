@@ -50,21 +50,17 @@ CHIP_ERROR sLightCtrlInitErr = CHIP_NO_ERROR;
 
 /* Which button alias is the PHYSICAL button.
  *
- * On both Holyiot modules the button sits on P1.13, but it lands on a different
- * alias index: sw0 on the 25015 (where P1.09 is taken by I2C21 for the SHT40,
- * so the button that would come before it is missing) and sw1 on the 25008. And
- * dk_buttons_and_leds numbers buttons by alias ORDER, not by pin - so the mask
- * differs between the two boards.
- *
- * We derive it from devicetree instead of hardcoding it. With a fixed value,
- * the application on the 25015 listens on P1.08, an unpopulated pad: the LED
- * works but the button does nothing. That symptom points straight at a suspect
- * board rather than at a line of code. */
+ * On the Holyiot 25008 it sits on P1.13, which is alias sw1 - and
+ * dk_buttons_and_leds numbers buttons by alias ORDER, not by pin, so that is
+ * DK_BTN2. Derived from devicetree rather than hardcoded: with a fixed value, a
+ * reordered alias leaves the application listening on an unpopulated pad, the
+ * LED works and the button does nothing, and that symptom points straight at a
+ * suspect board rather than at a line of code. */
 #define SW_ON_P1_13(alias)                                                                         \
 	(DT_SAME_NODE(DT_GPIO_CTLR(DT_ALIAS(alias), gpios), DT_NODELABEL(gpio1)) &&                \
 	 DT_GPIO_PIN(DT_ALIAS(alias), gpios) == 13)
 
-#if defined(CONFIG_BOARD_HOLYIOT_25015) || defined(CONFIG_BOARD_HOLYIOT_25008)
+#if defined(CONFIG_BOARD_HOLYIOT_25008)
 #if SW_ON_P1_13(sw0)
 #define APPLICATION_BUTTON_MASK DK_BTN1_MSK
 #elif SW_ON_P1_13(sw1)
@@ -86,10 +82,7 @@ CHIP_ERROR sLightCtrlInitErr = CHIP_NO_ERROR;
 /* A safety net for the deduction above. If someone reorders the devicetree
  * aliases, the build fails here with a clear message instead of passing and
  * leaving a dead button in the field. */
-#if defined(CONFIG_BOARD_HOLYIOT_25015)
-BUILD_ASSERT(APPLICATION_BUTTON_MASK == DK_BTN1_MSK,
-	     "on the 25015 the physical button (P1.13) is sw0, so DK_BTN1");
-#elif defined(CONFIG_BOARD_HOLYIOT_25008)
+#if defined(CONFIG_BOARD_HOLYIOT_25008)
 BUILD_ASSERT(APPLICATION_BUTTON_MASK == DK_BTN2_MSK,
 	     "on the 25008 the physical button (P1.13) is sw1, so DK_BTN2");
 #endif

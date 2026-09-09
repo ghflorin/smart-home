@@ -340,7 +340,7 @@ void SetBackground(Pattern p, Rgb color, uint16_t periodMs)
 
 void SetBackgroundScaled(Pattern p, Rgb color, uint8_t maxScale, uint16_t periodMs)
 {
-	Effect next = { p, color, periodMs ? periodMs : 1000, maxScale };
+	Effect next = { p, color, static_cast<uint16_t>(periodMs ? periodMs : 1000), maxScale };
 
 	/* If nothing changed, do not restart the phase. Otherwise the indicator,
 	 * refreshed once a minute, would restart the pulse and look irregular. */
@@ -356,7 +356,7 @@ void SetBackgroundScaled(Pattern p, Rgb color, uint8_t maxScale, uint16_t period
 
 void SetOverlay(Pattern p, Rgb color, uint16_t periodMs)
 {
-	sOverlay = { p, color, periodMs ? periodMs : 1000, 255 };
+	sOverlay = { p, color, static_cast<uint16_t>(periodMs ? periodMs : 1000), 255 };
 	sOverlayActive = true;
 	sPhaseStart = k_uptime_get();
 	Reschedule();
