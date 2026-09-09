@@ -367,7 +367,7 @@ test credentials — see the *Before production* checklist in the main README.
 The 15 s poll interval is why changing its role from the panel can take that
 long to be acknowledged: the write waits at its Thread parent until the switch
 next wakes. It is set per board in
-`firmware/boards/holyiot_25015_nrf54l15_cpuapp.conf`
+`firmware/boards/holyiot_25008_nrf54l15_cpuapp.conf`
 (`CONFIG_CHIP_ICD_SLOW_POLL_INTERVAL`), and trades directly against battery life.
 
 ## What the panel needs from a device

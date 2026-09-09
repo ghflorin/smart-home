@@ -84,8 +84,8 @@ from matter-server's cache rather than by waking a sleeping device.
 
 Idle, on a Pi 3 B+: matter-server 0.2% CPU / 153 MB, the panel 0.4% / 34 MB.
 
-Firmware OTA is the exception: it uses `chip-tool` and its own fabric, see
-[`ota/`](ota/).
+Firmware updates go the same way: matter-server serves the image, the panel
+starts each one and watches it land — see [`ota/`](ota/).
 
 ## What the firmware does
 
@@ -97,7 +97,7 @@ Firmware OTA is the exception: it uses `chip-tool` and its own fabric, see
 | full brightness on demand | `src/automation.cpp` | long press = 254 + 4000 K, once |
 | editable schedule | [`panel/`](panel/) | graphical editor, stored on the Pi |
 | the correct time | Raspberry Pi | the switch has no clock; the Pi knows local time, time zone and DST |
-| firmware updates without wires | [`ota/`](ota/) | Matter OTA, provider started only on demand |
+| firmware updates without wires | [`ota/`](ota/) | Matter OTA, served by matter-server, started from the panel |
 | which bulb is which, what a switch drives | [`panel/`](panel/) | Identify + binding table |
 | locking the switches | `src/lock_cluster.cpp` | our own cluster on dynamic endpoint 2 |
 | the status LED | `src/status_led.cpp` | blinks only while waiting to be commissioned; dark otherwise |
@@ -201,7 +201,6 @@ it has to be done before the first commissioning.
 | Physical button | P1.13 | active low + pull-up |
 | UART TX / RX | P1.04 / P1.05 | `uart20`, declared; the driver is off |
 | Accelerometer | LIS2DH on SPI00 | IRQ P2.00 / P2.03 — powered down |
-| SHT40 (25015 only) | I2C21 | SDA P1.11, SCL P1.09 |
 
 The modules have no USB — flashing is over SWD, with a Raspberry Pi Pico or a
 J-Link. Board definitions, LED behaviour, battery figures and the flashing
@@ -217,7 +216,7 @@ the Matter controller and the panel.
 
 | | |
 |---|---|
-| the switch | a Holyiot nRF54L15 module — 25008 or 25015 — and something that speaks SWD. A Raspberry Pi Pico or a XIAO RP2040 with `debugprobe` does the job; the modules have no USB. |
+| the switch | a Holyiot 25008 module (nRF54L15) and something that speaks SWD. A Raspberry Pi Pico or a XIAO RP2040 with `debugprobe` does the job; the module has no USB. |
 | the hub | a Raspberry Pi and an nRF52840 dongle for the Thread radio. Give it a supply that can hold 5 V under load — a sagging one browns out the radio, and it looks like everything else. |
 | the lights | IKEA Matter bulbs. |
 
@@ -225,8 +224,8 @@ the Matter controller and the panel.
 
 ```bash
 ./scripts/bootstrap.sh              # the toolchain, once
-./scripts/build.sh holyiot_25015
-./scripts/flash.sh holyiot_25015
+./scripts/build.sh holyiot_25008
+./scripts/flash.sh holyiot_25008
 ```
 
 Pin map, LED behaviour, battery figures and the flashing recipe — including

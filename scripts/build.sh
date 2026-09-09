@@ -66,5 +66,5 @@ west build -b "$BOARD" --sysbuild ${WEST_ARGS+"${WEST_ARGS[@]}"} \
 echo
 echo "Artifact: $REPO_ROOT/build-${TARGET}/merged.hex"
 echo
-echo "Flash over SWD (the Holyiot modules have no USB):"
+echo "Flash over SWD (the Holyiot module has no USB):"
 echo "  ./scripts/flash.sh ${TARGET}"

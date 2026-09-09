@@ -133,4 +133,4 @@ echo "=== Flash $TARGET ==="
 echo
 echo "Done. If that was the first flash, commissioning comes next:"
 echo "  scripts/commission.sh"
-echo "After that, updates go over the air: ./ota/update.sh"
+echo "After that, updates go over the air: ./ota/publish.sh"
