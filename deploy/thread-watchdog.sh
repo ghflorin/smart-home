@@ -26,6 +26,16 @@
 #                               Only power-cycling the device clears it, which
 #                               over USB means unbind then bind.
 #
+# The two arrive as one event, and this is what it looks like in the log:
+#
+#     [W] P-RadioSpinel-: radio tx timeout
+#     [C] P-RadioSpinel-: Failed to communicate with RCP - no response from RCP
+#     [C] Platform------: HandleRcpTimeout() at radio_spinel.cpp:2053
+#
+# otbr-agent aborts itself on that last line. So the usual state to find the
+# system in is not "the daemon is confused", it is "there is no daemon" - and
+# that is worth separating, because it needs no waiting. See `running` below.
+#
 # So this escalates rather than retrying: restart first, and reset the radio
 # only if a restart was not enough. A USB reset is the bigger hammer and it is
 # not free - the network drops and every node re-attaches - so it is not the
@@ -100,6 +110,18 @@ save_state() {
 }
 
 now() { date +%s; }
+
+# Is the daemon there at all?
+#
+# When it is not, there is nothing to wait for. THRESHOLD below exists for a
+# network that might still be attaching - two minutes of patience so a recovery
+# already under way is not interrupted - and a process that has exited is not
+# attaching. Waiting it out just adds two minutes to an outage whose cause is
+# already settled. systemd cannot answer this: the unit generated from the LSB
+# script carries GuessMainPID=no, so as far as it knows the service is fine.
+running() {
+	pgrep -x otbr-agent >/dev/null 2>&1
+}
 
 # ------------------------------------------------------------------- health
 #
@@ -199,7 +221,7 @@ fi
 fails=$((fails + 1))
 save_state
 
-if [ "$fails" -lt "$THRESHOLD" ]; then
+if [ "$fails" -lt "$THRESHOLD" ] && running; then
 	say "thread is $state ($fails/$THRESHOLD) - waiting"
 	exit 0
 fi
@@ -215,7 +237,11 @@ last_action=$(now)
 save_state
 
 if [ "$stage" = 1 ]; then
-	say "thread is $state - restarting otbr-agent"
+	if running; then
+		say "thread is $state - restarting otbr-agent"
+	else
+		say "otbr-agent is not running (the RCP stopped answering) - starting it"
+	fi
 	systemctl restart otbr-agent
 else
 	# A restart did not do it, so this is the RCP and not the daemon.

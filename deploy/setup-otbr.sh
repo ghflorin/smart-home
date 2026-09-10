@@ -121,10 +121,17 @@ INFRA_IF_NAME="$INFRA_IF" NETWORK_MANAGER="$NM" RELEASE=1 ./script/setup
 say "5. The radio port"
 
 # script/setup writes a default port that is usually not ours.
+#
+# -d 5 is NOTICE. The default is INFO, which logs every packet the border
+# router forwards - about 22,000 lines an hour in a house this size. The
+# journal here is volatile, so at that rate it holds twenty minutes: the
+# morning a Thread outage needs explaining, the explanation has already been
+# rotated away, and what remains is a wall of MeshForwarder lines. NOTICE keeps
+# the state changes and the errors, which is what the log is read for.
 CONF=/etc/default/otbr-agent
 [ -f "$CONF" ] || die "$CONF was not created - setup failed"
 sudo sed -i \
-	"s|^OTBR_AGENT_OPTS=.*|OTBR_AGENT_OPTS=\"-I wpan0 -B $INFRA_IF spinel+hdlc+uart://$RCP_DEV?uart-baudrate=1000000 trel://$INFRA_IF\"|" \
+	"s|^OTBR_AGENT_OPTS=.*|OTBR_AGENT_OPTS=\"-I wpan0 -B $INFRA_IF -d 5 spinel+hdlc+uart://$RCP_DEV?uart-baudrate=1000000 trel://$INFRA_IF\"|" \
 	"$CONF"
 ok "$(grep OTBR_AGENT_OPTS "$CONF")"
 
