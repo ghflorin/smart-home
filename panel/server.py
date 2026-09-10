@@ -3396,32 +3396,41 @@ def apply_light_schedule(force: bool = False, only=None) -> dict:
         with _state_lock:
             sent = dict(_state.setdefault("bulbs", {}).get(key, {}))
         ep = b.get("endpoint", 1)
-        did = False
+        # What this pass actually put in the bulb. Kept apart from `sent`,
+        # which is a READ of the memo and holds values somebody else wrote.
+        wrote = {}
+
+        # The hold is re-read before every write, not just once at the top of
+        # the loop. Between that check and the last of these three commands are
+        # three Matter round trips - a second or two normally, twenty when a
+        # bulb has to be resolved first. A hand on the panel inside that window
+        # was answered by the curve landing afterwards, so the lamp somebody had
+        # just set to full went back to the schedule while they watched.
+        def free():
+            return not overridden(b["node"])
 
         # What it comes up at. Stepped, because this one is flash.
         last_on = sent.get("onlevel")
-        if force or last_on is None or abs(last_on - level) >= ONLEVEL_STEP:
+        if (force or last_on is None or abs(last_on - level) >= ONLEVEL_STEP) and free():
             e = m_write(b["node"], ep, 0x0008, 0x0011, level)
             if e:
                 log(f"bulb {b['node']}: OnLevel failed: {e}", "err")
             else:
-                sent["onlevel"] = level
-                did = True
+                wrote["onlevel"] = level
 
         # What it should be doing right now, if it is lit at all.
-        if force or sent.get("level") != level:
+        if (force or sent.get("level") != level) and free():
             e = m_cmd(b["node"], ep, 0x0008, "MoveToLevel",
                       {"level": level, "transitionTime": tenths,
                        "optionsMask": 0, "optionsOverride": 0})
             if e:
                 log(f"bulb {b['node']}: live level failed: {e}", "warn")
             else:
-                sent["level"] = level
-                did = True
+                wrote["level"] = level
 
         if mireds:
             last_ct = sent.get("mireds")
-            if force or last_ct is None or abs(last_ct - mireds) >= MIRED_STEP:
+            if (force or last_ct is None or abs(last_ct - mireds) >= MIRED_STEP) and free():
                 # optionsMask=1, optionsOverride=1 -> ExecuteIfOff, so the
                 # colour lands with the bulb off as well, which is exactly
                 # when we need it.
@@ -3432,16 +3441,30 @@ def apply_light_schedule(force: bool = False, only=None) -> dict:
                 if e:
                     log(f"bulb {b['node']}: colour failed: {e}", "err")
                 else:
-                    sent["mireds"] = mireds
-                    did = True
+                    wrote["mireds"] = mireds
 
-        if did:
+        if wrote:
             log(f"bulb {b['node']}: {minute // 60:02d}:{minute % 60:02d} "
                 f"-> level {level}" + (f", {mireds} mireds" if mireds else ""),
                 "step")
-            sent["at"] = time.time()
             with _state_lock:
-                _state.setdefault("bulbs", {})[key] = sent
+                # MERGED IN, never assigned over.
+                #
+                # This entry is shared: the schedule's memo and the hold flags
+                # live in the same dict. Writing the whole snapshot back put it
+                # in the state it had been in three Matter round trips ago, and
+                # anything set in between was gone - including a hold. So
+                # setting a lamp to full from the panel, at the moment the
+                # schedule happened to be part-way through that same lamp's
+                # three writes, silently dropped the hold, and the next tick
+                # took the light back to the curve. It looked like the hold had
+                # stopped working; it had been erased.
+                #
+                # Only what this pass actually wrote goes in, so a manual value
+                # recorded in the meantime stands.
+                entry = _state.setdefault("bulbs", {}).setdefault(key, {})
+                entry.update(wrote)
+                entry["at"] = time.time()
             state_save()
             out["written"] += 1
 

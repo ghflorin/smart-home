@@ -432,6 +432,42 @@ They are read at startup only, so matter-server has to be restarted after
 adding one - `publish.sh` does both. See
 `deploy/matter-custom-clusters.py` for the shape of the surrounding machinery.
 
+## When the Thread radio goes, and what it looks like
+
+The dongle stops answering spinel and takes the border router down with it:
+
+```
+[W] P-RadioSpinel-: radio tx timeout
+[C] P-RadioSpinel-: Failed to communicate with RCP - no response from RCP
+[C] Platform------: HandleRcpTimeout() at radio_spinel.cpp:2053
+```
+
+otbr-agent aborts on that last line, so the usual state to find the system in is
+not a confused daemon but no daemon at all - and systemd does not notice, because
+the unit generated from the LSB init script carries `GuessMainPID=no`. That is
+what `deploy/thread-watchdog.sh` is for. It waits two checks before acting on a
+network that is merely detached, because an attach in progress must not be
+interrupted; but a process that has exited is not attaching, so `running()` is
+checked separately and that case is acted on at once. Twice in one evening the
+difference was two minutes of a house that answered nothing.
+
+From the outside this reads as everything being broken at the same time: bulbs
+report `Network is unreachable`, the panel shows values that are minutes old, and
+a light set to full from the panel goes back to the schedule - which is somebody
+else's bug, until you look at the radio.
+
+**otbr-agent logs every packet it forwards at the default level.** About 22,000
+lines an hour in a house of thirty-odd nodes. The journal here is volatile, so at
+that rate it holds twenty minutes - and the morning an outage needs explaining,
+the explanation has been rotated away and what is left is a wall of
+`MeshForwarder` lines. `-d 5` (NOTICE) in `/etc/default/otbr-agent` keeps the
+state changes and the three lines above, and takes the volume from ~180 lines per
+30 seconds to 2.
+
+If it keeps happening, suspect the USB side before the firmware: `dmesg | grep
+ttyACM` showing the device re-registering is the dongle resetting itself, and
+that is a cable, a port or a supply.
+
 ## Board definitions
 
 `firmware/boards/holyiot/` covers the **Holyiot 25008**, started from
