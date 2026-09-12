@@ -12,7 +12,9 @@ panel on a Raspberry Pi to administer it all.
 A section per room, a tile per device. The round icon is the quick action —
 on/off for a bulb, lock/unlock for a switch — and anywhere else opens it. A
 battery gauge and a small cloud appear in a tile's corner when they apply: one
-for the devices that run on a cell, one when firmware is waiting.
+for the devices that run on a cell, one when firmware is waiting. A red crossed
+signal takes that corner when a device has stopped answering — the last reading
+stays on the tile, so you can see what its battery was on the way out.
 
 **Brightness and colour follow the time of day.** The curve is yours to edit:
 drag a point, then save it for the whole house or for one lamp.
