@@ -619,6 +619,25 @@
   .tile .fwup svg { width: 100%; height: 100%; display: block; }
   .tile .fwup.beside-batt { right: 31px; }
 
+  /* The same corner as the update icon, because the two never appear together:
+     an update is offered against a version the device REPORTED, so a device
+     that has stopped answering has nothing on offer worth showing. Red, and
+     still, and small. A device that is not there is worth noticing and is not
+     an alarm - the leak sensor is the only thing on this page allowed to
+     move. */
+  .tile .offl {
+    position: absolute;
+    top: 6px;
+    right: 9px;
+    width: 15px;
+    height: 15px;
+    color: var(--bad);
+    opacity: .85;
+    pointer-events: none;
+  }
+  .tile .offl svg { width: 100%; height: 100%; display: block; }
+  .tile .offl.beside-batt { right: 31px; }
+
   /* Firmware, at the foot of a device's sheet.
      A footnote while it is up to date, and a call to action when it is not -
      the version pair is the whole message, so it carries the emphasis rather
@@ -2762,6 +2781,15 @@ const ICONS = {
     <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
     <circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>`,
 
+  // Signal arcs with a line through them. Same weight as cloudDown, and for
+  // the same reason: it is worn at badge size in the corner of a tile.
+  offline: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M5 9.6a11 11 0 0 1 14 0"/>
+    <path d="M8.3 13.2a6.4 6.4 0 0 1 7.4 0"/>
+    <circle cx="12" cy="17.6" r="1.15" fill="currentColor" stroke="none"/>
+    <path d="M4 4 20 20"/></svg>`,
+
   cloudDown: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
     stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d="M7.6 14.4a3.6 3.6 0 0 1-.2-7.2 5 5 0 0 1 9.4-1 3.4 3.4 0 0 1 .8 6.7"/>
@@ -2971,7 +2999,7 @@ function buildTile(o) {
   el.append(q, meta);
   el._parts = { q, name, st, txt, dot, fill: null, badge: null,
                 icon: null, lvl: null, batt: null, battPct: null,
-                fwup: null };
+                fwup: null, offl: null };
 
   // Bound once, reading el._o when they fire. This is the whole reason a redraw
   // can leave the element alone: rebinding on every pass would be most of the
@@ -3061,9 +3089,36 @@ function paintTile(el, o) {
     p.battPct = null;
   }
 
+  /* Not answering.
+   *
+   * The panel knew this all along and only ever whispered it: a dashed border
+   * on some kinds of tile, the words "no answer" where the reading goes, and
+   * on a SWITCH nothing whatever - so the button with the flat cell looked
+   * exactly like the nine that were fine. This is the one fact about a device
+   * you cannot work out by looking at the rest of the tile, because a stale
+   * reading looks precisely like a current one.
+   *
+   * `ok` already has the patience built in: the Pi holds it true through a
+   * failed read while the device has answered recently at all, so this does
+   * not flicker on every missed poll.
+   */
+  if (o.offline) {
+    if (!p.offl) {
+      p.offl = document.createElement('span');
+      p.offl.className = 'offl';
+      p.offl.innerHTML = ICONS.offline;
+      el.append(p.offl);
+    }
+    setAttr(p.offl, 'title', o.offlineTitle || 'not answering');
+    p.offl.classList.toggle('beside-batt', !!p.batt);
+  } else if (p.offl) {
+    p.offl.remove();
+    p.offl = null;
+  }
+
   // Drawn after the battery, because where it sits depends on whether there
   // is one.
-  if (o.update) {
+  if (o.update && !o.offline) {
     if (!p.fwup) {
       p.fwup = document.createElement('span');
       p.fwup.className = 'fwup';
@@ -3233,6 +3288,24 @@ function alarming(measured) {
   return ALARM_KEYS.some(k => (measured || {})[k] === true);
 }
 
+/* Has the panel stopped hearing from this device?
+ *
+ * A remote is left out. It sleeps until somebody presses it, so it reads as
+ * not answering nearly always - which is why the health count leaves it out
+ * too, and a badge that is always lit says nothing at all.
+ */
+function offlineNow(node) {
+  if (state.remotes.has(node)) { return false; }
+  const st = state.bulbs[String(node)];
+  return !!(st && st.ok === false);
+}
+
+function offlineTitleFor(node) {
+  const st = state.bulbs[String(node)] || {};
+  return st.readAt ? 'not answering \u2014 last read ' + heardAgo(st.readAt)
+                   : 'not answering';
+}
+
 function deviceOpts(d) {
   const st = state.bulbs[String(d.node)];
   const measured = (st && st.measured) || null;
@@ -3259,6 +3332,8 @@ function deviceOpts(d) {
     onQuick: q => identifySwitch(d, q),
     batt: battOf(measured, st),
     update: !!state.updates[String(d.node)],
+    offline: offlineNow(d.node),
+    offlineTitle: offlineTitleFor(d.node),
     openTitle: 'readings for ' + d.name,
     onOpen: () => openDevice(d),
   };
@@ -3363,6 +3438,8 @@ function bulbOpts(b) {
     quickTitle: (on === true ? 'turn off' : 'turn on') + ' — ' + b.name,
     onQuick: q => toggleBulb(b, q),
     update: !!state.updates[String(b.node)],
+    offline: offlineNow(b.node),
+    offlineTitle: offlineTitleFor(b.node),
     openTitle: 'settings for ' + b.name,
     onOpen: () => openBulb(b),
   };
@@ -3431,6 +3508,8 @@ function switchOpts(sw) {
     quickDisabled: !isLock && !known,
     onQuick: q => (isLock ? identifySwitch(sw, q) : quickLock(sw, q)),
     update: !!state.updates[String(sw.node)],
+    offline: offlineNow(sw.node),
+    offlineTitle: offlineTitleFor(sw.node),
     openTitle: 'settings for ' + sw.name,
     onOpen: () => openSwitch(sw),
   };

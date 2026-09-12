@@ -885,12 +885,21 @@ def set_role(node: int, role: int) -> dict:
 # How rarely: the binding table, the role and the schedule never change on their
 # own - only we write them. The one thing that can change behind our back is the
 # locked state, when a switch in the lock role toggles it. That one is updated
-# immediately anyway, by the very write that produces it. So the long cycle is
-# only a safety net, and it is worth keeping rare: every read is radio traffic
-# to a battery-powered device.
+# immediately anyway, by the very write that produces it. So the cycle is only a
+# safety net.
+#
+# It used to run every six hours, and the reason given was that every read is
+# radio traffic to a battery-powered device. That stopped being true when the
+# panel moved to matter-server: read_switch_state is a cache read now and never
+# leaves the Pi - twelve switches measured at 0.05 s and 216 KB, all of it over
+# a loopback socket. What the six hours actually cost was the ONE thing in this
+# sweep that does change on its own and is not pushed: whether the switch is
+# still there at all. A button with a flat cell kept its last good verdict until
+# the next sweep, so the tile said nothing was wrong for most of a day. Five
+# minutes is still a safety net and it is still free.
 STATE_FILE = pathlib.Path(
     os.environ.get("PANEL_STATE", str(HERE.parent / "ota" / "state" / "panel-state.json")))
-REFRESH_SEC = int(os.environ.get("PANEL_REFRESH_SEC", str(6 * 3600)))
+REFRESH_SEC = int(os.environ.get("PANEL_REFRESH_SEC", "300"))
 
 SCHED_CLUSTER_ID = int(SCHED_CLUSTER, 16)
 BINDING_CLUSTER_ID = 0x1E
