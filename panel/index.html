@@ -2566,12 +2566,37 @@ const $ = (s, r = document) => r.querySelector(s);
 
 const state = { devices: null, switches: [], bySwitch: {}, raw: null,
                 locks: {}, bulbs: {}, updates: {}, byButton: {},
-                remotes: new Set(), view: 'home' };
+                remotes: new Set(), view: 'home', matterOk: true,
+                panelOk: true };
 
-function setStatus(text, cls) {
+/* The one line in the header, and two things want it.
+ *
+ * The standing one is the device count, repainted on every state change - which
+ * is every time anything in the house moves. The other is whatever just
+ * happened because somebody pressed something: "renamed to X", "it is a lock
+ * now", an error. Those used to be written and then sit there; now the count
+ * would land on top of them within the second, so they are given a hold, and
+ * the count waits it out. Anything a user provoked goes through setStatus and
+ * holds; only paintStatus writes underneath.
+ */
+const STATUS_HOLD_MS = 8000;
+let statusHeld = 0;
+let statusTimer = null;
+
+function writeStatus(text, cls) {
   const el = $('#status');
   el.textContent = text;
   el.className = cls || '';
+}
+
+function setStatus(text, cls, holdMs) {
+  writeStatus(text, cls);
+  statusHeld = Date.now() + (holdMs || STATUS_HOLD_MS);
+  clearTimeout(statusTimer);
+  // Put the count back by itself. Waiting for the next render would leave a
+  // message standing for as long as the house happened to be quiet.
+  statusTimer = setTimeout(() => { statusHeld = 0; paintStatus(); },
+                           (holdMs || STATUS_HOLD_MS) + 50);
 }
 
 // The old single-'switch' shape is still accepted, so existing installs keep
@@ -2617,20 +2642,16 @@ async function load() {
     // exists - and it always fell through to "connected". Which meant it said
     // "connected" even with no dongle and no Thread network, which only proved
     // that the browser had reached the server.
+    // Only the one thing this answer knows better than the tiles do: whether
+    // the Matter service itself is up. The count is the tiles' business - see
+    // paintStatus, called from render.
     const h = b.health || {};
-    if (!h.matter) {
-      setStatus('matter-server is not answering', 'err');
-    } else if (!h.total) {
-      setStatus('no devices configured', '');
-    } else if (h.reachable === 0) {
-      setStatus('no device is answering', 'err');
-    } else if (h.reachable < h.total) {
-      setStatus(`connected ${h.reachable}/${h.total}`, 'warn');
-    } else {
-      setStatus('connected', 'ok');
-    }
+    state.matterOk = h.matter !== false;
+    state.panelOk = true;
   } catch (e) {
-    setStatus('chip-tool unreachable', 'err');
+    // The tiles still get drawn. Whatever the panel last knew is more use than
+    // an empty page, and the header says where the gap is.
+    state.panelOk = false;
   }
   render();
 }
@@ -3300,6 +3321,34 @@ function offlineNow(node) {
   return !!(st && st.ok === false);
 }
 
+/* "connected 31/34" - every device that has a tile, not the switches alone.
+ *
+ * It counted switches before, which is how a house with a silent sensor and a
+ * bulb out of range could say it was connected: the two devices that had
+ * stopped answering were not in the sum. The total is now the same list the
+ * page draws, and each one is judged by the SAME offlineNow() the tile icons
+ * use - so the header and the tiles cannot disagree. If it says one is
+ * missing, exactly one tile is wearing the crossed signal.
+ *
+ * A remote counts as present whatever it does, for the reason offlineNow gives:
+ * it sleeps until pressed, so judging it would peg the count one short for
+ * ever. It is the one device here whose absence the panel genuinely cannot see.
+ */
+function paintStatus() {
+  if (Date.now() < statusHeld) { return; }
+  // Two different absences, and they are worth telling apart: the browser could
+  // not reach the Pi, or the Pi could not reach Matter.
+  if (state.panelOk === false) { return writeStatus('panel offline', 'err'); }
+  if (state.matterOk === false) {
+    return writeStatus('matter-server is not answering', 'err');
+  }
+  const all = allDevices();
+  if (!all.length) { return writeStatus('no devices configured', ''); }
+  const here = all.filter(d => !offlineNow(d.node)).length;
+  if (!here) { return writeStatus('no device is answering', 'err'); }
+  writeStatus(`connected ${here}/${all.length}`, here < all.length ? 'warn' : 'ok');
+}
+
 function offlineTitleFor(node) {
   const st = state.bulbs[String(node)] || {};
   return st.readAt ? 'not answering \u2014 last read ' + heardAgo(st.readAt)
@@ -3668,6 +3717,10 @@ function roomMembers(name) {
 function render() {
   const root = $('#content');
   if (!state.devices) { return; }
+
+  // Before the early returns below: the schedule and the inspector are pages of
+  // this panel, not somewhere else, and the header sits above both of them.
+  paintStatus();
 
   // A redraw in the middle of a drag would move the ground under the finger -
   // and, before this was reconciliation, would delete the element being
@@ -6555,7 +6608,7 @@ function editLinks(swNode) {
       secs.textContent = Math.round((Date.now() - began) / 1000) + 's';
     }, 250);
     setStatus('changing what this switch is \u2014 it sleeps between presses, '
-              + 'so it can take up to 15 seconds to answer', 'warn');
+              + 'so it can take up to 15 seconds to answer', 'warn', 30000);
     let j;
     try {
       j = await (await api('/api/role', {
