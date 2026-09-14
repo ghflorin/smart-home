@@ -219,35 +219,52 @@
   }
   /* The status sits under the title, where the subtitle used to be, with the
      filter beside it - the only control that belongs to the count. */
-  .statusrow { display: flex; align-items: center; gap: 9px; }
-
-/* The mark alone, with nothing drawn around it.
-     A box would have made a third bordered control on a line of 11px type that
-     already carries a status dot. Colour is the whole of its state: faint while
-     it is off, and the tiles' own red while it is on - at which point the
-     header is wearing the same mark as the tiles it has left on screen. */
-  .onlyoff {
+/* The whole line is the control, and it is drawn as if it were not one.
+     A box would have made a third bordered thing on a line of 11px type that
+     already carries a status dot, so the state is carried entirely by colour:
+     the mark is faint while the filter is off and the tiles' own red while it
+     is on, at which point the header wears the same mark as the tiles it has
+     left on screen. The text lifts on hover, which is what says the words are
+     part of the target and not a label beside it. */
+  .statusrow {
     appearance: none;
     background: none;
     border: 0;
-    border-radius: 3px;
+    border-radius: 4px;
     padding: 0;
-    color: var(--ink-faint);
+    margin: 0;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    cursor: pointer;
+  }
+  .statusrow:disabled { cursor: default; }
+  .statusrow:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
+
+  .offmark {
     width: 14px;
     height: 14px;
     display: grid;
     place-items: center;
-    cursor: pointer;
+    color: var(--ink-faint);
     transition: color .15s ease;
   }
-  .onlyoff svg { width: 14px; height: 14px; display: block; }
-  .onlyoff:hover { color: var(--ink-dim); }
-  .onlyoff:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
-  .onlyoff[aria-pressed="true"] { color: var(--bad); }
-  @media (prefers-reduced-motion: reduce) { .onlyoff { transition: none; } }
+  .offmark svg { width: 14px; height: 14px; display: block; }
+  .statusrow:hover:not(:disabled) .offmark { color: var(--ink-dim); }
+  .statusrow:hover:not(:disabled) #status { color: var(--ink); }
+  .statusrow[aria-pressed="true"] .offmark { color: var(--bad); }
+  /* Nothing to filter to: no mark, and nothing that looks like an action. */
+  .statusrow:disabled .offmark { display: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .offmark, #status { transition: none; }
+  }
 
   #status {
     font-size: 11px;
+    transition: color .15s ease;
     letter-spacing: .14em;
     text-transform: uppercase;
     color: var(--ink-dim);
@@ -2525,13 +2542,15 @@
         </svg>
         <span>Smarthome<span class="dot">.</span></span>
       </button></h1>
-      <div class="statusrow">
+      <!-- The count and the mark are one control: the whole line is the
+           action, because a 14px target beside a line of text is a target you
+           aim at rather than press. Inert, and with no mark at all, while
+           there is nothing missing - see paintOnlyOffline. -->
+      <button type="button" class="statusrow" id="only-offline"
+              aria-pressed="false" disabled>
         <span id="status">connecting</span>
-        <!-- Drawn only while something is missing - see paintOnlyOffline. -->
-        <button type="button" class="onlyoff" id="only-offline" hidden
-                aria-pressed="false"
-                title="show only what is not answering"></button>
-      </div>
+        <span class="offmark" aria-hidden="true"></span>
+      </button>
     </div>
     <!-- The two things you do TO the house, as opposed to the things you do
          to one lamp. They were down in the toolbar as three separate "+"
@@ -3407,10 +3426,10 @@ function paintOnlyOffline() {
   if (!btn) { return; }
   const any = allDevices().some(d => offlineNow(d.node));
   if (!any) { state.onlyOffline = false; }
-  btn.hidden = !any;
+  btn.disabled = !any;
   btn.setAttribute('aria-pressed', state.onlyOffline ? 'true' : 'false');
-  setAttr(btn, 'title', state.onlyOffline ? 'show every device'
-                                          : 'show only what is not answering');
+  setAttr(btn, 'title', !any ? '' : (state.onlyOffline
+    ? 'show every device' : 'show only what is not answering'));
 }
 
 function offlineTitleFor(node) {
@@ -7403,7 +7422,7 @@ $('#go-add').onclick = addAnything;
 // Static markup, so the glyph is put in from here where ICONS exists.
 $('#go-sched').innerHTML = ICONS.schedule + '<span>schedule</span>';
 $('#go-sched').onclick = () => editSchedule();
-$('#only-offline').innerHTML = ICONS.offlineSmall;
+$('.offmark').innerHTML = ICONS.offlineSmall;
 $('#only-offline').onclick = () => {
   state.onlyOffline = !state.onlyOffline;
   render();
