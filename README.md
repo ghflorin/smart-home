@@ -16,9 +16,9 @@ for the devices that run on a cell, one when firmware is waiting. A red crossed
 signal takes that corner when a device has stopped answering — the last reading
 stays on the tile, so you can see what its battery was on the way out.
 
-The header counts what is answering out of what exists, and a funnel appears
-beside it while anything is missing: press it and the page is only the devices
-that have gone quiet.
+The header counts what is answering out of what exists, and while anything is
+missing the same crossed signal appears beside the count: press it and the page
+is only the devices wearing it.
 
 **Brightness and colour follow the time of day.** The curve is yours to edit:
 drag a point, then save it for the whole house or for one lamp.
