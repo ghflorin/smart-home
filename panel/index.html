@@ -217,7 +217,37 @@
   @media (prefers-reduced-motion: reduce) {
     .logo .lglit, .logo .lgedge { transition: none; }
   }
-  /* The status sits under the title, where the subtitle used to be. */
+  /* The status sits under the title, where the subtitle used to be, with the
+     filter beside it - the only control that belongs to the count. */
+  .statusrow { display: flex; align-items: center; gap: 9px; }
+
+  /* Thin, small and quiet, because it stands next to a line of 11px type and
+     must not outweigh it. It takes the colour of what it filters to when it is
+     on, which is the same red the tiles wear. */
+  .onlyoff {
+    appearance: none;
+    background: none;
+    border: 1px solid var(--line-hi);
+    border-radius: 5px;
+    color: var(--ink-faint);
+    width: 21px;
+    height: 17px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: color .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .onlyoff svg { width: 11px; height: 11px; display: block; }
+  .onlyoff:hover { color: var(--ink-dim); border-color: var(--ink-faint); }
+  .onlyoff:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+  .onlyoff[aria-pressed="true"] {
+    color: var(--bad);
+    border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+    background: color-mix(in srgb, var(--bad) 10%, transparent);
+  }
+  @media (prefers-reduced-motion: reduce) { .onlyoff { transition: none; } }
+
   #status {
     font-size: 11px;
     letter-spacing: .14em;
@@ -2497,7 +2527,13 @@
         </svg>
         <span>Smarthome<span class="dot">.</span></span>
       </button></h1>
-      <span id="status">connecting</span>
+      <div class="statusrow">
+        <span id="status">connecting</span>
+        <!-- Drawn only while something is missing - see paintOnlyOffline. -->
+        <button type="button" class="onlyoff" id="only-offline" hidden
+                aria-pressed="false"
+                title="show only what is not answering"></button>
+      </div>
     </div>
     <!-- The two things you do TO the house, as opposed to the things you do
          to one lamp. They were down in the toolbar as three separate "+"
@@ -2567,7 +2603,7 @@ const $ = (s, r = document) => r.querySelector(s);
 const state = { devices: null, switches: [], bySwitch: {}, raw: null,
                 locks: {}, bulbs: {}, updates: {}, byButton: {},
                 remotes: new Set(), view: 'home', matterOk: true,
-                panelOk: true };
+                panelOk: true, onlyOffline: false };
 
 /* The one line in the header, and two things want it.
  *
@@ -2801,6 +2837,12 @@ const ICONS = {
     <circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/>
     <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
     <circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>`,
+
+  // A funnel. The pressed state is what says what it filters TO - it turns the
+  // same red the crossed signal wears on the tiles.
+  funnel: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M4.6 5.4h14.8l-5.8 6.9v5.4l-3.2 1.9v-7.3Z"/></svg>`,
 
   // Signal arcs with a line through them. Same weight as cloudDown, and for
   // the same reason: it is worn at badge size in the corner of a tile.
@@ -3349,6 +3391,25 @@ function paintStatus() {
   writeStatus(`connected ${here}/${all.length}`, here < all.length ? 'warn' : 'ok');
 }
 
+/* The filter exists only while there is something to filter to.
+ *
+ * A control that can only ever say "nothing" is one worth not drawing, and the
+ * header is two lines of 11px type with no room for a button that does not
+ * apply. If the last missing device comes back while the filter is on, the
+ * filter goes off with it - otherwise the page would be empty and the reason
+ * would be a pressed button nobody was looking at.
+ */
+function paintOnlyOffline() {
+  const btn = $('#only-offline');
+  if (!btn) { return; }
+  const any = allDevices().some(d => offlineNow(d.node));
+  if (!any) { state.onlyOffline = false; }
+  btn.hidden = !any;
+  btn.setAttribute('aria-pressed', state.onlyOffline ? 'true' : 'false');
+  setAttr(btn, 'title', state.onlyOffline ? 'show every device'
+                                          : 'show only what is not answering');
+}
+
 function offlineTitleFor(node) {
   const st = state.bulbs[String(node)] || {};
   return st.readAt ? 'not answering \u2014 last read ' + heardAgo(st.readAt)
@@ -3721,6 +3782,9 @@ function render() {
   // Before the early returns below: the schedule and the inspector are pages of
   // this panel, not somewhere else, and the header sits above both of them.
   paintStatus();
+  // Ahead of the sections, because it can turn the filter off and they are
+  // built from it.
+  paintOnlyOffline();
 
   // A redraw in the middle of a drag would move the ground under the finger -
   // and, before this was reconciliation, would delete the element being
@@ -3764,7 +3828,12 @@ function render() {
 
   const sections = names.map(name => {
     const sec = sectionFor(name);
-    const members = roomMembers(name).map(m => m.opts(m.d));
+    let mine = roomMembers(name);
+    if (state.onlyOffline) { mine = mine.filter(m => offlineNow(m.d.node)); }
+    // A room with nothing missing has nothing to say while the filter is on,
+    // and a page of empty rooms hides the two tiles you asked to see.
+    if (state.onlyOffline && !mine.length) { return null; }
+    const members = mine.map(m => m.opts(m.d));
     setText(sec._parts.count, members.length);
     if (sec._parts.grid.dataset.size !== tileSize) {
       sec._parts.grid.dataset.size = tileSize;
@@ -3782,7 +3851,7 @@ function render() {
     }
     place(sec._parts.grid, want);
     return sec;
-  });
+  }).filter(Boolean);
 
   // --- the raw response, for when parsing does not catch the format ---
   if (state.raw && !DOM.raw) {
@@ -7331,6 +7400,11 @@ $('#go-add').onclick = addAnything;
 // Static markup, so the glyph is put in from here where ICONS exists.
 $('#go-sched').innerHTML = ICONS.schedule + '<span>schedule</span>';
 $('#go-sched').onclick = () => editSchedule();
+$('#only-offline').innerHTML = ICONS.funnel;
+$('#only-offline').onclick = () => {
+  state.onlyOffline = !state.onlyOffline;
+  render();
+};
 
 $('#theme button').onclick = () => {
   const i = THEME_CYCLE.findIndex(t => t.pref === window.themePref());
