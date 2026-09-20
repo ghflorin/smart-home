@@ -1,23 +1,86 @@
-# deploy/ — everything on the Raspberry Pi
+# deploy/ — everything on the hub
 
-The goal: once installed, the Pi does everything by itself. You can take your
+The goal: once installed, the hub does everything by itself. You can take your
 laptop out of the house and the system keeps running.
 
-## What runs on the Pi and what does not
+**The hub is any 64-bit Debian machine with a USB port.** It was a Raspberry Pi
+3 B+ for the first year and is a small x86 box now; the pages below still
+measure things on the Pi where that is where they were measured. What it actually needs is 1 GB of RAM, a free
+USB port for the Thread radio, and a wired network.
+
+## What runs on the hub and what does not
 
 | | Where | Why |
 |---|---|---|
-| Border router (otbr-agent + dongle) | **Pi** | has to be up permanently; it is the bridge to Thread |
-| matter-server | **Pi** | the Matter client: commands, reads, subscriptions, commissioning |
-| chip-tool | **Pi**, but **not running** | not needed any more; updates go through matter-server. Leave it disabled — it burns a full CPU core while idle |
-| The panel | **Pi** | you reach it from a browser, on any device in the house |
-| The schedule | **Pi** | the panel service keeps local time and writes `OnLevel` + color temperature into the bulbs on every slot change |
-| Firmware updates | **Pi** | matter-server serves them from `/opt/smarthome/updates`; the panel starts each one |
+| Border router (otbr-agent + dongle) | **hub** | has to be up permanently; it is the bridge to Thread |
+| matter-server | **hub** | the Matter client: commands, reads, subscriptions, commissioning |
+| The panel | **hub** | you reach it from a browser, on any device in the house |
+| The schedule | **hub** | the panel service keeps local time and writes `OnLevel` + color temperature into the bulbs on every slot change |
+| Firmware updates | **hub** | matter-server serves them from `/opt/smarthome/updates`; the panel starts each one |
 | **Firmware builds** | Mac (recommended) | see below |
 
-The switch drives the bulb directly, through the binding — **it works with the Pi
-powered down**. The Pi has to be up for administration, for the schedule, for
-OTA, and for Apple Home to reach the bulbs.
+The switch drives the bulb directly, through the binding — **it works with the
+hub powered down**. The hub has to be up for administration, for the schedule,
+for OTA, and for Apple Home to reach the bulbs.
+
+## Moving the house to another machine
+
+Nothing here is tied to the machine it started on, and none of it needs the
+devices to be commissioned again — **as long as three things travel together**:
+the Matter fabric, the Thread dataset, and the radio.
+
+```bash
+# On the new machine: build the border router, then install the units. The
+# units carry no opinion about the account; install-services.sh substitutes it.
+sudo apt-get install -y git gcc g++ pkg-config libssl-dev libdbus-1-dev \
+     libglib2.0-dev libavahi-client-dev ninja-build cmake python3-venv python3-dev
+sudo useradd --system --home-dir /opt/smarthome --shell /usr/sbin/nologin smarthome
+# ... rsync the repo to /opt/smarthome, create .venv and .venv-matter ...
+sudo INFRA_IF=<interface> ./deploy/setup-otbr.sh
+sudo INFRA_IF=<interface> SMARTHOME_USER=smarthome ./deploy/install-services.sh
+```
+
+Then, in this order:
+
+1. **Stop and disable** the house on the old machine — panel, matter-server,
+   otbr-agent. Disable, not just stop: two controllers holding the same fabric
+   and both able to reach the devices is the one way to make a mess of this,
+   and the old machine rebooting is all it would take.
+2. **Copy the state.** `ota/state/matter-server/` is the fabric and the only
+   irreplaceable thing in this repository — 35 nodes' worth of operational
+   credentials. With it, the new machine is the same controller and the devices
+   never know. Take `ota/state/panel-state.json`, `ota/state/schedule.json`,
+   `ota/state/thread-dataset.hex` and `panel/devices.json` at the same time.
+3. **Move the radio.** Unplug the dongle and plug it into the new machine.
+4. **Same Thread network**, from the dataset you just copied:
+
+   ```bash
+   sudo systemctl start otbr-agent     # NOT `enable --now`: see below
+   sudo ot-ctl dataset set active "$(cat /opt/smarthome/ota/state/thread-dataset.hex)"
+   sudo ot-ctl ifconfig up && sudo ot-ctl thread start
+   sudo ot-ctl state                   # `child` within seconds, `router` shortly after
+   ```
+
+5. **Start matter-server**, and read its log: `Loaded 35 nodes from stored
+   configuration` is the whole migration in one line. Then the panel.
+6. **Give it five minutes.** matter-server re-establishes a CASE session and a
+   subscription per node, over a mesh that has just lost and regained a router.
+   The panel counted 0 of 34 for three minutes and 31 of 34 at six.
+
+Three things that cost time when this was done for real:
+
+- **`systemctl enable --now otbr-agent` enables it without starting it.** It is
+  an LSB init script, and the generated unit does not honour `--now`. It looks
+  exactly like a failed start, with an empty journal to match.
+- **matter-server will not exit if you signal it during startup.** The Python
+  side stops, a native CHIP thread does not, and the process sits there. Give it
+  its time or `kill -9`.
+- **The panel unit `Wants=` matter-server**, so starting the panel starts the
+  Matter client too. Do that before the fabric is in place and matter-server
+  creates an empty one, which then has to be cleared out.
+
+If the old machine published the panel's name, it has to stop before the new one
+can claim it — see `smarthome-mdns-alias.service`.
 
 ## Why firmware builds stay on the Mac
 
@@ -141,7 +204,10 @@ that just hangs, which the browser reports as the server not responding. With no
 port the upgrade goes to 443, is refused at once, and the browser falls back to
 http on its own. Add it to the home screen and it opens like an app. If the
 phone is an Android that does not resolve `.local`, the router's own DNS knows
-the Pi as `smarthome.localdomain`.
+the hub by its hostname, as `<hostname>.localdomain`.
+
+`smarthome.local` is published by `smarthome-mdns-alias.service` when the hub's
+own hostname is something else.
 
 ### Attestation certificates
 

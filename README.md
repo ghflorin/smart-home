@@ -3,7 +3,7 @@
 Firmware for the Holyiot nRF54L15 module (BLE beacon + 3-axis accelerometer),
 reflashed as a **Matter switch accessory** that drives IKEA Matter bulbs
 **directly over Thread**, with no hub in the command path — plus a small web
-panel on a Raspberry Pi to administer it all.
+panel on a small Linux box to administer it all.
 
 ![The panel: a section per room, a tile per device](docs/images/home.png)
 
@@ -37,8 +37,8 @@ writes the binding table and the ACLs that go with it.
 
 **A bought remote gets the same editor**, one list per button. It cannot be
 wired to a bulb the way our own switch can — a remote like IKEA's BILRESA
-reports that it was pressed and nothing more — so the Pi is what acts on it,
-and it goes quiet whenever the Pi does.
+reports that it was pressed and nothing more — so the hub is what acts on it,
+and it goes quiet whenever the hub does.
 
 ![The same editor for a two-button remote, one list per button](docs/images/remote.png)
 
@@ -57,9 +57,9 @@ and mDNS, and it does not fit in 1.5 MB. It uses Matter's standard **binding**:
 3. The bulb gets an **ACL** entry for the module's node ID
 4. The module opens a CASE session straight to the bulb and sends commands
 
-A press reaches the bulb with the Raspberry Pi switched off. The **schedule**
-does need the Pi, which writes into each bulb what it should come on to for the
-current part of the day; with the Pi down, a press still turns the light on, at
+A press reaches the bulb with the hub switched off. The **schedule**
+does need the hub, which writes into each bulb what it should come on to for the
+current part of the day; with the hub down, a press still turns the light on, at
 the last value the bulb was given rather than the one for the time of day.
 
 **Apple Home, Google Home and DIRIGERA do not expose binding-table or ACL
@@ -85,7 +85,7 @@ nothing here involves Home Assistant — it is a daemon with a WebSocket API.
 Every hop is a **push**: a device reports an attribute the moment it changes,
 matter-server holds subscriptions to all of them, and the browser sits on a long
 poll that is answered the instant something moves. So a wall-switch press — which
-the Pi is not part of — shows up on screen in about 0.2 s. Reads are free, served
+the hub is not part of — shows up on screen in about 0.2 s. Reads are free, served
 from matter-server's cache rather than by waking a sleeping device.
 
 Idle, on a Pi 3 B+: matter-server 0.2% CPU / 153 MB, the panel 0.4% / 34 MB.
@@ -98,21 +98,21 @@ starts each one and watches it land — see [`ota/`](ota/).
 | Requirement | Where | How |
 |---|---|---|
 | on/off straight to the bulb | `src/light_ctrl.cpp` | `OnOff::Toggle`, unicast through the binding table |
-| brightness by time of day | `panel/server.py` | the Pi writes `OnLevel` and colour temperature into the bulbs on every slot change |
+| brightness by time of day | `panel/server.py` | the hub writes `OnLevel` and colour temperature into the bulbs on every slot change |
 | state after a power cut | `src/automation.cpp` | writes `StartUpOnOff` + `StartUpCurrentLevel` into the bulb |
 | full brightness on demand | `src/automation.cpp` | long press = 254 + 4000 K, once |
-| editable schedule | [`panel/`](panel/) | graphical editor, stored on the Pi |
-| the correct time | Raspberry Pi | the switch has no clock; the Pi knows local time, time zone and DST |
+| editable schedule | [`panel/`](panel/) | graphical editor, stored on the hub |
+| the correct time | the hub | the switch has no clock; the hub knows local time, time zone and DST |
 | firmware updates without wires | [`ota/`](ota/) | Matter OTA, served by matter-server, started from the panel |
 | which bulb is which, what a switch drives | [`panel/`](panel/) | Identify + binding table |
 | locking the switches | `src/lock_cluster.cpp` | our own cluster on dynamic endpoint 2 |
 | the status LED | `src/status_led.cpp` | blinks only while waiting to be commissioned; dark otherwise |
-| everything on the Pi, no laptop | [`deploy/`](deploy/) | systemd units |
+| everything on the hub, no laptop | [`deploy/`](deploy/) | systemd units |
 | which devices are known to work | [`docs/devices.md`](docs/devices.md) | every device commissioned here, with what worked |
 
 ### Who decides brightness
 
-**The Raspberry Pi.** On every slot change — seven times a day — it writes two
+**The hub.** On every slot change — seven times a day — it writes two
 persistent attributes into each bulb:
 
 | attribute | what it does |
@@ -215,15 +215,15 @@ recipe are in [`docs/notes.md`](docs/notes.md).
 ## Installing it
 
 Two halves, and they go in either order: the switch firmware, built on your own
-machine and flashed over SWD, and the Raspberry Pi that runs the border router,
-the Matter controller and the panel.
+machine and flashed over SWD, and the hub that runs the border router, the
+Matter controller and the panel.
 
 ### What you need
 
 | | |
 |---|---|
 | the switch | a Holyiot 25008 module (nRF54L15) and something that speaks SWD. A Raspberry Pi Pico or a XIAO RP2040 with `debugprobe` does the job; the module has no USB. |
-| the hub | a Raspberry Pi and an nRF52840 dongle for the Thread radio. Give it a supply that can hold 5 V under load — a sagging one browns out the radio, and it looks like everything else. |
+| the hub | any 64-bit Debian machine with a free USB port, and an nRF52840 dongle for the Thread radio. A Raspberry Pi does it; so does a corner of a machine that already has a job. On a Pi, give it a supply that can hold 5 V under load — a sagging one browns out the radio, and it looks like everything else. |
 | the lights | IKEA Matter bulbs. |
 
 ### 1. The switch
@@ -238,7 +238,7 @@ Pin map, LED behaviour, battery figures and the flashing recipe — including
 which pad is which on each programmer — are in
 [`docs/notes.md`](docs/notes.md).
 
-### 2. The Raspberry Pi
+### 2. The hub
 
 Border router, matter-server, the panel and the systemd units that keep them up:
 [`deploy/README.md`](deploy/README.md) walks through it end to end.
@@ -316,7 +316,7 @@ fabric; they are worth changing if you are handing the firmware to anyone else.
 
 - **Hardware testing is partial.** Verified on the board: the LED channels and
   colours, the accelerometer power-down, the switch booting into a fabric and
-  signalling with the LED, lock/unlock through the custom cluster, and the Pi
+  signalling with the LED, lock/unlock through the custom cluster, and the hub
   writing `OnLevel` + colour temperature with `Toggle` then lighting the bulb at
   exactly those values. Not verified: a physical press reaching a bulb through the
   binding, the periodic startup-state writes, the accelerometer gestures.
@@ -335,7 +335,7 @@ fabric; they are worth changing if you are handing the firmware to anyone else.
 | | |
 |---|---|
 | [`panel/README.md`](panel/README.md) | the panel: architecture, the schedule, the interface |
-| [`deploy/README.md`](deploy/README.md) | putting it on a Raspberry Pi |
+| [`deploy/README.md`](deploy/README.md) | putting it on the hub, and moving it to another one |
 | [`docs/devices.md`](docs/devices.md) | devices this has actually been used with |
 | [`docs/notes.md`](docs/notes.md) | battery, the LED, board definitions, flashing, toolchain |
 | [`ota/README.md`](ota/README.md) | firmware updates over the air |
