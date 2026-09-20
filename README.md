@@ -23,6 +23,16 @@ count and the mark together — and the page is only the devices wearing it.
 **Brightness and colour follow the time of day.** The curve is yours to edit:
 drag a point, then save it for the whole house or for one lamp.
 
+**A camera can make a lamp answer.** `POST /api/motion` takes one lamp to full
+for five seconds and then puts it back exactly as it was — not off, because at
+the hour this matters the lamp is usually already on and dimmed, and a deterrent
+that ends with the room dark has made the house look less lived in than before
+it fired. Bursts extend the five seconds rather than stacking, so ten events in
+ten seconds end where one would have. It answers in about a tenth of a second
+and does the lamp on a thread of its own, because a camera wants its POST
+answered now. The shared secret lives in `ota/state/webhook-token`, and without
+that file the endpoint refuses everything.
+
 ![The schedule editor: brightness and colour temperature across the day](docs/images/schedule.png)
 
 **Every device says what it is part of.** A bulb shows which switches drive it,

@@ -19,6 +19,7 @@ Start with: ./run.sh
 """
 
 import collections
+import hmac
 import json
 import math
 import os
@@ -2250,6 +2251,125 @@ def lock_watch() -> None:
             log(f"lock {node}: follow-up failed: {exc}", "warn")
 
 
+# ------------------------------------------------ a light that says "seen"
+#
+# Something posts here when a camera sees movement, and one lamp goes to full
+# for a few seconds. It is not an alarm and not a floodlight: a person at the
+# edge of the property sees a dim window become bright, which is the cheapest
+# way a house has of saying somebody is in.
+#
+# WHAT IT PUTS BACK, and why not "off". At the hour this matters the lamp is
+# usually already on and dimmed, and a deterrent that ends with the room dark
+# has made the house look LESS lived in than before it fired - the opposite of
+# the point, and it would also put out a light somebody was using. The level
+# and the on/off are read before the first command and restored after the last.
+#
+# A SECOND EVENT EXTENDS, it does not stack. Motion arrives in bursts, and one
+# timer per event would race the restores: the first would put the lamp back
+# while the second still meant to be holding it up. One worker, one deadline,
+# and the state to restore is captured once - so ten events in ten seconds end
+# with the lamp exactly where one event would have left it.
+MOTION_NODE = int(os.environ.get("PANEL_MOTION_NODE", "1002"))
+MOTION_SEC = float(os.environ.get("PANEL_MOTION_SEC", "5"))
+MOTION_LEVEL = 254
+
+# The shared secret, in a file rather than in this repository or in the unit:
+# it ends up pasted into another system's configuration, and it should be
+# rotatable without editing either. No file means no webhook - it fails closed,
+# because the alternative is a lamp anything on the network can flash.
+MOTION_TOKEN_FILE = pathlib.Path(os.environ.get(
+    "PANEL_MOTION_TOKEN_FILE", "/opt/smarthome/ota/state/webhook-token"))
+
+_motion_lock = threading.Lock()
+_motion_until = 0.0
+_motion_busy = False
+_motion_restore = None
+
+
+def motion_token() -> str:
+    try:
+        return MOTION_TOKEN_FILE.read_text().strip()
+    except OSError:
+        return ""
+
+
+def motion_endpoint() -> int:
+    try:
+        for b in load_devices().get("bulbs", []):
+            if b.get("node") == MOTION_NODE:
+                return int(b.get("endpoint", 1))
+    except (OSError, ValueError):
+        pass
+    return 1
+
+
+def motion_seen(source: str = "") -> dict:
+    """Movement seen. Put the light up, and remember what to put back."""
+    global _motion_until, _motion_busy, _motion_restore
+    with _motion_lock:
+        _motion_until = time.time() + MOTION_SEC
+        if _motion_busy:
+            return {"ok": True, "extended": True, "node": MOTION_NODE}
+        st = state_of(MOTION_NODE)
+        # Level 1 under an On is a bulb on its way up rather than a brightness -
+        # the same trap the tiles have. OnLevel is the better answer then.
+        lvl = st.get("level")
+        if not isinstance(lvl, int) or lvl <= 1:
+            lvl = st.get("onlevel") if isinstance(st.get("onlevel"), int) else None
+        _motion_restore = {"on": st.get("on"), "level": lvl}
+        _motion_busy = True
+    log(f"motion{(' from ' + source) if source else ''}: bulb {MOTION_NODE} to full "
+        f"for {MOTION_SEC:g} s", "step")
+    threading.Thread(target=motion_worker, name="motion", daemon=True).start()
+    return {"ok": True, "extended": False, "node": MOTION_NODE}
+
+
+def motion_worker() -> None:
+    """Up, hold until the deadline stops moving, back. Off the request thread:
+    a camera wants its POST answered now, not in five seconds."""
+    global _motion_busy
+    ep = motion_endpoint()
+    back = dict(_motion_restore or {})
+    try:
+        while True:
+            err = m_cmd(MOTION_NODE, ep, 0x0008, "MoveToLevelWithOnOff",
+                        {"level": MOTION_LEVEL, "transitionTime": 0,
+                         "optionsMask": 0, "optionsOverride": 0}, timeout=20.0)
+            if err:
+                log(f"motion: bulb {MOTION_NODE} did not come up: {err}", "err")
+                return
+
+            while True:
+                left = _motion_until - time.time()
+                if left <= 0:
+                    break
+                time.sleep(min(left, 0.25))
+
+            if back.get("on") is True and isinstance(back.get("level"), int):
+                err = m_cmd(MOTION_NODE, ep, 0x0008, "MoveToLevelWithOnOff",
+                            {"level": back["level"], "transitionTime": 0,
+                             "optionsMask": 0, "optionsOverride": 0}, timeout=20.0)
+                where = str(back["level"])
+            else:
+                err = m_cmd(MOTION_NODE, ep, 0x0006, "Off", timeout=20.0)
+                where = "off"
+            if err:
+                log(f"motion: bulb {MOTION_NODE} did not go back: {err}", "err")
+            else:
+                log(f"motion: bulb {MOTION_NODE} back to {where}", "ok")
+
+            # A burst that landed while the restore was in flight. Same target
+            # to restore to, so the lamp cannot be left standing at full.
+            with _motion_lock:
+                if time.time() >= _motion_until:
+                    return
+    except Exception as exc:  # noqa: BLE001 - a camera event must not kill this
+        log(f"motion: {exc}", "err")
+    finally:
+        with _motion_lock:
+            _motion_busy = False
+
+
 SWITCH_CLUSTER = 0x003B
 
 # Measured on a BILRESA, whose two buttons are endpoints 1 and 2. The gesture is
@@ -3543,6 +3663,41 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _motion(self):
+        """The camera's webhook. Answer immediately; the lamp is somebody
+        else's thread."""
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        try:
+            raw = self.rfile.read(length) if length else b""
+        except OSError:
+            raw = b""
+
+        want = motion_token()
+        if not want:
+            log(f"motion: refused - no token in {MOTION_TOKEN_FILE}", "warn")
+            return self._send({"error": "the webhook is not configured"}, status=503)
+
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        got = (self.headers.get("X-Token") or (q.get("token") or [""])[0] or "").strip()
+        # Constant time: this is a secret somebody can guess a character at a
+        # time if the comparison tells them how far they got.
+        if not hmac.compare_digest(got, want):
+            log(f"motion: refused from {self.client_address[0]} - wrong token", "warn")
+            return self._send({"error": "no"}, status=403)
+
+        # Whatever the sender calls itself, for the log line. UniFi Protect
+        # posts JSON with the trigger in it; anything else is fine too.
+        source = self.client_address[0]
+        try:
+            body = json.loads(raw or b"{}")
+            name = (body.get("alarm") or {}).get("name") or body.get("name")
+            if isinstance(name, str) and name.strip():
+                source = f"{name.strip()} ({source})"
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            pass
+
+        return self._send(motion_seen(source))
+
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             self._send((HERE / "index.html").read_bytes(), ctype="text/html; charset=utf-8")
@@ -3706,6 +3861,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send({"error": "not found"}, status=404)
 
     def do_POST(self):
+        # Ahead of the JSON, because this one is called by somebody else's
+        # software and what it posts is not ours to insist on. A body we cannot
+        # parse is still an event.
+        if urllib.parse.urlparse(self.path).path == "/api/motion":
+            return self._motion()
+
         length = int(self.headers.get("Content-Length", 0))
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
