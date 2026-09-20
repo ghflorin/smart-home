@@ -25,6 +25,7 @@ import os
 import pathlib
 import queue
 import re
+import socket
 import subprocess
 import threading
 import time
@@ -161,7 +162,8 @@ def all_devices(devices: dict) -> list:
     """Every device, for the things that treat them alike - a room contains
     whatever is in it, and a drag moves whatever it grabbed."""
     return (switches(devices) + list(devices.get("bulbs", []))
-            + list(devices.get("devices", [])))
+            + list(devices.get("devices", []))
+            + list(devices.get("hooks") or []))
 
 
 # A remote is a switch that cannot be wired to anything.
@@ -2252,144 +2254,205 @@ def lock_watch() -> None:
 
 # ------------------------------------------------ a light that says "seen"
 #
-# Something posts here when a camera sees movement, and one lamp goes to full
-# for a few seconds. It is not an alarm and not a floodlight: a person at the
-# edge of the property sees a dim window become bright, which is the cheapest
-# way a house has of saying somebody is in.
+# A camera posts here when it sees movement, and the lamps this hook drives go
+# to full for a few seconds. It is not an alarm and not a floodlight: a person
+# at the edge of the property sees a dim window become bright, which is the
+# cheapest way a house has of saying somebody is in.
 #
-# WHAT IT PUTS BACK, and why not "off". At the hour this matters the lamp is
-# usually already on and dimmed, and a deterrent that ends with the room dark
-# has made the house look LESS lived in than before it fired - the opposite of
-# the point, and it would also put out a light somebody was using. The level
-# and the on/off are read before the first command and restored after the last.
+# IT IS SHAPED LIKE A REMOTE, and for the same reason. A bought remote has
+# nothing we can write to either, so what it drives is kept here rather than in
+# the device, and the Pi is what acts on the press. A webhook is that with the
+# press arriving over HTTP instead of over Thread. Same storage in
+# devices.json, same bulb picker in the panel, same "the Pi is in the path"
+# bargain - it does nothing while the hub is down.
+#
+# WHAT IT PUTS BACK, and why not "off". At the hour this matters a lamp is
+# often already on and dimmed, and a deterrent that ends with the room dark has
+# made the house look LESS lived in than before it fired, as well as putting
+# out a light somebody was using. Each lamp is read at the moment it fires -
+# not remembered - and put back to what it was.
 #
 # A SECOND EVENT EXTENDS, it does not stack. Motion arrives in bursts, and one
-# timer per event would race the restores: the first would put the lamp back
-# while the second still meant to be holding it up. One worker, one deadline,
-# and the state to restore is captured once - so ten events in ten seconds end
-# with the lamp exactly where one event would have left it.
-MOTION_NODE = int(os.environ.get("PANEL_MOTION_NODE", "1002"))
+# timer per event would race the restores: the first would put the lamps back
+# while the second still meant to be holding them up. One worker per hook, one
+# deadline, and the state to restore captured once.
+#
+# NO CREDENTIAL. Every other route here is open to the house network -
+# /api/light turns any bulb on with no credential at all - so a secret on this
+# one would protect nothing that a shorter path does not already hand over.
 MOTION_SEC = float(os.environ.get("PANEL_MOTION_SEC", "5"))
 MOTION_LEVEL = 254
-
-# NO TOKEN, and that is a decision rather than an omission. Every other route
-# here is open to the network the panel is on - /api/light turns any bulb on
-# with no credential at all - so a secret on this one route would protect
-# nothing: anything that could reach it could already command the lamp
-# directly, and by a shorter path. What it would buy is a string to keep in
-# step across two systems, and a webhook that stops working the day somebody
-# rotates it and forgets. The boundary here is the house network, and it is
-# the same boundary for everything else in this file.
+# Out of the way of anything Matter hands out; these are ours and never reach
+# matter-server.
+HOOK_NODE_BASE = 9001
 
 _motion_lock = threading.Lock()
-_motion_until = 0.0
-_motion_busy = False
+_motion_until = {}
+_motion_busy = set()
 
 
-def motion_endpoint() -> int:
+def hooks(devices: dict) -> list:
+    return list(devices.get("hooks") or [])
+
+
+def lan_address() -> str:
+    """This machine's address on the house network.
+
+    The panel hands this webhook's URL to somebody who will paste it into a
+    CAMERA, and a camera is not a browser: it may not resolve `.local` at all,
+    and it certainly does not share whatever name the person happens to have
+    the panel open under. So the URL carries an address, not a name.
+
+    Asked of the routing table rather than of the hostname - `gethostbyname` on
+    a machine with a name in /etc/hosts answers 127.0.1.1, which would be a URL
+    that works only from the machine itself. No packet is sent; connect() on a
+    UDP socket only picks the route.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        for b in load_devices().get("bulbs", []):
-            if b.get("node") == MOTION_NODE:
-                return int(b.get("endpoint", 1))
-    except (OSError, ValueError):
-        pass
-    return 1
+        sock.connect(("192.0.2.1", 9))     # TEST-NET-1, deliberately unroutable
+        return sock.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        sock.close()
 
 
-def motion_seen(source: str = "") -> dict:
-    """Movement seen. The lamp, and the reading it needs, are the worker's."""
-    global _motion_until, _motion_busy
+def hook_of(devices: dict, node=None) -> dict:
+    """The hook a request is for. No node named means the only one there is,
+    which is the common case and keeps the bare URL working."""
+    hs = hooks(devices)
+    if node is None:
+        return hs[0] if hs else None
+    return next((h for h in hs if int(h.get("node", 0)) == int(node)), None)
+
+
+def next_hook_node(devices: dict) -> int:
+    """A fresh id for a webhook. Ours, never Matter's: these numbers go in a
+    URL and must not collide with a node matter-server might hand out, and they
+    must never be reused - a camera somewhere would still be posting to the old
+    one."""
+    used = {int(h.get("node", 0)) for h in hooks(devices)}
+    n = HOOK_NODE_BASE
+    while n in used:
+        n += 1
+    return n
+
+
+def ensure_hook(devices: dict) -> bool:
+    """One webhook exists from the start, so it has a tile to be configured on.
+    Returns whether anything changed.
+
+    Created rather than demanded: a thing you have to add before you can see
+    what it is is a thing nobody adds.
+    """
+    if hooks(devices):
+        return False
+    devices.setdefault("hooks", []).append({
+        "node": HOOK_NODE_BASE,
+        "name": "Motion",
+        "where": "",
+        "kind": "webhook",
+        "bulbs": [],
+    })
+    return True
+
+
+def motion_seen(hook: dict, source: str = "") -> dict:
+    """Movement. The lamps, and the readings they need, are the worker's."""
+    node = int(hook["node"])
     with _motion_lock:
-        _motion_until = time.time() + MOTION_SEC
-        if _motion_busy:
-            return {"ok": True, "extended": True, "node": MOTION_NODE}
-        _motion_busy = True
-    log(f"motion{(' from ' + source) if source else ''}: bulb {MOTION_NODE} to full "
+        _motion_until[node] = time.time() + MOTION_SEC
+        if node in _motion_busy:
+            return {"ok": True, "extended": True, "hook": node}
+        _motion_busy.add(node)
+    targets = [int(n) for n in (hook.get("bulbs") or [])]
+    log(f"motion{(' from ' + source) if source else ''}: {hook.get('name') or node}"
+        f" -> {len(targets)} bulb{'' if len(targets) == 1 else 's'} to full "
         f"for {MOTION_SEC:g} s", "step")
-    threading.Thread(target=motion_worker, name="motion", daemon=True).start()
-    return {"ok": True, "extended": False, "node": MOTION_NODE}
+    threading.Thread(target=motion_worker, args=(node, targets),
+                     name=f"motion-{node}", daemon=True).start()
+    return {"ok": True, "extended": False, "hook": node, "bulbs": targets}
 
 
-def motion_restore_target() -> dict:
-    """What the lamp is doing RIGHT NOW, asked of the device rather than
+def motion_restore_target(node: int, bulb: dict) -> dict:
+    """What this lamp is doing RIGHT NOW, asked of the device rather than
     remembered.
 
-    The panel's own copy is not good enough here, and the failure is ugly: a
-    restart, a trigger six seconds later, and the lamp is put back to whatever
-    the state file last happened to hold - which was "off", so a deterrent
-    switched off a lamp that was on. The whole point of restoring rather than
-    switching off is that the panel must not make the house darker than it
-    found it, and a stale belief does exactly that.
-
-    refresh_bulb reads matter-server's cache, so this costs milliseconds and no
-    radio traffic. If it still comes back unknown - a bulb that has never
-    answered - off is the honest default at the hour this fires, and the log
-    says it was a guess.
+    The panel's own copy can be hours old for a device that has gone quiet, and
+    this is the one value here that must not be wrong: restoring rather than
+    switching off is the whole point, and a stale belief would make the house
+    darker than it was found. refresh_bulb reads matter-server's cache, so it
+    costs milliseconds and no radio traffic.
     """
     try:
-        bulb = next((b for b in load_devices().get("bulbs", [])
-                     if b.get("node") == MOTION_NODE), None)
-        if bulb is not None:
-            refresh_bulb(bulb)
+        refresh_bulb(bulb)
     except Exception as exc:  # noqa: BLE001 - a stale reading beats no light
-        log(f"motion: could not read bulb {MOTION_NODE} first: {exc}", "warn")
-
-    st = state_of(MOTION_NODE)
+        log(f"motion: could not read bulb {node} first: {exc}", "warn")
+    st = state_of(node)
     # Level 1 under an On is a bulb on its way up rather than a brightness -
     # the same trap the tiles have. OnLevel is the better answer then.
     lvl = st.get("level")
     if not isinstance(lvl, int) or lvl <= 1:
         lvl = st.get("onlevel") if isinstance(st.get("onlevel"), int) else None
-    if st.get("on") is None:
-        log(f"motion: bulb {MOTION_NODE} did not say whether it is on - "
-            f"it will be left off", "warn")
     return {"on": st.get("on"), "level": lvl}
 
 
-def motion_worker() -> None:
+def motion_worker(node: int, targets: list) -> None:
     """Up, hold until the deadline stops moving, back. Off the request thread:
     a camera wants its POST answered now, not in five seconds."""
-    global _motion_busy
-    ep = motion_endpoint()
-    back = motion_restore_target()
     try:
+        if not targets:
+            log(f"motion: hook {node} drives no bulbs yet", "warn")
+            return
+        try:
+            bulbs = {b["node"]: b for b in load_devices().get("bulbs", [])}
+        except (OSError, ValueError):
+            return
+        plan = [(n, bulbs[n]) for n in targets if n in bulbs]
+        back = {n: motion_restore_target(n, b) for n, b in plan}
+
         while True:
-            err = m_cmd(MOTION_NODE, ep, 0x0008, "MoveToLevelWithOnOff",
-                        {"level": MOTION_LEVEL, "transitionTime": 0,
-                         "optionsMask": 0, "optionsOverride": 0}, timeout=20.0)
-            if err:
-                log(f"motion: bulb {MOTION_NODE} did not come up: {err}", "err")
-                return
+            for n, b in plan:
+                ep = int(b.get("endpoint", 1))
+                err = m_cmd(n, ep, 0x0008, "MoveToLevelWithOnOff",
+                            {"level": MOTION_LEVEL, "transitionTime": 0,
+                             "optionsMask": 0, "optionsOverride": 0}, timeout=20.0)
+                if err:
+                    log(f"motion: bulb {n} did not come up: {err}", "err")
 
             while True:
-                left = _motion_until - time.time()
+                left = _motion_until.get(node, 0) - time.time()
                 if left <= 0:
                     break
                 time.sleep(min(left, 0.25))
 
-            if back.get("on") is True and isinstance(back.get("level"), int):
-                err = m_cmd(MOTION_NODE, ep, 0x0008, "MoveToLevelWithOnOff",
-                            {"level": back["level"], "transitionTime": 0,
-                             "optionsMask": 0, "optionsOverride": 0}, timeout=20.0)
-                where = str(back["level"])
-            else:
-                err = m_cmd(MOTION_NODE, ep, 0x0006, "Off", timeout=20.0)
-                where = "off"
-            if err:
-                log(f"motion: bulb {MOTION_NODE} did not go back: {err}", "err")
-            else:
-                log(f"motion: bulb {MOTION_NODE} back to {where}", "ok")
+            for n, b in plan:
+                ep = int(b.get("endpoint", 1))
+                want = back.get(n) or {}
+                if want.get("on") is True and isinstance(want.get("level"), int):
+                    err = m_cmd(n, ep, 0x0008, "MoveToLevelWithOnOff",
+                                {"level": want["level"], "transitionTime": 0,
+                                 "optionsMask": 0, "optionsOverride": 0}, timeout=20.0)
+                    where = str(want["level"])
+                else:
+                    err = m_cmd(n, ep, 0x0006, "Off", timeout=20.0)
+                    where = "off"
+                if err:
+                    log(f"motion: bulb {n} did not go back: {err}", "err")
+                else:
+                    log(f"motion: bulb {n} back to {where}", "ok")
 
-            # A burst that landed while the restore was in flight. Same target
-            # to restore to, so the lamp cannot be left standing at full.
+            # A burst that landed while the restore was in flight. Same targets
+            # to restore to, so a lamp cannot be left standing at full.
             with _motion_lock:
-                if time.time() >= _motion_until:
+                if time.time() >= _motion_until.get(node, 0):
                     return
     except Exception as exc:  # noqa: BLE001 - a camera event must not kill this
         log(f"motion: {exc}", "err")
     finally:
         with _motion_lock:
-            _motion_busy = False
+            _motion_busy.discard(node)
 
 
 SWITCH_CLUSTER = 0x003B
@@ -3694,6 +3757,18 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             raw = b""
 
+        # /api/motion/<node> picks one; the bare URL means the only hook there
+        # is, which is what most houses have and what keeps a URL somebody has
+        # already pasted into a camera working.
+        tail = urllib.parse.urlparse(self.path).path[len("/api/motion"):].strip("/")
+        try:
+            devices = load_devices()
+        except (OSError, ValueError) as exc:
+            return self._send({"error": str(exc)}, status=500)
+        hook = hook_of(devices, int(tail)) if tail.isdigit() else hook_of(devices)
+        if hook is None:
+            return self._send({"error": "no such webhook"}, status=404)
+
         # Whatever the sender calls itself, for the log line. UniFi Protect
         # posts JSON with the trigger in it; anything else is fine too.
         source = self.client_address[0]
@@ -3705,7 +3780,7 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
-        return self._send(motion_seen(source))
+        return self._send(motion_seen(hook, source))
 
     def do_GET(self):
         if self.path in ("/", "/index.html"):
@@ -3714,6 +3789,13 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/devices":
             d = load_devices()
             d.setdefault("devices", [])
+            d.setdefault("hooks", [])
+            # The address a camera can reach, worked out here rather than in the
+            # browser: the page knows the name IT was opened under, which is
+            # the one thing the camera cannot be assumed to resolve.
+            base = f"http://{lan_address()}{'' if PANEL_PORT_PLAIN == 80 else ':' + str(PANEL_PORT)}"
+            for h in d["hooks"]:
+                h["url"] = f"{base}/api/motion/{h.get('node')}"
             d["rooms"] = known_rooms(d)
             # What each measurement is called and in what unit, so the interface
             # does not need a second copy of the table.
@@ -3873,7 +3955,7 @@ class Handler(BaseHTTPRequestHandler):
         # Ahead of the JSON, because this one is called by somebody else's
         # software and what it posts is not ours to insist on. A body we cannot
         # parse is still an event.
-        if urllib.parse.urlparse(self.path).path == "/api/motion":
+        if urllib.parse.urlparse(self.path).path.startswith("/api/motion"):
             return self._motion()
 
         length = int(self.headers.get("Content-Length", 0))
@@ -3950,7 +4032,7 @@ class Handler(BaseHTTPRequestHandler):
                 after a delete that reported success. The same hole meant a
                 sensor could not be dragged between rooms at all.
                 """
-                for group in ("switches", "bulbs", "devices"):
+                for group in ("switches", "bulbs", "devices", "hooks"):
                     for d in devices.get(group, []):
                         if d["node"] in nodes:
                             yield d
@@ -4158,6 +4240,21 @@ class Handler(BaseHTTPRequestHandler):
             sw_node = int(body.get("switch") or 0)
             want = [int(n) for n in body.get("bulbs", [])]
             devices = load_devices()
+
+            # A webhook, which is a remote whose press arrives over HTTP. Same
+            # deal: nothing is written to any device, saving the file IS the
+            # whole operation, and it takes effect on the next event.
+            hook = hook_of(devices, sw_node)
+            if hook is not None:
+                known = {b["node"] for b in devices.get("bulbs", [])}
+                keep = [n for n in want if n in known]
+                hook["bulbs"] = keep
+                save_devices(devices)
+                log(f"webhook {sw_node} now drives {len(keep)} bulb"
+                    f"{'' if len(keep) == 1 else 's'}", "ok")
+                state_wake()
+                return self._send({"switch": sw_node, "bulbs": keep, "hook": True})
+
             sw = next((s for s in switches(devices) if s["node"] == sw_node), None)
             log(f"--- binding switch {sw_node} to {len(want)} bulb"
                 f"{'' if len(want) == 1 else 's'} ---", "step")
@@ -4551,6 +4648,36 @@ class Handler(BaseHTTPRequestHandler):
                                "unbound": True,
                                "switches": len(sws)})
 
+        if self.path == "/api/hook":
+            devices = load_devices()
+
+            # Deleting: the URL stops answering, and whatever was posting to it
+            # gets a 404 rather than silence, which is the difference between
+            # "this is gone" and "this is broken".
+            drop = body.get("delete")
+            if drop is not None:
+                node = int(drop)
+                left = [h for h in hooks(devices) if int(h.get("node", 0)) != node]
+                if len(left) == len(hooks(devices)):
+                    return self._send({"error": f"no such webhook: {node}"}, status=404)
+                devices["hooks"] = left
+                save_devices(devices)
+                log(f"webhook {node} removed", "ok")
+                state_wake()
+                return self._send({"ok": True, "deleted": node})
+
+            name = (body.get("name") or "").strip() or "Motion"
+            where = (body.get("where") or "").strip()
+            node = next_hook_node(devices)
+            devices.setdefault("hooks", []).append({
+                "node": node, "name": name, "where": where,
+                "kind": "webhook", "bulbs": [],
+            })
+            save_devices(devices)
+            log(f"webhook {node} ({name}) added", "ok")
+            state_wake()
+            return self._send({"ok": True, "node": node, "name": name})
+
         if self.path == "/api/rename":
             """Change a device's name. Ours alone - Matter never sees it.
 
@@ -4572,7 +4699,7 @@ class Handler(BaseHTTPRequestHandler):
             # All three lists plus the single-switch layout - the same lesson the
             # room operations had to learn: a sensor lives in neither of the two
             # you first think of.
-            for group in ("switches", "bulbs", "devices"):
+            for group in ("switches", "bulbs", "devices", "hooks"):
                 for d in devices.get(group, []):
                     if d.get("node") == node:
                         d["name"] = name
@@ -5015,9 +5142,14 @@ if __name__ == "__main__":
     threading.Thread(target=lock_watch, name="lock", daemon=True).start()
     try:
         devs = load_devices()
-        if migrate_remotes(devs):
-            save_devices(devs)
+        changed = migrate_remotes(devs)
+        if changed:
             log("moved a remote out of the sensor list", "ok")
+        if ensure_hook(devs):
+            changed = True
+            log("added the motion webhook", "ok")
+        if changed:
+            save_devices(devs)
     except (OSError, ValueError) as exc:
         log(f"could not check for remotes: {exc}", "warn")
     servers = [ThreadingHTTPServer(("0.0.0.0", PANEL_PORT), Handler)]
