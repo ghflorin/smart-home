@@ -26,7 +26,8 @@ drag a point, then save it for the whole house or for one lamp.
 **A camera can make a lamp answer.** A webhook is a tile like any other: it has
 a name, a room, an address to copy into whatever will be posting to it, and a
 list of lamps. POST to it — a camera that has seen movement, most likely — and
-those lamps go to full for five seconds, then back to exactly what they were.
+those lamps do what it says for as long as it says, then go back to exactly
+what they were.
 
 Not off, because at the hour this matters a lamp is usually already on and
 dimmed, and a deterrent that ends with the room dark has made the house look
@@ -35,9 +36,20 @@ the moment it fires rather than remembered: the panel's copy can be hours old
 for a device that has gone quiet, and this is the one value that must not be
 wrong.
 
+Each one says what it does and for how long: **turn on** or **turn off**, then
+5s, 15s, 1m, 5m, 15m or **always**. A span puts every lamp back exactly as it
+was afterwards; always leaves them where it put them — and when that is on, it
+takes a hold, the same one a long press on a wall switch takes, or the schedule
+would pull the light back to the curve inside a minute. Turning them off needs
+no hold, because the schedule never turns a lamp on.
+
+Off is not there for symmetry. A camera that sees you leave, or a hallway at
+night where the useful answer to somebody walking through is the opposite of a
+floodlight.
+
 Add as many as you have cameras; each gets an id of its own, so one cannot
-reach another's lamps. Bursts extend the five seconds rather than stacking, so
-ten events in ten seconds end where one would have. It answers in about a tenth
+reach another's lamps. Bursts extend the span rather than stacking, so ten
+events in ten seconds end where one would have. It answers in about a tenth
 of a second and does the lamps on a thread of its own, because a camera wants
 its POST answered now. No credential: every other route here is open to the
 house network, so a secret on this one would protect nothing that `/api/light`

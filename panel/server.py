@@ -2280,6 +2280,8 @@ def lock_watch() -> None:
 # NO CREDENTIAL. Every other route here is open to the house network -
 # /api/light turns any bulb on with no credential at all - so a secret on this
 # one would protect nothing that a shorter path does not already hand over.
+# The default for a hook that has never been told otherwise. Each hook
+# carries its own, in devices.json.
 MOTION_SEC = float(os.environ.get("PANEL_MOTION_SEC", "5"))
 MOTION_LEVEL = 254
 # Out of the way of anything Matter hands out; these are ours and never reach
@@ -2354,25 +2356,48 @@ def ensure_hook(devices: dict) -> bool:
         "where": "",
         "kind": "webhook",
         "bulbs": [],
+        "seconds": MOTION_SEC,
+        "action": "on",
     })
     return True
+
+
+def hook_action(hook: dict) -> str:
+    """What movement does to the lamps. Turning them OFF is a real answer, not
+    a symmetry: a camera that sees you leave, or a hallway at night where the
+    useful response to somebody walking through is the opposite of a floodlight."""
+    return "off" if str(hook.get("action", "on")).lower() == "off" else "on"
+
+
+def hook_seconds(hook: dict) -> float:
+    """How long it lasts. Zero means it does not come back - see motion_worker."""
+    try:
+        v = float(hook.get("seconds", MOTION_SEC))
+    except (TypeError, ValueError):
+        return MOTION_SEC
+    return max(0.0, v)
 
 
 def motion_seen(hook: dict, source: str = "") -> dict:
     """Movement. The lamps, and the readings they need, are the worker's."""
     node = int(hook["node"])
+    secs = hook_seconds(hook)
+    action = hook_action(hook)
+    targets = [int(n) for n in (hook.get("bulbs") or [])]
     with _motion_lock:
-        _motion_until[node] = time.time() + MOTION_SEC
+        _motion_until[node] = time.time() + secs
         if node in _motion_busy:
             return {"ok": True, "extended": True, "hook": node}
         _motion_busy.add(node)
-    targets = [int(n) for n in (hook.get("bulbs") or [])]
+    what = "to full" if action == "on" else "off"
+    how = f"for {secs:g} s" if secs else "and left there"
     log(f"motion{(' from ' + source) if source else ''}: {hook.get('name') or node}"
-        f" -> {len(targets)} bulb{'' if len(targets) == 1 else 's'} to full "
-        f"for {MOTION_SEC:g} s", "step")
-    threading.Thread(target=motion_worker, args=(node, targets),
+        f" -> {len(targets)} bulb{'' if len(targets) == 1 else 's'} {what} {how}",
+        "step")
+    threading.Thread(target=motion_worker, args=(node, targets, secs, action),
                      name=f"motion-{node}", daemon=True).start()
-    return {"ok": True, "extended": False, "hook": node, "bulbs": targets}
+    return {"ok": True, "extended": False, "hook": node, "bulbs": targets,
+            "seconds": secs, "action": action}
 
 
 def motion_restore_target(node: int, bulb: dict) -> dict:
@@ -2398,9 +2423,17 @@ def motion_restore_target(node: int, bulb: dict) -> dict:
     return {"on": st.get("on"), "level": lvl}
 
 
-def motion_worker(node: int, targets: list) -> None:
+def motion_worker(node: int, targets: list, secs: float, action: str = "on") -> None:
     """Up, hold until the deadline stops moving, back. Off the request thread:
-    a camera wants its POST answered now, not in five seconds."""
+    a camera wants its POST answered now, not in five seconds.
+
+    `secs` of zero is "always": whatever it did stands, and there is nothing to
+    restore. Turning lamps ON that way takes a HOLD as it does - the same one a
+    long press on a wall switch takes - or the schedule would quietly pull the
+    light back to the curve inside a minute. That hold ends the way every hold
+    here ends: when somebody switches the light off. Turning them OFF needs no
+    hold, because the schedule never turns a lamp on.
+    """
     try:
         if not targets:
             log(f"motion: hook {node} drives no bulbs yet", "warn")
@@ -2410,16 +2443,40 @@ def motion_worker(node: int, targets: list) -> None:
         except (OSError, ValueError):
             return
         plan = [(n, bulbs[n]) for n in targets if n in bulbs]
+
+        def drive(n, b):
+            """Whatever this hook does, done to one lamp."""
+            ep = int(b.get("endpoint", 1))
+            if action == "off":
+                return m_cmd(n, ep, 0x0006, "Off", timeout=20.0)
+            return m_cmd(n, ep, 0x0008, "MoveToLevelWithOnOff",
+                         {"level": MOTION_LEVEL, "transitionTime": 0,
+                          "optionsMask": 0, "optionsOverride": 0}, timeout=20.0)
+
+        if not secs:
+            for n, b in plan:
+                err = drive(n, b)
+                if err:
+                    log(f"motion: bulb {n} did not go {action}: {err}", "err")
+                    continue
+                if action == "on":
+                    # The schedule compares against its memo, so the memo has
+                    # to agree or the next tick sees a value it did not write
+                    # and steps on this one.
+                    with _state_lock:
+                        _state.setdefault("bulbs", {}).setdefault(
+                            str(n), {})["level"] = MOTION_LEVEL
+                    set_override(n, True, ("level",))
+                log(f"motion: bulb {n} {action}, and staying that way", "ok")
+            return
+
         back = {n: motion_restore_target(n, b) for n, b in plan}
 
         while True:
             for n, b in plan:
-                ep = int(b.get("endpoint", 1))
-                err = m_cmd(n, ep, 0x0008, "MoveToLevelWithOnOff",
-                            {"level": MOTION_LEVEL, "transitionTime": 0,
-                             "optionsMask": 0, "optionsOverride": 0}, timeout=20.0)
+                err = drive(n, b)
                 if err:
-                    log(f"motion: bulb {n} did not come up: {err}", "err")
+                    log(f"motion: bulb {n} did not go {action}: {err}", "err")
 
             while True:
                 left = _motion_until.get(node, 0) - time.time()
@@ -4249,11 +4306,24 @@ class Handler(BaseHTTPRequestHandler):
                 known = {b["node"] for b in devices.get("bulbs", [])}
                 keep = [n for n in want if n in known]
                 hook["bulbs"] = keep
+                if "seconds" in body:
+                    try:
+                        hook["seconds"] = max(0.0, float(body["seconds"]))
+                    except (TypeError, ValueError):
+                        return self._send({"error": "seconds?"}, status=400)
+                if "action" in body:
+                    if str(body["action"]).lower() not in ("on", "off"):
+                        return self._send({"error": "on or off?"}, status=400)
+                    hook["action"] = str(body["action"]).lower()
                 save_devices(devices)
-                log(f"webhook {sw_node} now drives {len(keep)} bulb"
-                    f"{'' if len(keep) == 1 else 's'}", "ok")
+                secs = hook_seconds(hook)
+                log(f"webhook {sw_node} now turns {len(keep)} bulb"
+                    f"{'' if len(keep) == 1 else 's'} {hook_action(hook)} "
+                    + (f"for {secs:g} s" if secs else "for good"), "ok")
                 state_wake()
-                return self._send({"switch": sw_node, "bulbs": keep, "hook": True})
+                return self._send({"switch": sw_node, "bulbs": keep,
+                                   "seconds": secs,
+                                   "action": hook_action(hook), "hook": True})
 
             sw = next((s for s in switches(devices) if s["node"] == sw_node), None)
             log(f"--- binding switch {sw_node} to {len(want)} bulb"
@@ -4671,7 +4741,8 @@ class Handler(BaseHTTPRequestHandler):
             node = next_hook_node(devices)
             devices.setdefault("hooks", []).append({
                 "node": node, "name": name, "where": where,
-                "kind": "webhook", "bulbs": [],
+                "kind": "webhook", "bulbs": [], "seconds": MOTION_SEC,
+                "action": "on",
             })
             save_devices(devices)
             log(f"webhook {node} ({name}) added", "ok")
