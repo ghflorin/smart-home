@@ -23,20 +23,30 @@ count and the mark together — and the page is only the devices wearing it.
 **Brightness and colour follow the time of day.** The curve is yours to edit:
 drag a point, then save it for the whole house or for one lamp.
 
-**A camera can make a lamp answer.** `POST /api/motion` takes one lamp to full
-for five seconds and then puts it back exactly as it was — not off, because at
-the hour this matters the lamp is usually already on and dimmed, and a deterrent
-that ends with the room dark has made the house look less lived in than before
-it fired. What to put back is read from the lamp at the moment it fires, not
-remembered: the panel's copy can be hours old for a device that has gone quiet,
-and the one thing that must not be wrong here is the state it restores.
+**A camera can make a lamp answer.** A webhook is a tile like any other: it has
+a name, a room, an address to copy into whatever will be posting to it, and a
+list of lamps. POST to it — a camera that has seen movement, most likely — and
+those lamps go to full for five seconds, then back to exactly what they were.
 
-Bursts extend the five seconds rather than stacking, so ten events in ten
-seconds end where one would have. It answers in about a tenth of a second and
-does the lamp on a thread of its own, because a camera wants its POST answered
-now. No credential: every other route here is open to the house network, so a
-secret on this one would protect nothing that `/api/light` does not already
-hand over by a shorter path.
+Not off, because at the hour this matters a lamp is usually already on and
+dimmed, and a deterrent that ends with the room dark has made the house look
+less lived in than before it fired. What to put back is read from each lamp at
+the moment it fires rather than remembered: the panel's copy can be hours old
+for a device that has gone quiet, and this is the one value that must not be
+wrong.
+
+Add as many as you have cameras; each gets an id of its own, so one cannot
+reach another's lamps. Bursts extend the five seconds rather than stacking, so
+ten events in ten seconds end where one would have. It answers in about a tenth
+of a second and does the lamps on a thread of its own, because a camera wants
+its POST answered now. No credential: every other route here is open to the
+house network, so a secret on this one would protect nothing that `/api/light`
+does not already hand over by a shorter path.
+
+It is shaped like a bought remote, deliberately — a thing that is pressed from
+outside, whose targets live in `devices.json` because there is nowhere in the
+device to put them, and which the hub acts on. Same storage, same bulb picker,
+same bargain: it does nothing while the hub is down.
 
 ![The schedule editor: brightness and colour temperature across the day](docs/images/schedule.png)
 
