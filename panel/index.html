@@ -4468,14 +4468,23 @@ function wireActions(sheet, dev, back) {
   wireForget(sheet, dev);
 }
 
-function openBulb(b) {
-  const sheet = $('#sheet');
-  const drivers = state.switches.filter(sw =>
-    (state.bySwitch[String(sw.node)] || []).some(e => String(e.node) === String(b.node)));
-
-  sheet.innerHTML = `
-    <h2></h2>
-    <div class="who"></div>
+/* The bulb control: a level column, a white strip and a colour wheel.
+ *
+ * Built once and used twice. A bulb's own sheet shows a lamp and commands it; a
+ * webhook's sheet shows a value and stores it. Everything that differs between
+ * those two sits in `opts` - where the current reading comes from, and what a
+ * finished gesture means. The geometry, the painting and the gestures are the
+ * same thing in both places, and they are exactly the part that would drift if
+ * it were written twice: the wheel's dot maths, the strip's own range, the slop
+ * that tells a tap from a drag.
+ *
+ * read() returns what to show when no finger is down:
+ *   {on, norm, mireds, hue, sat, colorMode, held, caption, canColour, ctLo, ctHi}
+ * onLevel / onMireds / onColour / onTap are what a gesture ends in. They may be
+ * async: the drag is held until they resolve, so the control does not snap back
+ * to a stale reading while the write is still in the air.
+ */
+const BULB_CONTROL_HTML = () => `
     <div class="hk">
       <div class="hk-pad">
         <div class="hk-lvl" id="hk-lvl">
@@ -4495,7 +4504,228 @@ function openBulb(b) {
     <div class="hk-wheel-pad" id="wheel-pad" hidden>
       <div class="hk-wheel" id="hk-wheel"><div class="hk-dot"></div></div>
       <div class="hk-cap" id="cap-col"></div>
-    </div>
+    </div>`;
+
+function bulbControl(root, opts) {
+  const lvlBox = root.querySelector('#hk-lvl');
+  const ctBox = root.querySelector('#hk-ct');
+  const hkBox = root.querySelector('.hk');
+  const fill = root.querySelector('.hk-fill');
+  const knob = root.querySelector('.hk-knob');
+  const pct = root.querySelector('.hk-pct');
+  const capL = root.querySelector('#cap-lvl');
+  const capC = root.querySelector('#cap-ct');
+  const wheelPad = root.querySelector('#wheel-pad');
+  const wheel = root.querySelector('#hk-wheel');
+  const dot = root.querySelector('.hk-dot');
+  const capW = root.querySelector('#cap-col');
+
+  // What the controls show while a finger is down. null means "whatever read()
+  // says"; a number means the finger is in charge.
+  let dragLvl = null;
+  let dragCt = null;
+  let dragCol = null;
+
+  /* The strip's travel is THIS lamp's range, not the Matter range.
+   *
+   * The spec allows 153..500 mireds; a lamp here reports 153..454 and silently
+   * clamps anything warmer. So the bottom eighth of the slider did nothing -
+   * you dragged into it and the value sprang back as soon as it was read again.
+   * Springing back is the right behaviour when a bulb refuses something, and it
+   * is still there as the backstop; it is the wrong way to find out that an
+   * eighth of a control is decorative. */
+  const paintStrip = () => {
+    const cur = opts.read();
+    const at = f => ctColor(cur.ctHi - f * (cur.ctHi - cur.ctLo));
+    ctBox.style.background = `linear-gradient(0deg, ${at(0)}, ${at(.33)}, `
+      + `${at(.5)}, ${at(.67)}, ${at(1)})`;
+  };
+
+  const paint = () => {
+    const cur = opts.read();
+    const on = cur.on === true;
+    const v = Math.max(0, Math.min(1, dragLvl !== null ? dragLvl : cur.norm));
+    const mir = dragCt !== null ? dragCt
+      : Math.min(cur.ctHi, Math.max(cur.ctLo, cur.mireds));
+
+    // Both controls, not just the brightness one. A dark lamp showing a full
+    // blue-to-amber colour strip reads as live equipment - the one control
+    // still in colour is the one the eye goes to, which is exactly backwards.
+    lvlBox.classList.toggle('off', !on);
+    ctBox.classList.toggle('off', !on);
+    hkBox.classList.toggle('off', !on);
+    fill.style.height = (v * 100).toFixed(1) + '%';
+    fill.classList.toggle('full', v >= 0.995);
+    pct.textContent = Math.round(v * 100) + '%';
+    // "held" is worth a word, because otherwise the next question is why the
+    // schedule has stopped touching this lamp. It is shown while the lamp is
+    // dark too: a hold set on a dark lamp is waiting for its power-on, and
+    // hiding it there meant the one state you could not see was the one that
+    // outlives the moment you set it.
+    capL.textContent = cur.caption !== undefined ? cur.caption
+      : (cur.held ? (on ? 'on · held' : 'off · held')
+                  : on ? 'on' : (cur.on === false ? 'off' : '—'));
+    capL.title = cur.held
+      ? 'set by hand — the schedule leaves it alone until you switch the light off' : '';
+
+    // The handle's travel is inset by its own height, so at either end it sits
+    // fully inside the strip. Positioned by its centre it was drawn half
+    // outside at the top and clipped by the rounded corner, which read as the
+    // control running past its own limit.
+    knob.style.setProperty('--p',
+      cur.ctHi > cur.ctLo ? (cur.ctHi - mir) / (cur.ctHi - cur.ctLo) : 0);
+    capC.textContent = `${kelvin(mir)} K`;
+    capC.title = ctWord(mir);
+
+    wheelPad.hidden = !cur.canColour;
+    if (!wheelPad.hidden) {
+      const hs = dragCol || { hue: cur.hue ?? 0, sat: cur.sat ?? 0 };
+      // ColorMode 2 is the white axis: the lamp holds a hue and is not showing
+      // it. Saying so is the difference between a picker that describes the
+      // room and one that describes a memory.
+      const white = !dragCol && cur.colorMode === 2;
+      wheel.classList.toggle('white', white);
+      wheel.classList.toggle('off', on === false);
+      const ang = (hs.hue / 254) * 2 * Math.PI;
+      const rad = Math.min(1, hs.sat / 254) * 50;
+      dot.style.left = `${50 + rad * Math.sin(ang)}%`;
+      dot.style.top = `${50 - rad * Math.cos(ang)}%`;
+      dot.style.background = hsColor(hs.hue, hs.sat);
+      capW.textContent = white ? 'white'
+        : `${Math.round((hs.hue / 254) * 360)}° · ${Math.round((hs.sat / 254) * 100)}%`;
+      capW.title = white
+        ? 'the bulb is on the white axis - pick a colour to leave it'
+        : 'hue and saturation';
+    }
+  };
+
+  // The drag is held until the commit resolves, then cleared. Clearing it first
+  // would show the old reading for as long as the write took.
+  const settle = async (fn, arg) => {
+    try { if (fn) { await fn(arg); } } finally {
+      dragLvl = null;
+      dragCt = null;
+      dragCol = null;
+      paintStrip();
+      paint();
+    }
+  };
+
+  /* One gesture, two meanings, told apart by whether it moved.
+   *
+   * Drag the panel and it sets the value; press and let go without moving and
+   * it toggles the light. That is how the same control does both on a phone,
+   * and it is why there is no separate on/off pair here - two buttons whose job
+   * the big control already does, taking up the room the control wanted.
+   *
+   * Sends on RELEASE. A control that fires while you drag puts a hundred
+   * commands on the radio for one gesture and the bulb only shows the last. */
+  const SLOP = 12;
+  const grab = (el, set, commit, tap) => {
+    let moved = false;
+    let startY = 0;
+    el.onpointerdown = ev => {
+      ev.preventDefault();
+      moved = false;
+      startY = ev.clientY;
+      el.setPointerCapture(ev.pointerId);
+      el.classList.add('grabbed');
+    };
+    el.onpointermove = ev => {
+      if (!el.hasPointerCapture || !el.hasPointerCapture(ev.pointerId)) { return; }
+      if (!moved && Math.abs(ev.clientY - startY) < SLOP) { return; }
+      moved = true;
+      const r = el.getBoundingClientRect();
+      set(Math.max(0, Math.min(1, (r.bottom - ev.clientY) / r.height)));
+      paint();
+    };
+    const up = ev => {
+      if (!el.hasPointerCapture || !el.hasPointerCapture(ev.pointerId)) { return; }
+      el.releasePointerCapture(ev.pointerId);
+      el.classList.remove('grabbed');
+      if (moved) { commit(); } else if (tap) { tap(); }
+    };
+    el.onpointerup = up;
+    el.onpointercancel = ev => {
+      if (el.hasPointerCapture && el.hasPointerCapture(ev.pointerId)) {
+        el.releasePointerCapture(ev.pointerId);
+      }
+      el.classList.remove('grabbed');
+      dragLvl = null;
+      dragCt = null;
+      paint();
+    };
+  };
+
+  grab(lvlBox,
+       v => { dragLvl = Math.max(0.01, v); },
+       () => settle(opts.onLevel, levelFromPerceived(dragLvl)),
+       opts.onTap ? () => opts.onTap() : null);
+  grab(ctBox,
+       v => {
+         const cur = opts.read();
+         dragCt = Math.round(cur.ctHi - v * (cur.ctHi - cur.ctLo));
+       },
+       () => settle(opts.onMireds, dragCt),
+       null);
+
+  /* The wheel takes its value the moment it is touched, unlike the two sliders:
+   * there is nowhere on a disc that means "no change", so a press IS a value
+   * and there is nothing to tell apart. */
+  const wheelAt = ev => {
+    const r = wheel.getBoundingClientRect();
+    const dx = ev.clientX - (r.left + r.width / 2);
+    const dy = ev.clientY - (r.top + r.height / 2);
+    let ang = Math.atan2(dx, -dy);
+    if (ang < 0) { ang += 2 * Math.PI; }
+    const reach = Math.min(r.width, r.height) / 2;
+    dragCol = {
+      hue: Math.round((ang / (2 * Math.PI)) * 254) % 255,
+      // Clamped, so the rim of the disc is fully saturated rather than a ring
+      // you have to land on exactly.
+      sat: Math.round(Math.min(1, Math.hypot(dx, dy) / reach) * 254),
+    };
+    paint();
+  };
+  wheel.onpointerdown = ev => {
+    ev.preventDefault();
+    wheel.setPointerCapture(ev.pointerId);
+    wheel.classList.add('grabbed');
+    wheelAt(ev);
+  };
+  wheel.onpointermove = ev => {
+    if (!wheel.hasPointerCapture || !wheel.hasPointerCapture(ev.pointerId)) { return; }
+    wheelAt(ev);
+  };
+  wheel.onpointerup = ev => {
+    if (!wheel.hasPointerCapture || !wheel.hasPointerCapture(ev.pointerId)) { return; }
+    wheel.releasePointerCapture(ev.pointerId);
+    wheel.classList.remove('grabbed');
+    if (dragCol) { settle(opts.onColour, { ...dragCol }); }
+  };
+  wheel.onpointercancel = ev => {
+    if (wheel.hasPointerCapture && wheel.hasPointerCapture(ev.pointerId)) {
+      wheel.releasePointerCapture(ev.pointerId);
+    }
+    wheel.classList.remove('grabbed');
+    dragCol = null;
+    paint();
+  };
+
+  paintStrip();
+  paint();
+  return { paint, paintStrip };
+}
+
+function openBulb(b) {
+  const sheet = $('#sheet');
+  const drivers = state.switches.filter(sw =>
+    (state.bySwitch[String(sw.node)] || []).some(e => String(e.node) === String(b.node)));
+
+  sheet.innerHTML = `
+    <h2></h2>
+    <div class="who"></div>
+    ${BULB_CONTROL_HTML()}
     ${sheetActions(b)}
     <div class="links" id="drivers"></div>
     <div class="links" id="sched-of"></div>`;
@@ -4503,50 +4733,6 @@ function openBulb(b) {
   nameable(sheet, b, () => openBulb(b));
   sheet.querySelector('.who').textContent =
     `bulb · node ${b.node}` + (b.where ? ` · ${b.where}` : '');
-
-  const lvlBox = sheet.querySelector('#hk-lvl');
-  const ctBox = sheet.querySelector('#hk-ct');
-  const fill = sheet.querySelector('.hk-fill');
-  const knob = sheet.querySelector('.hk-knob');
-  const pct = sheet.querySelector('.hk-pct');
-  const capL = sheet.querySelector('#cap-lvl');
-  const capC = sheet.querySelector('#cap-ct');
-  const wheelPad = sheet.querySelector('#wheel-pad');
-  const wheel = sheet.querySelector('#hk-wheel');
-  const dot = sheet.querySelector('.hk-dot');
-  const capW = sheet.querySelector('#cap-col');
-
-  // Where the finger is on the wheel, while it is down. Same idea as dragLvl
-  // and dragCt: null means "whatever the bulb says".
-  let dragCol = null;
-
-  /* The strip's travel is THIS BULB's range, not the Matter range.
-   *
-   * The spec allows 153..500 mireds; this lamp reports 153..454 and silently
-   * clamps anything warmer. So the bottom eighth of the slider did nothing -
-   * you dragged into it and the value sprang back as soon as it was read again.
-   * Springing back is the right behaviour when a bulb refuses something, and it
-   * is still there as the backstop; it is the wrong way to find out that a
-   * eighth of a control is decorative.
-   *
-   * Until the bulb has been read we use the Matter range, which is the widest
-   * anything could be - narrowing later only ever removes travel that was not
-   * doing anything. */
-  const ctLo = () => (state.bulbs[String(b.node)] || {}).ctMin || MIRED_MIN;
-  const ctHi = () => (state.bulbs[String(b.node)] || {}).ctMax || MIRED_MAX;
-  const paintStrip = () => {
-    const lo = ctLo();
-    const hi = ctHi();
-    const at = f => ctColor(hi - f * (hi - lo));
-    ctBox.style.background = `linear-gradient(0deg, ${at(0)}, ${at(.33)}, ` +
-      `${at(.5)}, ${at(.67)}, ${at(1)})`;
-  };
-  paintStrip();
-
-  // What the two controls are showing, while a drag is in progress. null means
-  // "whatever the bulb says"; a number means the finger is in charge.
-  let dragLvl = null;
-  let dragCt = null;
 
   /* Which brightness to show.
    *
@@ -4562,19 +4748,12 @@ function openBulb(b) {
    * the bulb is honestly "on at level 1" - which drew 4% and then jumped to
    * whatever it settled at. Level 1 under an On is a bulb on its way up, not a
    * brightness anybody chose, so it reads as OnLevel like the dark case does. */
-  const shownNorm = () => {
-    if (dragLvl !== null) { return dragLvl; }
-    const cur = state.bulbs[String(b.node)] || {};
+  const shownNorm = cur => {
     if (cur.on === true && typeof cur.level === 'number' && cur.level > 1) {
       return perceived(cur.level);
     }
     if (typeof cur.onlevel === 'number') { return perceived(cur.onlevel); }
     return typeof cur.level === 'number' ? perceived(cur.level) : 0;
-  };
-  const shownMireds = () => {
-    if (dragCt !== null) { return dragCt; }
-    const cur = state.bulbs[String(b.node)] || {};
-    return Math.min(ctHi(), Math.max(ctLo(), cur.mireds || 370));
   };
 
   /* Said in the line that names the bulb, because that is where the eye
@@ -4607,78 +4786,41 @@ function openBulb(b) {
     setTimeout(resolve, SAY_LEAD);
   });
 
-  const paintCtl = () => {
-    const cur = state.bulbs[String(b.node)] || {};
-    const on = cur.on === true;
-    const v = Math.max(0, Math.min(1, shownNorm()));
-    const mir = shownMireds();
-
-    // Both controls, not just the brightness one. A dark lamp showing a full
-    // blue-to-amber colour strip reads as live equipment - the one control
-    // still in colour is the one the eye goes to, which is exactly backwards.
-    lvlBox.classList.toggle('off', !on);
-    ctBox.classList.toggle('off', !on);
-    sheet.querySelector('.hk').classList.toggle('off', !on);
-    fill.style.height = (v * 100).toFixed(1) + '%';
-    fill.classList.toggle('full', v >= 0.995);
-    pct.textContent = Math.round(v * 100) + '%';
-    // "held" is worth a word, because otherwise the next question is why the
-    // schedule has stopped touching this lamp. It is shown while the lamp is
-    // dark too: a hold set on a dark lamp is waiting for its power-on, and
-    // hiding it there meant the one state you could not see was the one that
-    // outlives the moment you set it.
-    capL.textContent = cur.held ? (on ? 'on · held' : 'off · held')
-      : on ? 'on' : (cur.on === false ? 'off' : '\u2014');
-    capL.title = cur.held
-      ? 'set by hand — the schedule leaves it alone until you switch the light off' : '';
-
-    // The handle's travel is inset by its own height, so at either end it sits
-    // fully inside the strip. Positioned by its centre it was drawn half
-    // outside at the top and clipped by the rounded corner, which read as the
-    // control running past its own limit.
-    const lo = ctLo();
-    const hi = ctHi();
-    knob.style.setProperty('--p', hi > lo ? (hi - mir) / (hi - lo) : 0);
-    capC.textContent = `${kelvin(mir)} K`;
-    capC.title = ctWord(mir);
-
-    /* The wheel exists only for bulbs that say they can do hue and saturation.
-     * A tunable-white lamp carries ColorControl too, so the cluster being there
-     * proves nothing - the FeatureMap is what is asked. Until the bulb has been
-     * read, hasColor is undefined and the wheel stays out of the way rather
-     * than appearing and then vanishing. */
-    /* What the bulb answered beats what the registry remembers - and when it
-     * has not answered yet, the FEATURE MAP beats the stored `color`, which was
-     * once computed as "hue or xy" and so is true for every tunable-white lamp
-     * commissioned before that was corrected. Bit 0 is hue and saturation,
-     * which is exactly what this wheel sends. */
-    const caps = b.caps || {};
-    const canColour = typeof cur.hasColor === 'boolean' ? cur.hasColor
-      : (typeof caps.featureMap === 'number' ? (caps.featureMap & 1) === 1
-                                             : !!caps.color);
-    wheelPad.hidden = !canColour;
-    if (!wheelPad.hidden) {
-      const hs = dragCol || { hue: cur.hue ?? 0, sat: cur.sat ?? 0 };
-      // ColorMode 2 is the white axis: the bulb holds a hue and is not showing
-      // it. Saying so is the difference between a picker that describes the
-      // room and one that describes a memory.
-      const white = !dragCol && cur.colorMode === 2;
-      wheel.classList.toggle('white', white);
-      wheel.classList.toggle('off', on === false);
-      const ang = (hs.hue / 254) * 2 * Math.PI;
-      const rad = Math.min(1, hs.sat / 254) * 50;
-      dot.style.left = `${50 + rad * Math.sin(ang)}%`;
-      dot.style.top = `${50 - rad * Math.cos(ang)}%`;
-      dot.style.background = hsColor(hs.hue, hs.sat);
-      capW.textContent = white ? 'white'
-        : `${Math.round((hs.hue / 254) * 360)}\u00b0 \u00b7 ${Math.round((hs.sat / 254) * 100)}%`;
-      capW.title = white
-        ? 'the bulb is on the white axis - pick a colour to leave it'
-        : 'hue and saturation';
-    }
-  };
-  paintCtl();
-  SHEET_LIVE = paintCtl;
+  const ctl = bulbControl(sheet, {
+    read: () => {
+      const cur = state.bulbs[String(b.node)] || {};
+      /* The wheel exists only for lamps that say they can do hue and
+       * saturation. A tunable-white lamp carries ColorControl too, so the
+       * cluster being there proves nothing - the FeatureMap is what is asked.
+       * What the bulb answered beats what the registry remembers, and when it
+       * has not answered yet the feature map beats the stored `color`, which
+       * was once computed as "hue or xy" and so is true for every
+       * tunable-white lamp commissioned before that was corrected. */
+      const caps = b.caps || {};
+      return {
+        on: cur.on,
+        norm: shownNorm(cur),
+        mireds: cur.mireds || 370,
+        hue: cur.hue,
+        sat: cur.sat,
+        colorMode: cur.colorMode,
+        held: cur.held,
+        canColour: typeof cur.hasColor === 'boolean' ? cur.hasColor
+          : (typeof caps.featureMap === 'number' ? (caps.featureMap & 1) === 1
+                                                 : !!caps.color),
+        // Until the bulb has been read we use the Matter range, which is the
+        // widest anything could be - narrowing later only ever removes travel
+        // that was not doing anything.
+        ctLo: cur.ctMin || MIRED_MIN,
+        ctHi: cur.ctMax || MIRED_MAX,
+      };
+    },
+    onLevel: v => send({ level: v }),
+    onMireds: m => send({ mireds: m }),
+    onColour: c => send({ hue: c.hue, sat: c.sat }),
+    onTap: () => send({ action: 'toggle' }),
+  });
+  SHEET_LIVE = ctl.paint;
   SHEET_SAY = { node: b.node, say: sayTookover };
 
   const send = async payload => {
@@ -4693,9 +4835,7 @@ function openBulb(b) {
       })).json();
     } catch (err) { j = { error: String(err) }; }
     box.classList.remove('busy');
-    dragLvl = null;
-    dragCt = null;
-    if (j.error) { paintCtl(); return setStatus(j.error, 'err'); }
+    if (j.error) { return setStatus(j.error, 'err'); }
     // The explanation goes first. Adopting the new state repaints the controls,
     // and the whole point is that the message is already there when they move.
     if (tookoverNow(b.node, j.on)) {
@@ -4703,129 +4843,7 @@ function openBulb(b) {
       await sayTookover();
     }
     adoptBulb(b.node, j);
-    paintStrip();
-    paintCtl();
     render();
-  };
-
-  /* One gesture, two meanings, told apart by whether it moved.
-   *
-   * Drag the panel and it sets the value; press and let go without moving and it
-   * toggles the light. That is how the same control does both on a phone, and it
-   * is why there is no separate on/off pair here any more: two buttons whose job
-   * the big control already does, taking up the room the control wanted.
-   *
-   * Sends on RELEASE. A control that fires while you drag puts a hundred
-   * commands on the radio for one gesture and the bulb only shows the last.
-   *
-   * The drag is ABSOLUTE: the level follows the pointer, so letting go at
-   * four-fifths up the panel means four-fifths. That is the whole point of a
-   * control shaped like a column, and anything else fights what it looks like.
-   *
-   * It was relative for a while, to stop a click that twitched six pixels from
-   * becoming "set 2%". That fixed the twitch and broke the gesture: a short,
-   * deliberate drag moved the value by only the distance travelled, so it
-   * landed roughly where it already was - which is the value you picked LAST
-   * time. Aim for 80, get the old value; aim for 20, get 80; aim for 50, get
-   * 20. A control one step behind is worse than one that occasionally
-   * overshoots.
-   *
-   * So it is absolute again, and the twitch is handled where it belongs: at
-   * the threshold. Twelve pixels is far more than a click carries and far less
-   * than a drag, so a press that means "toggle" stays a toggle. */
-  const SLOP = 12;
-  const grab = (el, opts) => {
-    let moved = false;
-    let startY = 0;
-    el.onpointerdown = ev => {
-      ev.preventDefault();
-      moved = false;
-      startY = ev.clientY;
-      el.setPointerCapture(ev.pointerId);
-      el.classList.add('grabbed');
-    };
-    el.onpointermove = ev => {
-      if (!el.hasPointerCapture || !el.hasPointerCapture(ev.pointerId)) { return; }
-      if (!moved && Math.abs(ev.clientY - startY) < SLOP) { return; }
-      moved = true;
-      const r = el.getBoundingClientRect();
-      opts.set(Math.max(0, Math.min(1, (r.bottom - ev.clientY) / r.height)));
-      paintCtl();
-    };
-    const up = ev => {
-      if (!el.hasPointerCapture || !el.hasPointerCapture(ev.pointerId)) { return; }
-      el.releasePointerCapture(ev.pointerId);
-      el.classList.remove('grabbed');
-      if (moved) { opts.commit(); } else if (opts.tap) { opts.tap(); }
-    };
-    el.onpointerup = up;
-    el.onpointercancel = ev => {
-      if (el.hasPointerCapture && el.hasPointerCapture(ev.pointerId)) {
-        el.releasePointerCapture(ev.pointerId);
-      }
-      el.classList.remove('grabbed');
-      dragLvl = null;
-      dragCt = null;
-      dragCol = null;
-      paintCtl();
-    };
-  };
-
-  grab(lvlBox, {
-    // A floor of 1%: dragging to the very bottom of a brightness control means
-    // "as low as it goes", not "off". Off is the tap.
-    set: v => { dragLvl = Math.max(0.01, v); },
-    commit: () => send({ level: levelFromPerceived(dragLvl) }),
-    tap: () => send({ action: 'toggle' }),
-  });
-
-  grab(ctBox, {
-    set: v => { dragCt = Math.round(ctHi() - v * (ctHi() - ctLo())); },
-    commit: () => send({ mireds: dragCt }),
-  });
-
-  /* The wheel is two-dimensional, so it does not go through grab(): that one
-   * measures a single axis and treats a small movement as a tap. Here a tap IS
-   * the gesture - press a colour and the lamp goes there - so every press sets
-   * a value and there is nothing to tell apart. */
-  const wheelAt = ev => {
-    const r = wheel.getBoundingClientRect();
-    const dx = ev.clientX - (r.left + r.width / 2);
-    const dy = ev.clientY - (r.top + r.height / 2);
-    let ang = Math.atan2(dx, -dy);
-    if (ang < 0) { ang += 2 * Math.PI; }
-    const reach = Math.min(r.width, r.height) / 2;
-    dragCol = {
-      hue: Math.round((ang / (2 * Math.PI)) * 254) % 255,
-      // Clamped, so the rim of the disc is fully saturated rather than a ring
-      // you have to land on exactly.
-      sat: Math.round(Math.min(1, Math.hypot(dx, dy) / reach) * 254),
-    };
-    paintCtl();
-  };
-  wheel.onpointerdown = ev => {
-    ev.preventDefault();
-    wheel.setPointerCapture(ev.pointerId);
-    wheel.classList.add('grabbed');
-    wheelAt(ev);
-  };
-  wheel.onpointermove = ev => {
-    if (!wheel.hasPointerCapture || !wheel.hasPointerCapture(ev.pointerId)) { return; }
-    wheelAt(ev);
-  };
-  wheel.onpointerup = ev => {
-    if (!wheel.hasPointerCapture || !wheel.hasPointerCapture(ev.pointerId)) { return; }
-    wheel.releasePointerCapture(ev.pointerId);
-    wheel.classList.remove('grabbed');
-    if (dragCol) { send({ hue: dragCol.hue, sat: dragCol.sat }); }
-  };
-  wheel.onpointercancel = ev => {
-    if (wheel.hasPointerCapture && wheel.hasPointerCapture(ev.pointerId)) {
-      wheel.releasePointerCapture(ev.pointerId);
-    }
-    wheel.classList.remove('grabbed');
-    dragCol = null;
-    paintCtl();
   };
 
   /* Which schedule this bulb answers to.
