@@ -1544,6 +1544,35 @@
   }
   .hk-ct.grabbed .hk-knob { transition: none; }
 
+  /* The address, in the webhook's own sheet. It is long, it must be readable
+     character by character, and it must not reflow into something that looks
+     like two addresses - hence the scroll rather than a wrap. */
+  .hookurl {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0 10px;
+  }
+  .hookurl code {
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    white-space: nowrap;
+    font-size: 11px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--sunken);
+    color: var(--ink-dim);
+  }
+  .hookurl .hact { flex: none; }
+  .sheet .note {
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--ink-faint);
+    margin: 0 0 14px;
+  }
+
   /* ---------- the colour wheel ----------
    * Hue is an angle and saturation is a distance from the middle, so the control
    * is a disc: the shape says what the two numbers are, and there is no third
@@ -2658,7 +2687,12 @@ function setStatus(text, cls, holdMs) {
 function adoptDevices(d) {
   state.devices = d;
   state.switches = d.switches || (d.switch ? [d.switch] : []);
+  state.hooks = d.hooks || [];
 }
+
+/* A webhook is not a device: nothing answers for it, so it cannot be offline
+   and has no business in a count of what is answering. */
+function isHook(d) { return (d || {}).kind === 'webhook'; }
 
 async function load() {
   try {
@@ -2854,6 +2888,12 @@ const ICONS = {
     <circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/>
     <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
     <circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>`,
+
+  // A bolt: something outside the house reached in and made this happen. It is
+  // the one thing on the page that is not commanded by a person or a clock.
+  bolt: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M13.4 2.8 5.6 13.6h5.1l-.9 7.6 7.9-10.9h-5.2Z"/></svg>`,
 
   // The mark the filter in the header wears, which is the mark on the tiles it
   // filters to - the button says what you will get rather than "a filter".
@@ -3406,7 +3446,7 @@ function paintStatus() {
   if (state.matterOk === false) {
     return writeStatus('matter-server is not answering', 'err');
   }
-  const all = allDevices();
+  const all = allDevices().filter(d => !isHook(d));
   if (!all.length) { return writeStatus('no devices configured', ''); }
   const here = all.filter(d => !offlineNow(d.node)).length;
   if (!here) { return writeStatus('no device is answering', 'err'); }
@@ -3424,7 +3464,7 @@ function paintStatus() {
 function paintOnlyOffline() {
   const btn = $('#only-offline');
   if (!btn) { return; }
-  const any = allDevices().some(d => offlineNow(d.node));
+  const any = allDevices().filter(d => !isHook(d)).some(d => offlineNow(d.node));
   if (!any) { state.onlyOffline = false; }
   btn.disabled = !any;
   btn.setAttribute('aria-pressed', state.onlyOffline ? 'true' : 'false');
@@ -3777,7 +3817,8 @@ function orderOf(d, i, isSwitch) {
  * the server rather than a branch here. */
 function allDevices() {
   const d = state.devices || {};
-  return [...state.switches, ...(d.bulbs || []), ...(d.devices || [])];
+  return [...state.switches, ...(d.bulbs || []), ...(d.devices || []),
+          ...(d.hooks || [])];
 }
 
 function roomMembers(name) {
@@ -3792,6 +3833,9 @@ function roomMembers(name) {
   // Everything else, after the two kinds that have a hand-placed default order.
   (state.devices.devices || []).forEach((d, i) => {
     if (mine(d)) { out.push({ d, key: orderOf(d, i + 2000, false), opts: deviceOpts }); }
+  });
+  (state.devices.hooks || []).forEach((d, i) => {
+    if (mine(d)) { out.push({ d, key: orderOf(d, i + 3000, false), opts: hookOpts }); }
   });
   out.sort((a, b) => a.key - b.key);
   return out;
@@ -3851,7 +3895,9 @@ function render() {
   const sections = names.map(name => {
     const sec = sectionFor(name);
     let mine = roomMembers(name);
-    if (state.onlyOffline) { mine = mine.filter(m => offlineNow(m.d.node)); }
+    if (state.onlyOffline) {
+      mine = mine.filter(m => !isHook(m.d) && offlineNow(m.d.node));
+    }
     // A room with nothing missing has nothing to say while the filter is on,
     // and a page of empty rooms hides the two tiles you asked to see.
     if (state.onlyOffline && !mine.length) { return null; }
@@ -6568,6 +6614,152 @@ document.addEventListener('pointercancel', () => endDrag(false));
  * written to the device at all. What that costs is written in the note: the
  * remote goes dead whenever the Pi does, which is not true of our own switch.
  */
+/* Copy, on a page served over plain http.
+ *
+ * navigator.clipboard is not merely blocked outside a secure context - it is
+ * not there at all, so the usual `try { clipboard.writeText }` catches nothing
+ * and the call throws on a property that does not exist. The old selection
+ * trick is deprecated everywhere and is the only one that works here.
+ */
+async function copyText(text) {
+  if (window.isSecureContext && navigator.clipboard) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* fall through */ }
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+  document.body.append(ta);
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  ta.remove();
+  return ok;
+}
+
+async function copyHookUrl(h, q) {
+  const ok = await copyText(h.url || '');
+  if (ok) {
+    setStatus('address copied', 'ok');
+  } else {
+    setStatus('could not copy \u2014 open it and copy by hand', 'warn');
+    q.classList.add('failed');
+    setTimeout(() => q.classList.remove('failed'), 2000);
+  }
+}
+
+/* A webhook, as a tile.
+ *
+ * It sits with the switches and the remotes because it is one: a thing that is
+ * pressed, by something outside the house, and whose targets the hub acts on.
+ * The quick action is the address, because that is the one thing you ever need
+ * from it in a hurry - it goes into a camera's configuration, on another
+ * machine, and retyping it from a screen is how a webhook ends up pointing at
+ * nothing.
+ */
+function hookOpts(h) {
+  const n = (h.bulbs || []).length;
+  return {
+    node: h.node,
+    icon: ICONS.bolt,
+    cls: '',
+    name: h.name,
+    state: n ? `${n} bulb${n === 1 ? '' : 's'}` : 'switches nothing yet',
+    quickTitle: 'copy the address \u2014 ' + (h.url || ''),
+    onQuick: q => copyHookUrl(h, q),
+    openTitle: 'what ' + h.name + ' switches on',
+    onOpen: () => editHook(h),
+  };
+}
+
+function editHook(h) {
+  const bulbs = state.devices.bulbs || [];
+  const sheet = $('#sheet');
+  sheet.innerHTML = `<h2></h2>
+    <div class="who"></div>
+    <div class="hookurl">
+      <code>${esc(h.url || '')}</code>
+      <button type="button" class="hact hookcopy">copy</button>
+    </div>
+    <p class="note">POST here. The body does not matter, so a camera can send
+      whatever it likes; if it sends a name, that name goes in the log.</p>
+    <div class="section-label btn-sec"><span>switches on for a few seconds</span>
+      <span class="rule"></span></div>
+    <div class="pick">${renderPick(bulbs, new Set(h.bulbs || []), h.where, 'no bulbs')}</div>
+    <button class="go">save</button>
+    <button type="button" class="danger hookdel">remove this webhook</button>`;
+
+  nameable(sheet, h, () => editHook(h));
+  sheet.querySelector('.who').textContent = 'webhook'
+    + (h.where ? ` \u00b7 ${h.where}` : '');
+  $('#overlay').classList.add('on');
+
+  sheet.querySelector('.hookdel').onclick = async (e) => {
+    const btn = e.target;
+    if (btn.dataset.sure !== '1') {
+      btn.dataset.sure = '1';
+      btn.textContent = 'really remove it?';
+      setTimeout(() => {
+        if (btn.isConnected) { btn.dataset.sure = ''; btn.textContent = 'remove this webhook'; }
+      }, 4000);
+      return;
+    }
+    btn.disabled = true;
+    try {
+      await api('/api/hook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delete: h.node })
+      });
+    } catch (e2) { setStatus(String(e2), 'err'); }
+    closeSheet();
+    load();
+  };
+
+  sheet.querySelector('.hookcopy').onclick = async (e) => {
+    const ok = await copyText(h.url || '');
+    if (!ok) {
+      // execCommand can refuse - it wants a trusted gesture and some browsers
+      // have dropped it outright. Selecting the address is the next best thing
+      // and costs the reader one keystroke instead of retyping an address.
+      const code = sheet.querySelector('.hookurl code');
+      const range = document.createRange();
+      range.selectNodeContents(code);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    e.target.textContent = ok ? 'copied' : 'selected \u2014 press \u2318C';
+    setTimeout(() => { e.target.textContent = 'copy'; }, 2500);
+  };
+
+  sheet.querySelector('.go').onclick = async (e) => {
+    const btn = e.target;
+    btn.disabled = true;
+    btn.textContent = 'saving\u2026';
+    const want = [...sheet.querySelectorAll('.pick input:checked')].map(i => Number(i.value));
+    try {
+      const j = await (await api('/api/bindings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ switch: h.node, bulbs: want })
+      })).json();
+      if (j.error) {
+        sheet.innerHTML = `<h2>webhook</h2><div class="failed">${esc(j.error)}</div>`;
+        sheetOnClose = load;
+        return;
+      }
+    } catch (e2) {
+      sheet.innerHTML = `<h2>webhook</h2><div class="failed">${esc(String(e2))}</div>`;
+      sheetOnClose = load;
+      return;
+    }
+    closeSheet();
+    load();
+  };
+}
+
 function editRemote(sw) {
   const per = state.byButton[String(sw.node)] || {};
   const bulbs = state.devices.bulbs || [];
@@ -6804,6 +6996,12 @@ function addAnything() {
         <span>A Holyiot nRF54L15 running this project's own firmware. It talks
               to the bulbs directly, with the Pi out of the way.</span>
       </button>
+      <button type="button" class="choice" data-go="hook">
+        <b>a webhook</b>
+        <span>An address something else can POST to &mdash; a camera that has
+              seen movement, most likely. The lamps you give it go to full for
+              a few seconds and then back to exactly what they were.</span>
+      </button>
       <button type="button" class="choice" data-go="room">
         <b>a room</b>
         <span>Just a name to group things under. Nothing is commissioned and
@@ -6812,9 +7010,62 @@ function addAnything() {
     </div>`;
   $('#overlay').classList.add('on');
   sheet.querySelectorAll('.choice').forEach(b => {
-    b.onclick = () => ({ device: addDevice, switch: addSwitch,
+    b.onclick = () => ({ device: addDevice, switch: addSwitch, hook: addHook,
                          room: () => editRoom(null) })[b.dataset.go]();
   });
+}
+
+function addHook() {
+  const sheet = $('#sheet');
+  sheet.innerHTML = `<h2>add a webhook</h2>
+    <div class="who">an address something else can POST to</div>
+    <label>name</label>
+    <input id="f-name" placeholder="Front gate" autocomplete="off">
+    <label>room</label>
+    <div class="combo">
+      <input id="f-where" placeholder="search, or type a new one" autocomplete="off">
+      <div class="combo-list" id="f-where-list"></div>
+    </div>
+    <button class="go">add</button>
+    <div class="note">
+      Nothing is commissioned and nothing is touched on the network &mdash; this
+      is a name and an address. Each one gets an id of its own, so a camera
+      posting to one cannot reach another\u2019s lamps.<br><br>
+      You pick what it switches on from its own tile, afterwards.
+    </div>`;
+  $('#overlay').classList.add('on');
+  setupRoomCombo();
+  $('#f-name').focus();
+
+  sheet.querySelector('.go').onclick = async (e) => {
+    const btn = e.target;
+    btn.disabled = true;
+    btn.textContent = 'adding\u2026';
+    try {
+      const j = await (await api('/api/hook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: $('#f-name').value.trim(),
+                               where: $('#f-where').value.trim() })
+      })).json();
+      if (j.error) {
+        setStatus(j.error, 'err');
+        btn.disabled = false;
+        btn.textContent = 'add';
+        return;
+      }
+      closeSheet();
+      await load();
+      // Straight into its own sheet: a webhook that switches nothing on is not
+      // finished, and the address is in there too.
+      const made = (state.hooks || []).find(h => h.node === j.node);
+      if (made) { editHook(made); }
+    } catch (e2) {
+      setStatus(String(e2), 'err');
+      btn.disabled = false;
+      btn.textContent = 'add';
+    }
+  };
 }
 
 function addDevice() {
