@@ -1,0 +1,34 @@
+[Unit]
+# The panel's address, whatever the hub is called.
+#
+# The panel lives at `smarthome.local`. On a hub whose hostname is something
+# else nothing answers to that name by itself; avahi answers for as many names
+# as it is asked to, so this asks.
+#
+# It will not start while the OLD machine is still publishing the name: avahi
+# reports "Name collision, picking new name '(null)'" and avahi-publish then
+# trips an assertion, because -R told it not to rename and it has nothing to
+# fall back to. That is the right answer to a name somebody else owns. Start
+# this after the old machine is off, not before.
+Description=smarthome - publish smarthome.local
+After=avahi-daemon.service network-online.target
+Requires=avahi-daemon.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/smarthome/deploy/mdns-alias.sh smarthome.local
+# The address is read at start. A lease change has to be picked up, and the
+# cheapest way is to die and come back.
+Restart=always
+RestartSec=30
+
+# Not DynamicUser: a transient account cannot reach the system bus, and
+# avahi-publish dies with "Failed to create client object: An unexpected D-Bus
+# error occurred" - which names neither D-Bus policy nor the user. The avahi
+# account is already here, owns the daemon, and has no login.
+User=avahi
+Group=avahi
+
+[Install]
+WantedBy=multi-user.target
