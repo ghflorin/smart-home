@@ -27,11 +27,16 @@ drag a point, then save it for the whole house or for one lamp.
 for five seconds and then puts it back exactly as it was — not off, because at
 the hour this matters the lamp is usually already on and dimmed, and a deterrent
 that ends with the room dark has made the house look less lived in than before
-it fired. Bursts extend the five seconds rather than stacking, so ten events in
-ten seconds end where one would have. It answers in about a tenth of a second
-and does the lamp on a thread of its own, because a camera wants its POST
-answered now. The shared secret lives in `ota/state/webhook-token`, and without
-that file the endpoint refuses everything.
+it fired. What to put back is read from the lamp at the moment it fires, not
+remembered: the panel's copy can be hours old for a device that has gone quiet,
+and the one thing that must not be wrong here is the state it restores.
+
+Bursts extend the five seconds rather than stacking, so ten events in ten
+seconds end where one would have. It answers in about a tenth of a second and
+does the lamp on a thread of its own, because a camera wants its POST answered
+now. No credential: every other route here is open to the house network, so a
+secret on this one would protect nothing that `/api/light` does not already
+hand over by a shorter path.
 
 ![The schedule editor: brightness and colour temperature across the day](docs/images/schedule.png)
 

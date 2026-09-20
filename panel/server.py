@@ -19,7 +19,6 @@ Start with: ./run.sh
 """
 
 import collections
-import hmac
 import json
 import math
 import os
@@ -2273,24 +2272,18 @@ MOTION_NODE = int(os.environ.get("PANEL_MOTION_NODE", "1002"))
 MOTION_SEC = float(os.environ.get("PANEL_MOTION_SEC", "5"))
 MOTION_LEVEL = 254
 
-# The shared secret, in a file rather than in this repository or in the unit:
-# it ends up pasted into another system's configuration, and it should be
-# rotatable without editing either. No file means no webhook - it fails closed,
-# because the alternative is a lamp anything on the network can flash.
-MOTION_TOKEN_FILE = pathlib.Path(os.environ.get(
-    "PANEL_MOTION_TOKEN_FILE", "/opt/smarthome/ota/state/webhook-token"))
+# NO TOKEN, and that is a decision rather than an omission. Every other route
+# here is open to the network the panel is on - /api/light turns any bulb on
+# with no credential at all - so a secret on this one route would protect
+# nothing: anything that could reach it could already command the lamp
+# directly, and by a shorter path. What it would buy is a string to keep in
+# step across two systems, and a webhook that stops working the day somebody
+# rotates it and forgets. The boundary here is the house network, and it is
+# the same boundary for everything else in this file.
 
 _motion_lock = threading.Lock()
 _motion_until = 0.0
 _motion_busy = False
-_motion_restore = None
-
-
-def motion_token() -> str:
-    try:
-        return MOTION_TOKEN_FILE.read_text().strip()
-    except OSError:
-        return ""
 
 
 def motion_endpoint() -> int:
@@ -2304,19 +2297,12 @@ def motion_endpoint() -> int:
 
 
 def motion_seen(source: str = "") -> dict:
-    """Movement seen. Put the light up, and remember what to put back."""
-    global _motion_until, _motion_busy, _motion_restore
+    """Movement seen. The lamp, and the reading it needs, are the worker's."""
+    global _motion_until, _motion_busy
     with _motion_lock:
         _motion_until = time.time() + MOTION_SEC
         if _motion_busy:
             return {"ok": True, "extended": True, "node": MOTION_NODE}
-        st = state_of(MOTION_NODE)
-        # Level 1 under an On is a bulb on its way up rather than a brightness -
-        # the same trap the tiles have. OnLevel is the better answer then.
-        lvl = st.get("level")
-        if not isinstance(lvl, int) or lvl <= 1:
-            lvl = st.get("onlevel") if isinstance(st.get("onlevel"), int) else None
-        _motion_restore = {"on": st.get("on"), "level": lvl}
         _motion_busy = True
     log(f"motion{(' from ' + source) if source else ''}: bulb {MOTION_NODE} to full "
         f"for {MOTION_SEC:g} s", "step")
@@ -2324,12 +2310,48 @@ def motion_seen(source: str = "") -> dict:
     return {"ok": True, "extended": False, "node": MOTION_NODE}
 
 
+def motion_restore_target() -> dict:
+    """What the lamp is doing RIGHT NOW, asked of the device rather than
+    remembered.
+
+    The panel's own copy is not good enough here, and the failure is ugly: a
+    restart, a trigger six seconds later, and the lamp is put back to whatever
+    the state file last happened to hold - which was "off", so a deterrent
+    switched off a lamp that was on. The whole point of restoring rather than
+    switching off is that the panel must not make the house darker than it
+    found it, and a stale belief does exactly that.
+
+    refresh_bulb reads matter-server's cache, so this costs milliseconds and no
+    radio traffic. If it still comes back unknown - a bulb that has never
+    answered - off is the honest default at the hour this fires, and the log
+    says it was a guess.
+    """
+    try:
+        bulb = next((b for b in load_devices().get("bulbs", [])
+                     if b.get("node") == MOTION_NODE), None)
+        if bulb is not None:
+            refresh_bulb(bulb)
+    except Exception as exc:  # noqa: BLE001 - a stale reading beats no light
+        log(f"motion: could not read bulb {MOTION_NODE} first: {exc}", "warn")
+
+    st = state_of(MOTION_NODE)
+    # Level 1 under an On is a bulb on its way up rather than a brightness -
+    # the same trap the tiles have. OnLevel is the better answer then.
+    lvl = st.get("level")
+    if not isinstance(lvl, int) or lvl <= 1:
+        lvl = st.get("onlevel") if isinstance(st.get("onlevel"), int) else None
+    if st.get("on") is None:
+        log(f"motion: bulb {MOTION_NODE} did not say whether it is on - "
+            f"it will be left off", "warn")
+    return {"on": st.get("on"), "level": lvl}
+
+
 def motion_worker() -> None:
     """Up, hold until the deadline stops moving, back. Off the request thread:
     a camera wants its POST answered now, not in five seconds."""
     global _motion_busy
     ep = motion_endpoint()
-    back = dict(_motion_restore or {})
+    back = motion_restore_target()
     try:
         while True:
             err = m_cmd(MOTION_NODE, ep, 0x0008, "MoveToLevelWithOnOff",
@@ -3671,19 +3693,6 @@ class Handler(BaseHTTPRequestHandler):
             raw = self.rfile.read(length) if length else b""
         except OSError:
             raw = b""
-
-        want = motion_token()
-        if not want:
-            log(f"motion: refused - no token in {MOTION_TOKEN_FILE}", "warn")
-            return self._send({"error": "the webhook is not configured"}, status=503)
-
-        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-        got = (self.headers.get("X-Token") or (q.get("token") or [""])[0] or "").strip()
-        # Constant time: this is a secret somebody can guess a character at a
-        # time if the comparison tells them how far they got.
-        if not hmac.compare_digest(got, want):
-            log(f"motion: refused from {self.client_address[0]} - wrong token", "warn")
-            return self._send({"error": "no"}, status=403)
 
         # Whatever the sender calls itself, for the log line. UniFi Protect
         # posts JSON with the trigger in it; anything else is fine too.
