@@ -36,8 +36,12 @@ the moment it fires rather than remembered: the panel's copy can be hours old
 for a device that has gone quiet, and this is the one value that must not be
 wrong.
 
-Each one says what it does and for how long: **turn on** or **turn off**, then
-5s, 15s, 1m, 5m, 15m or **always**. A span puts every lamp back exactly as it
+Each one says what it does, for how long, and to what: **turn on** or **turn
+off**; 5s, 15s, 1m, 5m, 15m or **always**; and — through the same control a
+bulb's own sheet uses — the brightness and the colour it turns them to. The
+control follows the lamps you tick: a list with one colour bulb in it gets the
+wheel, and the white strip travels only as far as the narrowest of them can
+actually go. A span puts every lamp back exactly as it
 was afterwards; always leaves them where it put them — and when that is on, it
 takes a hold, the same one a long press on a wall switch takes, or the schedule
 would pull the light back to the curve inside a minute. Turning them off needs

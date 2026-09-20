@@ -2283,6 +2283,7 @@ def lock_watch() -> None:
 # The default for a hook that has never been told otherwise. Each hook
 # carries its own, in devices.json.
 MOTION_SEC = float(os.environ.get("PANEL_MOTION_SEC", "5"))
+# What a hook that has never been told otherwise turns its lamps to.
 MOTION_LEVEL = 254
 # Out of the way of anything Matter hands out; these are ours and never reach
 # matter-server.
@@ -2358,8 +2359,38 @@ def ensure_hook(devices: dict) -> bool:
         "bulbs": [],
         "seconds": MOTION_SEC,
         "action": "on",
+        "level": MOTION_LEVEL,
+        "colorMode": 2,
     })
     return True
+
+
+def hook_value(hook: dict) -> dict:
+    """What the lamps become. Brightness always; colour only if it was chosen.
+
+    A lamp is told ONE of the two colour things, never both: a bulb holds a hue
+    and a colour temperature at the same time and shows whichever arrived last,
+    so sending both would make the result depend on their order. `colorMode`
+    records which one the person picked, the same way the bulb itself records
+    which one it is showing.
+    """
+    def num(key, lo, hi):
+        try:
+            v = float(hook.get(key))
+        except (TypeError, ValueError):
+            return None
+        return max(lo, min(hi, int(round(v))))
+
+    out = {"level": num("level", 1, 254) or MOTION_LEVEL}
+    if int(hook.get("colorMode", 2) or 0) == 0:
+        h, sat = num("hue", 0, 254), num("sat", 0, 254)
+        if h is not None and sat is not None:
+            out["hue"], out["sat"] = h, sat
+    else:
+        mir = num("mireds", 100, 700)
+        if mir:
+            out["mireds"] = mir
+    return out
 
 
 def hook_action(hook: dict) -> str:
@@ -2389,7 +2420,8 @@ def motion_seen(hook: dict, source: str = "") -> dict:
         if node in _motion_busy:
             return {"ok": True, "extended": True, "hook": node}
         _motion_busy.add(node)
-    what = "to full" if action == "on" else "off"
+    pct = round(hook_value(hook)["level"] / 254 * 100)
+    what = f"to {pct}%" if action == "on" else "off"
     how = f"for {secs:g} s" if secs else "and left there"
     log(f"motion{(' from ' + source) if source else ''}: {hook.get('name') or node}"
         f" -> {len(targets)} bulb{'' if len(targets) == 1 else 's'} {what} {how}",
@@ -2420,7 +2452,18 @@ def motion_restore_target(node: int, bulb: dict) -> dict:
     lvl = st.get("level")
     if not isinstance(lvl, int) or lvl <= 1:
         lvl = st.get("onlevel") if isinstance(st.get("onlevel"), int) else None
-    return {"on": st.get("on"), "level": lvl}
+    # The colour as well, now that a hook can change it.
+    #
+    # Brightness recovers on its own - OnLevel decides what a lamp comes back
+    # to - and COLOUR HAS NO OnLevel. A lamp simply keeps the last colour it
+    # was given, so a hook that turned a window red would have left it red
+    # until the schedule drifted far enough to re-send, which on the midday
+    # plateau is hours. Whichever of the two the lamp was showing is the one
+    # worth putting back, and colorMode is what says which.
+    return {"on": st.get("on"), "level": lvl,
+            "colorMode": st.get("colorMode"),
+            "mireds": st.get("mireds"),
+            "hue": st.get("hue"), "sat": st.get("sat")}
 
 
 def motion_worker(node: int, targets: list, secs: float, action: str = "on") -> None:
@@ -2443,15 +2486,37 @@ def motion_worker(node: int, targets: list, secs: float, action: str = "on") -> 
         except (OSError, ValueError):
             return
         plan = [(n, bulbs[n]) for n in targets if n in bulbs]
+        want = hook_value(hook_of(load_devices(), node) or {})
 
         def drive(n, b):
             """Whatever this hook does, done to one lamp."""
             ep = int(b.get("endpoint", 1))
             if action == "off":
                 return m_cmd(n, ep, 0x0006, "Off", timeout=20.0)
-            return m_cmd(n, ep, 0x0008, "MoveToLevelWithOnOff",
-                         {"level": MOTION_LEVEL, "transitionTime": 0,
-                          "optionsMask": 0, "optionsOverride": 0}, timeout=20.0)
+            err = m_cmd(n, ep, 0x0008, "MoveToLevelWithOnOff",
+                        {"level": want["level"], "transitionTime": 0,
+                         "optionsMask": 0, "optionsOverride": 0}, timeout=20.0)
+            if err:
+                return err
+            # The colour is asked for and may be refused: a white-only lamp in
+            # the same list still gets the brightness, which is the part that
+            # always applies. Failing the whole thing over a colour that lamp
+            # was never going to show would cost the light as well.
+            if "hue" in want:
+                e = m_cmd(n, ep, 0x0300, "MoveToHueAndSaturation",
+                          {"hue": want["hue"], "saturation": want["sat"],
+                           "transitionTime": 0, "optionsMask": 1,
+                           "optionsOverride": 1}, timeout=20.0)
+            elif "mireds" in want:
+                e = m_cmd(n, ep, 0x0300, "MoveToColorTemperature",
+                          {"colorTemperatureMireds": want["mireds"],
+                           "transitionTime": 0, "optionsMask": 1,
+                           "optionsOverride": 1}, timeout=20.0)
+            else:
+                e = None
+            if e:
+                log(f"motion: bulb {n} kept its colour: {e}", "info")
+            return None
 
         if not secs:
             for n, b in plan:
@@ -2465,7 +2530,7 @@ def motion_worker(node: int, targets: list, secs: float, action: str = "on") -> 
                     # and steps on this one.
                     with _state_lock:
                         _state.setdefault("bulbs", {}).setdefault(
-                            str(n), {})["level"] = MOTION_LEVEL
+                            str(n), {})["level"] = want["level"]
                     set_override(n, True, ("level",))
                 log(f"motion: bulb {n} {action}, and staying that way", "ok")
             return
@@ -2486,15 +2551,37 @@ def motion_worker(node: int, targets: list, secs: float, action: str = "on") -> 
 
             for n, b in plan:
                 ep = int(b.get("endpoint", 1))
-                want = back.get(n) or {}
-                if want.get("on") is True and isinstance(want.get("level"), int):
+                was = back.get(n) or {}
+                if was.get("on") is True and isinstance(was.get("level"), int):
                     err = m_cmd(n, ep, 0x0008, "MoveToLevelWithOnOff",
-                                {"level": want["level"], "transitionTime": 0,
+                                {"level": was["level"], "transitionTime": 0,
                                  "optionsMask": 0, "optionsOverride": 0}, timeout=20.0)
-                    where = str(want["level"])
+                    where = str(was["level"])
                 else:
                     err = m_cmd(n, ep, 0x0006, "Off", timeout=20.0)
                     where = "off"
+                # Only the lamps whose colour we actually changed, and only the
+                # one of the two they were showing. Writing a colour we never
+                # touched would be noise on the radio and an argument with the
+                # schedule.
+                if not err and ("hue" in want or "mireds" in want):
+                    if was.get("colorMode") == 0 and isinstance(was.get("hue"), int) \
+                            and isinstance(was.get("sat"), int):
+                        e = m_cmd(n, ep, 0x0300, "MoveToHueAndSaturation",
+                                  {"hue": was["hue"], "saturation": was["sat"],
+                                   "transitionTime": 0, "optionsMask": 1,
+                                   "optionsOverride": 1}, timeout=20.0)
+                        where += ", its colour"
+                    elif isinstance(was.get("mireds"), int) and was["mireds"]:
+                        e = m_cmd(n, ep, 0x0300, "MoveToColorTemperature",
+                                  {"colorTemperatureMireds": was["mireds"],
+                                   "transitionTime": 0, "optionsMask": 1,
+                                   "optionsOverride": 1}, timeout=20.0)
+                        where += f", {was['mireds']} mireds"
+                    else:
+                        e = None
+                    if e:
+                        log(f"motion: bulb {n} kept the colour it was given: {e}", "warn")
                 if err:
                     log(f"motion: bulb {n} did not go back: {err}", "err")
                 else:
@@ -4315,6 +4402,12 @@ class Handler(BaseHTTPRequestHandler):
                     if str(body["action"]).lower() not in ("on", "off"):
                         return self._send({"error": "on or off?"}, status=400)
                     hook["action"] = str(body["action"]).lower()
+                for key in ("level", "mireds", "hue", "sat", "colorMode"):
+                    if key in body and body[key] is not None:
+                        try:
+                            hook[key] = int(body[key])
+                        except (TypeError, ValueError):
+                            return self._send({"error": f"{key}?"}, status=400)
                 save_devices(devices)
                 secs = hook_seconds(hook)
                 log(f"webhook {sw_node} now turns {len(keep)} bulb"
@@ -4742,7 +4835,7 @@ class Handler(BaseHTTPRequestHandler):
             devices.setdefault("hooks", []).append({
                 "node": node, "name": name, "where": where,
                 "kind": "webhook", "bulbs": [], "seconds": MOTION_SEC,
-                "action": "on",
+                "action": "on", "level": MOTION_LEVEL, "colorMode": 2,
             })
             save_devices(devices)
             log(f"webhook {node} ({name}) added", "ok")

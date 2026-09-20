@@ -1544,6 +1544,12 @@
   }
   .hk-ct.grabbed .hk-knob { transition: none; }
 
+  /* The bulb control, borrowed by a webhook's sheet. Dimmed rather than
+     removed when the hook turns lamps off: the value is still there and comes
+     back if you change your mind, and a control that vanishes takes the
+     layout with it. */
+  .hookctl.dim { opacity: .35; pointer-events: none; }
+
   /* How long, as a row of chips. Same shape as the tile-size selector in the
      toolbar, because it is the same kind of choice: a few fixed answers where
      one is always current. */
@@ -6762,6 +6768,16 @@ function editHook(h) {
   const sheet = $('#sheet');
   let secs = typeof h.seconds === 'number' ? h.seconds : 5;
   let act = h.action === 'off' ? 'off' : 'on';
+  // The value the lamps become. Held here while the sheet is open and sent on
+  // save, so the control can be dragged about without a camera's worth of
+  // commands going out for a decision nobody has made yet.
+  const val = {
+    level: typeof h.level === 'number' ? h.level : 254,
+    mireds: typeof h.mireds === 'number' ? h.mireds : 370,
+    hue: typeof h.hue === 'number' ? h.hue : 0,
+    sat: typeof h.sat === 'number' ? h.sat : 0,
+    colorMode: h.colorMode === 0 ? 0 : 2,
+  };
   sheet.innerHTML = `<h2></h2>
     <div class="who"></div>
     <div class="hookurl">
@@ -6787,7 +6803,10 @@ function editHook(h) {
       exactly as it was afterwards; <b>always</b> leaves them where it put them
       \u2014 and when that is on, it holds them there against the schedule until
       somebody switches them off.</p>
-    <div class="section-label btn-sec"><span>switches on</span>
+    <div class="section-label btn-sec"><span>to what</span>
+      <span class="rule"></span></div>
+    <div class="hookctl">${BULB_CONTROL_HTML()}</div>
+    <div class="section-label btn-sec"><span>which lamps</span>
       <span class="rule"></span></div>
     <div class="pick">${renderPick(bulbs, new Set(h.bulbs || []), h.where, 'no bulbs')}</div>
     <button class="go">save</button>
@@ -6798,11 +6817,63 @@ function editHook(h) {
     + (h.where ? ` \u00b7 ${h.where}` : '');
   $('#overlay').classList.add('on');
 
+  /* The same control a bulb's own sheet uses, over a stored value instead of a
+   * live lamp. `on` is true because the value is what the lamps BECOME - a
+   * greyed-out control would be describing a lamp, and there is no lamp here.
+   *
+   * What it can offer follows the lamps that are ticked: a list with one
+   * colour bulb in it gets a wheel, and the white strip travels only as far as
+   * the narrowest of them can actually go. Offering travel no selected lamp
+   * has is how a control ends up with a decorative third. */
+  const picked = () => [...sheet.querySelectorAll('.pick input:checked')]
+    .map(i => Number(i.value))
+    .map(n => bulbs.find(x => x.node === n))
+    .filter(Boolean);
+
+  const ctl = bulbControl(sheet.querySelector('.hookctl'), {
+    read: () => {
+      const mine = picked();
+      const caps = mine.map(x => x.caps || {});
+      const live = mine.map(x => state.bulbs[String(x.node)] || {});
+      const colour = mine.length
+        ? live.some((c, i) => typeof c.hasColor === 'boolean' ? c.hasColor
+            : (typeof caps[i].featureMap === 'number'
+                ? (caps[i].featureMap & 1) === 1 : !!caps[i].color))
+        : true;
+      const los = live.map(c => c.ctMin).filter(x => typeof x === 'number');
+      const his = live.map(c => c.ctMax).filter(x => typeof x === 'number');
+      return {
+        on: true,
+        norm: perceived(val.level),
+        mireds: val.mireds,
+        hue: val.hue,
+        sat: val.sat,
+        colorMode: val.colorMode,
+        caption: act === 'off' ? 'not used when it turns lamps off' : 'brightness',
+        canColour: colour,
+        ctLo: los.length ? Math.max(...los) : MIRED_MIN,
+        ctHi: his.length ? Math.min(...his) : MIRED_MAX,
+      };
+    },
+    onLevel: v => { val.level = v; },
+    onMireds: m => { val.mireds = m; val.colorMode = 2; },
+    onColour: c => { val.hue = c.hue; val.sat = c.sat; val.colorMode = 0; },
+  });
+
+  // Ticking a lamp can change what the control may offer, so it repaints.
+  sheet.querySelector('.pick').addEventListener('change', () => {
+    ctl.paintStrip();
+    ctl.paint();
+  });
+
   sheet.querySelectorAll('.span.act').forEach(b => {
     b.onclick = () => {
       act = b.dataset.a;
       sheet.querySelectorAll('.span.act').forEach(
         x => x.classList.toggle('on', x.dataset.a === act));
+      // Turning lamps off has no brightness and no colour to choose.
+      sheet.querySelector('.hookctl').classList.toggle('dim', act === 'off');
+      ctl.paint();
     };
   });
   sheet.querySelectorAll('.span:not(.act)').forEach(b => {
@@ -6862,7 +6933,7 @@ function editHook(h) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ switch: h.node, bulbs: want,
-                               seconds: secs, action: act })
+                               seconds: secs, action: act, ...val })
       })).json();
       if (j.error) {
         sheet.innerHTML = `<h2>webhook</h2><div class="failed">${esc(j.error)}</div>`;
