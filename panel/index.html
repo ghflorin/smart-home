@@ -1544,6 +1544,34 @@
   }
   .hk-ct.grabbed .hk-knob { transition: none; }
 
+  /* How long, as a row of chips. Same shape as the tile-size selector in the
+     toolbar, because it is the same kind of choice: a few fixed answers where
+     one is always current. */
+  .spans {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 2px 0 12px;
+  }
+  .spans .span {
+    font: inherit;
+    font-size: 11px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    background: var(--sunken);
+    border: 1px solid var(--line-hi);
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+  }
+  .spans .span:hover { color: var(--ink); border-color: var(--ink-faint); }
+  .spans .span.on {
+    color: var(--on-amber);
+    background: var(--amber);
+    border-color: var(--amber);
+  }
+
   /* The address, in the webhook's own sheet. It is long, it must be readable
      character by character, and it must not reflow into something that looks
      like two addresses - hence the scroll rather than a wrap. */
@@ -4831,12 +4859,21 @@ function openBulb(b) {
 
   const list = sheet.querySelector('#drivers');
   const driverRows = sheetList(list, 'controlled by');
-  if (drivers.length) {
-    drivers.forEach(sw => driverRows.append(
-      linkRow(sw.name, () => openSwitch(sw), '', sw.where, ICONS.switch)));
-  } else {
+  drivers.forEach(sw => driverRows.append(
+    linkRow(sw.name, () => openSwitch(sw), '', sw.where, ICONS.switch)));
+  // A webhook drives a lamp exactly as a switch does, and this list is the only
+  // place the panel answers "why did that light come on". Leaving them out made
+  // the answer wrong rather than incomplete.
+  const hookDrivers = (state.hooks || []).filter(
+    h => (h.bulbs || []).some(n => String(n) === String(b.node)));
+  hookDrivers.forEach(h => driverRows.append(
+    linkRow(h.name, () => editHook(h),
+            `${h.action === 'off' ? 'off' : 'on'} ${spanLabel(
+              typeof h.seconds === 'number' ? h.seconds : 5)}`,
+            h.where, ICONS.bolt)));
+  if (!drivers.length && !hookDrivers.length) {
     list.insertAdjacentHTML('beforeend',
-      '<div class="empty">no switch is bound to this bulb</div>');
+      '<div class="empty">nothing is bound to this bulb</div>');
   }
   sheetListDone(list);
 
@@ -6649,6 +6686,29 @@ async function copyHookUrl(h, q) {
   }
 }
 
+/* How long the lamps stay up, and the one that means "do not come back".
+ *
+ * Presets rather than a number field: this is a decision with about five real
+ * answers - long enough to startle, long enough to walk to the door, or a porch
+ * light - and a free number invites an argument with yourself about whether 7
+ * is better than 5.
+ */
+const HOOK_SPANS = [
+  { s: 5, label: '5s' },
+  { s: 15, label: '15s' },
+  { s: 60, label: '1m' },
+  { s: 300, label: '5m' },
+  { s: 900, label: '15m' },
+  { s: 0, label: 'always' },
+];
+
+function spanLabel(secs) {
+  const hit = HOOK_SPANS.find(x => x.s === secs);
+  if (hit) { return hit.label; }
+  if (!secs) { return 'always'; }
+  return secs >= 60 ? `${Math.round(secs / 60)}m` : `${Math.round(secs)}s`;
+}
+
 /* A webhook, as a tile.
  *
  * It sits with the switches and the remotes because it is one: a thing that is
@@ -6660,12 +6720,18 @@ async function copyHookUrl(h, q) {
  */
 function hookOpts(h) {
   const n = (h.bulbs || []).length;
+  const secs = typeof h.seconds === 'number' ? h.seconds : 5;
   return {
     node: h.node,
     icon: ICONS.bolt,
     cls: '',
     name: h.name,
-    state: n ? `${n} bulb${n === 1 ? '' : 's'}` : 'switches nothing yet',
+    // What it drives AND for how long: the second half is the thing you would
+    // otherwise have to open the sheet to remember, and it is the half that
+    // decides whether this is a deterrent or a porch light.
+    state: n ? `${n} bulb${n === 1 ? '' : 's'} \u00b7 ${h.action === 'off' ? 'off' : 'on'}`
+               + ` ${spanLabel(secs)}`
+             : 'drives nothing yet',
     quickTitle: 'copy the address \u2014 ' + (h.url || ''),
     onQuick: q => copyHookUrl(h, q),
     openTitle: 'what ' + h.name + ' switches on',
@@ -6676,6 +6742,8 @@ function hookOpts(h) {
 function editHook(h) {
   const bulbs = state.devices.bulbs || [];
   const sheet = $('#sheet');
+  let secs = typeof h.seconds === 'number' ? h.seconds : 5;
+  let act = h.action === 'off' ? 'off' : 'on';
   sheet.innerHTML = `<h2></h2>
     <div class="who"></div>
     <div class="hookurl">
@@ -6684,7 +6752,24 @@ function editHook(h) {
     </div>
     <p class="note">POST here. The body does not matter, so a camera can send
       whatever it likes; if it sends a name, that name goes in the log.</p>
-    <div class="section-label btn-sec"><span>switches on for a few seconds</span>
+    <div class="section-label btn-sec"><span>what it does</span>
+      <span class="rule"></span></div>
+    <div class="spans">
+      <button type="button" class="span act${act === 'on' ? ' on' : ''}"
+              data-a="on">turn on</button>
+      <button type="button" class="span act${act === 'off' ? ' on' : ''}"
+              data-a="off">turn off</button>
+    </div>
+    <div class="section-label btn-sec"><span>for how long</span>
+      <span class="rule"></span></div>
+    <div class="spans">${HOOK_SPANS.map(x => `
+      <button type="button" class="span${x.s === secs ? ' on' : ''}"
+              data-s="${x.s}">${x.label}</button>`).join('')}</div>
+    <p class="note">On means full brightness. A span puts every lamp back
+      exactly as it was afterwards; <b>always</b> leaves them where it put them
+      \u2014 and when that is on, it holds them there against the schedule until
+      somebody switches them off.</p>
+    <div class="section-label btn-sec"><span>switches on</span>
       <span class="rule"></span></div>
     <div class="pick">${renderPick(bulbs, new Set(h.bulbs || []), h.where, 'no bulbs')}</div>
     <button class="go">save</button>
@@ -6694,6 +6779,21 @@ function editHook(h) {
   sheet.querySelector('.who').textContent = 'webhook'
     + (h.where ? ` \u00b7 ${h.where}` : '');
   $('#overlay').classList.add('on');
+
+  sheet.querySelectorAll('.span.act').forEach(b => {
+    b.onclick = () => {
+      act = b.dataset.a;
+      sheet.querySelectorAll('.span.act').forEach(
+        x => x.classList.toggle('on', x.dataset.a === act));
+    };
+  });
+  sheet.querySelectorAll('.span:not(.act)').forEach(b => {
+    b.onclick = () => {
+      secs = Number(b.dataset.s);
+      sheet.querySelectorAll('.span:not(.act)').forEach(x => x.classList.toggle(
+        'on', Number(x.dataset.s) === secs));
+    };
+  });
 
   sheet.querySelector('.hookdel').onclick = async (e) => {
     const btn = e.target;
@@ -6743,7 +6843,8 @@ function editHook(h) {
       const j = await (await api('/api/bindings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ switch: h.node, bulbs: want })
+        body: JSON.stringify({ switch: h.node, bulbs: want,
+                               seconds: secs, action: act })
       })).json();
       if (j.error) {
         sheet.innerHTML = `<h2>webhook</h2><div class="failed">${esc(j.error)}</div>`;
