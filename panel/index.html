@@ -3201,9 +3201,13 @@ const ICONS = {
 
   // A bolt: something outside the house reached in and made this happen. It is
   // the one thing on the page that is not commanded by a person or a clock.
-  bolt: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+  // The webhook mark: three nodes, each line running into a hook round the
+  // next. Paths from Lucide's "webhook" (lucide.dev, ISC licence).
+  webhook: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
     stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M13.4 2.8 5.6 13.6h5.1l-.9 7.6 7.9-10.9h-5.2Z"/></svg>`,
+    <path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2"/>
+    <path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06"/>
+    <path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8"/></svg>`,
 
   // The mark the filter in the header wears, which is the mark on the tiles it
   // filters to - the button says what you will get rather than "a filter".
@@ -5662,7 +5666,7 @@ function openBulb(b) {
     linkRow(h.name, () => editHook(h),
             `${h.action === 'off' ? 'off' : 'on'} ${spanLabel(
               typeof h.seconds === 'number' ? h.seconds : 5)}`,
-            h.where, ICONS.bolt)));
+            h.where, ICONS.webhook)));
   if (!drivers.length && !hookDrivers.length) {
     list.insertAdjacentHTML('beforeend',
       '<div class="empty">nothing is bound to this bulb</div>');
@@ -7521,7 +7525,7 @@ function hookOpts(h) {
   const secs = typeof h.seconds === 'number' ? h.seconds : 5;
   return {
     node: h.node,
-    icon: ICONS.bolt,
+    icon: ICONS.webhook,
     cls: '',
     name: h.name,
     // What it drives AND for how long: the second half is the thing you would
