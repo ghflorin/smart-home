@@ -5157,6 +5157,38 @@ function bulbControl(root, opts) {
   // away from a newer one still in the air or under the finger.
   let gesture = 0;
 
+  /* After a command, what was asked stays on the screen until the lamp says
+   * the same. A lamp switching on reports "on" first and its level after, and
+   * one switched off a moment ago still has the schedule's come-up level in
+   * it, so drawing each report as it arrived had the panel jump to 100%, drop
+   * to nothing and climb back to the value already set. Three seconds, and
+   * the lamp's own word wins, whatever it is. */
+  let hold = null;
+  const HOLD_MS = 3000;
+  const clearAsked = () => { dragLvl = null; dragCt = null; dragCol = null; swPending = null; };
+  const hueNear = (a, b, d) => Math.abs(((a ?? -99) - b + 381) % 254 - 127) <= d;
+  // Near enough counts: a lamp asked for 370 mireds reports 369.
+  const swatchIs = (x, cur) => {
+    if (x.kind === 'adaptive') { return !!cur.adaptive; }
+    if (cur.adaptive) { return false; }
+    if (x.kind === 'ct') { return cur.colorMode !== 0 && Math.abs((cur.mireds || 0) - x.m) <= 6; }
+    if (x.kind === 'hs') {
+      return cur.colorMode === 0 && hueNear(cur.hue, x.hue, 6)
+        && Math.abs((cur.sat ?? 0) - x.sat) <= 30;
+    }
+    return false;
+  };
+  const agrees = cur => {
+    if (dragLvl !== null && (dragLvl === 0 ? cur.on !== false
+        : cur.on !== true || Math.abs(cur.norm - dragLvl) > 0.03)) { return false; }
+    if (dragCt !== null
+        && (cur.colorMode === 0 || Math.abs((cur.mireds || 0) - dragCt) > 4)) { return false; }
+    if (dragCol !== null && (cur.colorMode !== 0 || !hueNear(cur.hue, dragCol.hue, 3)
+        || Math.abs((cur.sat ?? 0) - dragCol.sat) > 6)) { return false; }
+    if (swPending !== null && !swatchIs(swPending, cur)) { return false; }
+    return true;
+  };
+
   /* The strip's travel is THIS lamp's range, not the Matter range.
    *
    * The spec allows 153..500 mireds; a lamp here reports 153..454 and silently
@@ -5212,6 +5244,7 @@ function bulbControl(root, opts) {
       b.onclick = () => {
         if (x.kind === 'custom') { if (opts.onPicker) { opts.onPicker(); } return; }
         gesture++;
+        hold = null;
         swPending = x;
         paint();
         if (x.kind === 'adaptive') { settle(opts.onAdaptive); return; }
@@ -5229,15 +5262,7 @@ function bulbControl(root, opts) {
     let hit = false;
     swBox.querySelectorAll('.sw').forEach(b => {
       const x = b._x;
-      let on = false;
-      if (swPending) { on = x === swPending; }
-      else if (x.kind === 'adaptive') { on = !!cur.adaptive; }
-      else if (!cur.adaptive && x.kind === 'ct') {
-        on = cur.colorMode !== 0 && Math.abs((cur.mireds || 0) - x.m) <= 6;
-      } else if (!cur.adaptive && x.kind === 'hs') {
-        const dh = Math.abs(((cur.hue ?? -99) - x.hue + 381) % 254 - 127);
-        on = cur.colorMode === 0 && dh <= 6 && Math.abs((cur.sat ?? 0) - x.sat) <= 30;
-      }
+      const on = swPending ? x === swPending : x.kind !== 'custom' && swatchIs(x, cur);
       if (on) { hit = true; }
       b.classList.toggle('on', on);
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -5266,6 +5291,7 @@ function bulbControl(root, opts) {
 
   const paint = () => {
     const cur = opts.read();
+    if (hold && agrees(cur)) { hold = null; clearAsked(); }
     const on = cur.on === true;
     const dark = cur.on === false;
     paintSwatches(cur);
@@ -5327,14 +5353,21 @@ function bulbControl(root, opts) {
 
   // The drag is held until the commit resolves, then cleared. Clearing it first
   // would show the old reading for as long as the write took.
+  // A command that failed lets go at once - there is nothing to wait for.
   const settle = async (fn, arg) => {
     const g = gesture;
-    try { if (fn) { await fn(arg); } } finally {
+    let ok = true;
+    try { if (fn) { ok = (await fn(arg)) !== false; } } catch (err) { ok = false; } finally {
       if (g === gesture) {
-        dragLvl = null;
-        dragCt = null;
-        dragCol = null;
-        swPending = null;
+        if (ok) {
+          hold = { g };
+          setTimeout(() => {
+            if (hold && hold.g === g) { hold = null; clearAsked(); paintStrip(); paint(); }
+          }, HOLD_MS);
+        } else {
+          hold = null;
+          clearAsked();
+        }
       }
       paintStrip();
       paint();
@@ -5363,6 +5396,7 @@ function bulbControl(root, opts) {
     el.onpointerdown = ev => {
       ev.preventDefault();
       gesture++;
+      hold = null;
       startY = ev.clientY;
       el.setPointerCapture(ev.pointerId);
       at(ev);
@@ -5424,6 +5458,7 @@ function bulbControl(root, opts) {
   wheel.onpointerdown = ev => {
     ev.preventDefault();
     gesture++;
+    hold = null;
     wheel.setPointerCapture(ev.pointerId);
     wheel.classList.add('grabbed');
     wheelAt(ev);
@@ -5580,8 +5615,8 @@ function openBulb(b) {
         body: JSON.stringify({ node: b.node, endpoint: b.endpoint ?? 1, ...payload })
       })).json();
     } catch (err) { j = { error: String(err) }; }
-    if (j.error) { return setStatus(j.error, 'err'); }
-    if (mine !== sent) { return; }
+    if (j.error) { setStatus(j.error, 'err'); return false; }
+    if (mine !== sent) { return true; }
     // The explanation goes first. Adopting the new state repaints the controls,
     // and the whole point is that the message is already there when they move.
     if (tookoverNow(b.node, j.on)) {

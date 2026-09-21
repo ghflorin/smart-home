@@ -5264,10 +5264,14 @@ class Handler(BaseHTTPRequestHandler):
                     log(f"bulb {node}: read-back failed: {exc}", "warn")
                     break
                 st = state_of(node)
+                # A level goes out as MoveToLevelWithOnOff, so it is done when
+                # the lamp is ON at that level. "Off" used to count as done as
+                # well, which answered a tap on a lamp switched off a moment
+                # before with the state it was leaving: still off.
                 settled = (
                     (want_on is None or st.get("on") is want_on)
-                    and (asked is None or st.get("on") is False
-                         or st.get("level") == asked)
+                    and (asked is None
+                         or (st.get("on") is True and st.get("level") == asked))
                     and (asked_ct is None or st.get("mireds") == asked_ct)
                     and (asked_hs is None
                          or (st.get("colorMode") == 0
