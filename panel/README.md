@@ -1119,6 +1119,13 @@ The settings behind the gear and the colour picker are a sheet over the sheet,
 as iOS stacks them. It rises from the bottom of the screen; the card underneath
 sinks back and dims, and a strip of it stays in sight above the new sheet. The
 sheet is the card's width and reaches down at least as far as the card did.
+When it needs more room than there is below the card — a webhook's settings
+over its short page — the card goes up towards the top of the screen to make
+it.
+
+They stack. A webhook's colour picker is opened from inside its settings, so it
+comes up over the settings, which sink back under it the way the card sinks
+under them; taking the picker down leaves the settings where they were.
 
 **It is dragged, and thrown.** The grabber strip — and the panel's title, while
 the panel is scrolled to its top — carries the sheet with the finger, and the

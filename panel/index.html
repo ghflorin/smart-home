@@ -1613,6 +1613,18 @@
     color: var(--ink-dim);
   }
   .hookurl .hact { flex: none; }
+  /* The method, said where the address is: a camera set to GET gets nothing. */
+  .hookurl .verb {
+    flex: none;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    padding: 7px 8px;
+    border-radius: 8px;
+    color: var(--link);
+    background: color-mix(in srgb, var(--link) 12%, transparent);
+  }
+  .sheet button.go.hooktest { margin-top: 12px; }
   .sheet .note {
     font-size: 11px;
     line-height: 1.5;
@@ -2268,6 +2280,16 @@
     overscroll-behavior: contain;
   }
   .sub-body .pg-head { touch-action: none; }
+  /* A layer's own dim, for when another sheet comes up over it. */
+  .subdim {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    border-radius: inherit;
+    background: #000;
+    opacity: 0;
+    pointer-events: none;
+  }
   /* Its own formatting context, so a last child's margin is measured with it. */
   .pg-panel { display: flow-root; }
 
@@ -2936,16 +2958,6 @@
             aria-label="close">&times;</button>
     <div class="sheet" id="sheet"></div>
     <div class="sheetdim" id="sheetdim"></div>
-  </div>
-  <!-- Settings and the colour picker: a sheet over the sheet. The body carries
-       the .sheet class so everything styled for a sheet's contents applies. -->
-  <div class="subsheet" id="subsheet" role="dialog" aria-modal="true" hidden>
-    <div class="sub-head">
-      <span class="grab" aria-hidden="true"></span>
-      <button type="button" class="sheet-x sub-x" title="close"
-              aria-label="close">&times;</button>
-    </div>
-    <div class="sub-body sheet"></div>
   </div>
 </div>
 
@@ -4546,150 +4558,192 @@ function pagedSheet(main, settings, picker) {
   </div>`;
 }
 
-/* The sheet over the sheet.
+/* Sheets over the sheet.
+ *
+ * A stack: the settings come up over the card, and a colour picker opened
+ * from inside the settings - a webhook's - comes up over the settings. Each
+ * layer sits on the one below, which sinks back and dims under it exactly as
+ * the card does under the first.
  *
  * The panel is moved, not copied: its buttons were wired where it was built,
  * and everything that holds a reference to one of them - the colour control,
  * the firmware box, the remove button - keeps holding it. It goes back into
- * the card, hidden, when the sheet comes down.
+ * the card, hidden, when its sheet comes down.
  *
- * Geometry is the card's, read without its transform: the same width, its top
- * a strip below where the sunk card's top edge ends up, and down as far as
- * the card went or the panel needs, whichever is more, short of the bottom of
- * the screen. */
-const SUB = { panel: null, home: null, back: null, watch: null };
-const SUB_SINK = .06;          // how much smaller the card gets underneath
-const SUB_PEEK = 18;           // px of the sunk card left in sight above
+ * Geometry is the layer below's, read without its transform: the same width,
+ * its top a strip below where that layer's sunk top edge ends up, and down as
+ * far as that layer went or the panel needs, whichever is more, short of the
+ * bottom of the screen. */
+const SUBS = [];               // open layers, bottom first
+const SUB_SINK = .06;          // how much smaller a layer gets underneath
+const SUB_PEEK = 18;           // px of it left in sight above the next
 const SUB_DIM = .22;
 
-function subRecede(q) {
-  const wrap = $('#sheetwrap');
-  wrap.style.transform = q ? `scale(${1 - SUB_SINK * q})` : '';
-  const dim = $('#sheetdim');
-  dim.style.opacity = String(SUB_DIM * q);
-  dim.style.pointerEvents = q ? 'auto' : 'none';
+// What layer i sits on: the card, or the layer below it.
+function subUnder(i) {
+  if (i === 0) { return { el: $('#sheetwrap'), dim: $('#sheetdim'), body: $('#sheet') }; }
+  const u = SUBS[i - 1].el;
+  return { el: u, dim: u.querySelector('.subdim'), body: u.querySelector('.sub-body') };
 }
 
-function placeSub() {
-  const sub = $('#subsheet');
-  const wrap = $('#sheetwrap');
-  const body = sub.querySelector('.sub-body');
-  const top = wrap.offsetTop + Math.round(wrap.offsetHeight * SUB_SINK / 2) + SUB_PEEK;
+// Sunk by q (0..1), and lifted by `lift` px when the sheet above needed the
+// room: a long sheet over a short card takes the card up to the top of the
+// screen with it, as the sheet underneath sits at the top in iOS.
+const subPose = (q, lift) => (q ? `translateY(${-(lift || 0) * q}px) scale(${1 - SUB_SINK * q})`
+                                : 'none');
+
+function subRecede(u, q, lift) {
+  u.el.style.transform = q ? subPose(q, lift) : '';
+  u.dim.style.opacity = String(SUB_DIM * q);
+  u.dim.style.pointerEvents = q ? 'auto' : 'none';
+}
+
+function makeSub(i) {
+  const el = document.createElement('div');
+  el.className = 'subsheet';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-modal', 'true');
+  el.style.zIndex = String(4 + 2 * i);
+  el.innerHTML = `<div class="sub-head">
+      <span class="grab" aria-hidden="true"></span>
+      <button type="button" class="sheet-x sub-x" title="close"
+              aria-label="close">&times;</button>
+    </div>
+    <div class="sub-body sheet"></div>
+    <div class="subdim"></div>`;
+  $('#overlay').append(el);
+  wireSubDrag(el);
+  return el;
+}
+
+function placeSub(L) {
+  const i = SUBS.indexOf(L);
+  if (i < 0) { return; }
+  const u = subUnder(i).el;
+  const el = L.el;
+  const body = el.querySelector('.sub-body');
+  const H = $('#overlay').clientHeight;
   // Measured on the panel, not the body: a body never reports less than its
   // own height, so the last sheet's size would have been this one's floor.
   const bs = getComputedStyle(body);
-  const need = sub.querySelector('.sub-head').offsetHeight
-    + (SUB.panel ? SUB.panel.offsetHeight : 0)
+  const need = el.querySelector('.sub-head').offsetHeight + L.panel.offsetHeight
     + parseFloat(bs.paddingTop) + parseFloat(bs.paddingBottom) + 2;
-  const room = $('#overlay').clientHeight - top - 20;
-  const cover = wrap.offsetTop + wrap.offsetHeight - top;
-  sub.style.left = wrap.offsetLeft + 'px';
-  sub.style.width = wrap.offsetWidth + 'px';
-  sub.style.top = top + 'px';
-  sub.style.height = Math.max(120, Math.min(room, Math.max(cover, need))) + 'px';
-}
-
-function subAnimsDone() {
-  [$('#subsheet'), $('#sheetwrap'), $('#sheetdim')].forEach(
-    el => el.getAnimations().forEach(x => x.cancel()));
+  let top = u.offsetTop + Math.round(u.offsetHeight * SUB_SINK / 2) + SUB_PEEK;
+  // Short of room below, the layer underneath goes up to make it - as far as
+  // the top of the screen and no further.
+  const short = top + need - (H - 20);
+  L.lift = short > 0 ? Math.min(short, Math.max(0, u.offsetTop - 20)) : 0;
+  top -= L.lift;
+  const room = H - top - 20;
+  const cover = u.offsetTop - L.lift + u.offsetHeight - top;
+  el.style.left = u.offsetLeft + 'px';
+  el.style.width = u.offsetWidth + 'px';
+  el.style.top = top + 'px';
+  el.style.height = Math.max(120, Math.min(room, Math.max(cover, need))) + 'px';
 }
 
 function openPanel(sheet, which) {
   const panel = sheet.querySelector(which === 'set' ? '.pg-set' : '.pg-pick');
-  if (!panel) { return; }
-  if (SUB.panel) { closePanel(true); }
-  const sub = $('#subsheet');
-  const body = sub.querySelector('.sub-body');
-  SUB.panel = panel;
-  SUB.home = panel.parentNode;
-  SUB.back = which === 'set' ? sheet.querySelector('.gear') : sheet.querySelector('.sw.custom');
+  if (!panel) { return; }                 // already up
+  const i = SUBS.length;
+  const el = makeSub(i);
+  const body = el.querySelector('.sub-body');
+  const u = subUnder(i);
+  const L = {
+    el, panel, home: panel.parentNode, watch: null,
+    back: $('#overlay').querySelector(which === 'set' ? '.gear' : '.sw.custom'),
+  };
+  SUBS.push(L);
   panel.hidden = false;
   body.append(panel);
-  body.scrollTop = 0;
-  sub.hidden = false;
-  $('#sheet').inert = true;
-  placeSub();
+  u.body.inert = true;
+  placeSub(L);
   // Late arrivals - the firmware check, the schedule row - get room.
-  SUB.watch = new ResizeObserver(() => { if (SUB.panel) { placeSub(); } });
-  SUB.watch.observe(panel);
-  sub.querySelector('.sub-x').focus({ preventScroll: true });
-
-  subAnimsDone();
-  sub.style.transform = '';
-  subRecede(1);
+  L.watch = new ResizeObserver(() => {
+    placeSub(L);
+    if (!L.dragging && !u.el.getAnimations().length) { subRecede(u, 1, L.lift); }
+  });
+  L.watch.observe(panel);
+  el.querySelector('.sub-x').focus({ preventScroll: true });
+  subRecede(u, 1, L.lift);
   if (reducedMotion()) { return; }
   const o = { duration: 460, easing: SHEET_EASE_OPEN };
-  const from = $('#overlay').clientHeight - sub.offsetTop;
-  sub.animate([{ transform: `translateY(${from}px)` }, { transform: 'none' }], o);
-  $('#sheetwrap').animate([{ transform: 'none' },
-                           { transform: `scale(${1 - SUB_SINK})` }], o);
-  $('#sheetdim').animate([{ opacity: 0 }, { opacity: SUB_DIM }], o);
+  const from = $('#overlay').clientHeight - el.offsetTop;
+  el.animate([{ transform: `translateY(${from}px)` }, { transform: 'none' }], o);
+  u.el.animate([{ transform: 'none' }, { transform: subPose(1, L.lift) }], o);
+  u.dim.animate([{ opacity: 0 }, { opacity: SUB_DIM }], o);
 }
 
-/* Down it goes: from wherever it is now - a finger may have it half-way - at a
- * given speed. `v` is the finger's, in px/ms, so a throw carries on at the
- * speed it was thrown; the curve starts three times steeper than its average,
- * which is where the duration comes from. */
+/* The top sheet down: from wherever it is now - a finger may have it half-way
+ * - at a given speed. `v` is the finger's, in px/ms, so a throw carries on at
+ * the speed it was thrown; the curve starts three times steeper than its
+ * average, which is where the duration comes from. */
 function closePanel(instant, from = 0, v = 0) {
-  if (!SUB.panel) { return false; }
-  const sub = $('#subsheet');
-  const { panel, home, back } = SUB;
-  SUB.panel = null;
-  if (SUB.watch) { SUB.watch.disconnect(); SUB.watch = null; }
+  const i = SUBS.length - 1;
+  if (i < 0) { return false; }
+  const u = subUnder(i);
+  const L = SUBS.pop();
+  if (L.watch) { L.watch.disconnect(); }
+  const el = L.el;
   const finish = () => {
-    subAnimsDone();
-    sub.hidden = true;
-    sub.style.transform = '';
-    subRecede(0);
-    $('#sheet').inert = false;
-    if (home && home.isConnected) {
-      panel.hidden = true;
-      home.append(panel);
-      if (back && back.isConnected) { back.focus({ preventScroll: true }); }
+    [el, u.el, u.dim].forEach(x => x.getAnimations().forEach(a => a.cancel()));
+    subRecede(u, 0);
+    u.body.inert = false;
+    if (L.home && L.home.isConnected) {
+      L.panel.hidden = true;
+      L.home.append(L.panel);
+      if (L.back && L.back.isConnected) { L.back.focus({ preventScroll: true }); }
     } else {
-      panel.remove();
+      L.panel.remove();
     }
+    el.remove();
   };
   if (instant || reducedMotion()) { finish(); return true; }
-  const q0 = 1 - Math.max(0, Math.min(1, from / sub.offsetHeight));
-  const dist = $('#overlay').clientHeight - sub.offsetTop - from;
+  const q0 = 1 - Math.max(0, Math.min(1, from / el.offsetHeight));
+  const dist = $('#overlay').clientHeight - el.offsetTop - from;
   const dur = v > 0.05 ? Math.max(200, Math.min(420, 3 * dist / v)) : 320;
   const ease = v > 0.05 ? 'cubic-bezier(.2, .6, .4, 1)' : SHEET_EASE_CLOSE;
   const o = { duration: dur, easing: ease, fill: 'forwards' };
-  subAnimsDone();
-  sub.animate([{ transform: `translateY(${from}px)` },
-               { transform: `translateY(${from + dist}px)` }], o)
+  [el, u.el, u.dim].forEach(x => x.getAnimations().forEach(a => a.cancel()));
+  el.animate([{ transform: `translateY(${from}px)` },
+              { transform: `translateY(${from + dist}px)` }], o)
     .finished.then(finish).catch(() => {});
-  $('#sheetwrap').animate([{ transform: `scale(${1 - SUB_SINK * q0})` },
-                           { transform: 'none' }], o);
-  $('#sheetdim').animate([{ opacity: SUB_DIM * q0 }, { opacity: 0 }], o);
+  u.el.animate([{ transform: subPose(q0, L.lift) }, { transform: 'none' }], o);
+  u.dim.animate([{ opacity: SUB_DIM * q0 }, { opacity: 0 }], o);
   return true;
 }
 
+function closeAllPanels() {
+  while (SUBS.length) { closePanel(true); }
+}
+
 /* The grabber strip, and the panel's own title while the panel is scrolled to
- * its top, drag the sheet. Down follows the finger and the card comes back up
- * underneath in step; up gives a little and no more. Let go past a third of
+ * its top, drag the sheet. Down follows the finger and the layer underneath
+ * comes back up in step; up gives a little and no more. Let go past a third of
  * the way, or moving down faster than half a pixel a millisecond, and it is
- * thrown; otherwise it springs back. */
-function wireSubDrag() {
-  const sub = $('#subsheet');
+ * thrown; otherwise it springs back. Only the top sheet moves. */
+function wireSubDrag(sub) {
   const body = sub.querySelector('.sub-body');
   let drag = null;
   const down = ev => {
     if (ev.button !== 0 || ev.target.closest('button')) { return; }
     if (!ev.target.closest('.sub-head') && body.scrollTop > 0) { return; }
-    if (!SUB.panel) { return; }
+    const top = SUBS[SUBS.length - 1];
+    if (!top || top.el !== sub) { return; }
     ev.preventDefault();
     ev.currentTarget.setPointerCapture(ev.pointerId);
-    subAnimsDone();
-    drag = { el: ev.currentTarget, y0: ev.clientY, dy: 0, trail: [[ev.timeStamp, ev.clientY]] };
+    const u = subUnder(SUBS.length - 1);
+    [sub, u.el, u.dim].forEach(x => x.getAnimations().forEach(a => a.cancel()));
+    top.dragging = true;
+    drag = { el: ev.currentTarget, u, L: top, y0: ev.clientY, dy: 0,
+             trail: [[ev.timeStamp, ev.clientY]] };
   };
   const move = ev => {
     if (!drag) { return; }
     const raw = ev.clientY - drag.y0;
     drag.dy = raw >= 0 ? raw : raw / 5;
     sub.style.transform = `translateY(${drag.dy}px)`;
-    subRecede(1 - Math.max(0, Math.min(1, drag.dy / sub.offsetHeight)));
+    subRecede(drag.u, 1 - Math.max(0, Math.min(1, drag.dy / sub.offsetHeight)), drag.L.lift);
     drag.trail.push([ev.timeStamp, ev.clientY]);
     if (drag.trail.length > 8) { drag.trail.shift(); }
   };
@@ -4697,6 +4751,7 @@ function wireSubDrag() {
     if (!drag) { return; }
     const d = drag;
     drag = null;
+    d.L.dragging = false;
     if (d.el.hasPointerCapture(ev.pointerId)) { d.el.releasePointerCapture(ev.pointerId); }
     const last = d.trail[d.trail.length - 1];
     const first = d.trail.find(t => last[0] - t[0] <= 90) || last;
@@ -4709,12 +4764,12 @@ function wireSubDrag() {
     const q0 = 1 - Math.max(0, Math.min(1, d.dy / sub.offsetHeight));
     const o = { duration: 360, easing: 'cubic-bezier(.2, .9, .3, 1.12)' };
     sub.style.transform = '';
-    subRecede(1);
+    subRecede(d.u, 1, d.L.lift);
     if (reducedMotion()) { return; }
     sub.animate([{ transform: `translateY(${d.dy}px)` }, { transform: 'none' }], o);
-    $('#sheetwrap').animate([{ transform: `scale(${1 - SUB_SINK * q0})` },
-                             { transform: `scale(${1 - SUB_SINK})` }], o);
-    $('#sheetdim').animate([{ opacity: SUB_DIM * q0 }, { opacity: SUB_DIM }], o);
+    d.u.el.animate([{ transform: subPose(q0, d.L.lift) },
+                    { transform: subPose(1, d.L.lift) }], o);
+    d.u.dim.animate([{ opacity: SUB_DIM * q0 }, { opacity: SUB_DIM }], o);
   };
   for (const el of [sub.querySelector('.sub-head'), body]) {
     el.addEventListener('pointerdown', ev => {
@@ -4726,9 +4781,9 @@ function wireSubDrag() {
     el.addEventListener('pointercancel', up);
   }
   sub.querySelector('.sub-x').onclick = () => closePanel(false);
-  // The sunk card is the way back too, as the dimmed sheet behind is in iOS.
-  $('#sheetdim').onclick = () => closePanel(false);
-  addEventListener('resize', () => { if (SUB.panel) { placeSub(); } });
+  // The layer underneath is the way back too, as the dimmed sheet behind is
+  // in iOS: a tap on it takes the top sheet down.
+  sub.querySelector('.subdim').onclick = () => closePanel(false);
 }
 
 function wirePages(sheet, sub) {
@@ -7594,9 +7649,8 @@ function editHook(h) {
   const sheet = $('#sheet');
   let secs = typeof h.seconds === 'number' ? h.seconds : 5;
   let act = h.action === 'off' ? 'off' : 'on';
-  // The value the lamps become. Held here while the sheet is open and sent on
-  // save, so the control can be dragged about without a camera's worth of
-  // commands going out for a decision nobody has made yet.
+  // The value the lamps become. Kept here and saved as it changes; nothing is
+  // sent to a lamp until the webhook is called.
   const val = {
     level: typeof h.level === 'number' ? h.level : 254,
     mireds: typeof h.mireds === 'number' ? h.mireds : 370,
@@ -7606,15 +7660,19 @@ function editHook(h) {
     // brightness is the webhook's.
     colorMode: h.colorMode === 0 || h.colorMode === -1 ? h.colorMode : 2,
   };
+
+  /* The page is what a webhook is for: its address, and a way to try it. What
+   * it does, for how long, to which lamps and at what light is set once, in
+   * its settings - the same split as a bulb's sheet. */
   sheet.innerHTML = pagedSheet(`<h2></h2>
     <div class="who"></div>
-    ${identityRows()}
     <div class="hookurl">
+      <span class="verb" title="the camera calls it with POST">POST</span>
       <code>${esc(h.url || '')}</code>
       <button type="button" class="hact hookcopy">copy</button>
     </div>
-    <p class="note">POST here. The body does not matter, so a camera can send
-      whatever it likes; if it sends a name, that name goes in the log.</p>
+    <button type="button" class="go hooktest">test</button>`, `
+    ${identityRows()}
     <div class="section-label btn-sec"><span>what it does</span>
       <span class="rule"></span></div>
     <div class="spans">
@@ -7628,23 +7686,54 @@ function editHook(h) {
     <div class="spans">${HOOK_SPANS.map(x => `
       <button type="button" class="span${x.s === secs ? ' on' : ''}"
               data-s="${x.s}">${x.label}</button>`).join('')}</div>
-    <p class="note">On means full brightness. A span puts every lamp back
-      exactly as it was afterwards; <b>always</b> leaves them where it put them
-      \u2014 and when that is on, it holds them there against the schedule until
-      somebody switches them off.</p>
     <div class="section-label btn-sec"><span>to what</span>
       <span class="rule"></span></div>
-    <div class="hookctl">${BULB_CONTROL_HTML()}</div>
+    <div class="hookctl${act === 'off' ? ' dim' : ''}">${BULB_CONTROL_HTML()}</div>
     <div class="section-label btn-sec"><span>which lamps</span>
       <span class="rule"></span></div>
     <div class="pick">${renderPick(bulbs, new Set(h.bulbs || []), h.where, 'no bulbs')}</div>
-    <button class="go">save</button>
-    <button type="button" class="danger hookdel">remove this webhook</button>`,
-    null, BULB_PICKER_HTML());
+    <div class="removebox">
+      <button type="button" class="forget hookdel">remove</button>
+    </div>`, BULB_PICKER_HTML());
+  wirePages(sheet, `webhook · node ${h.node}`);
 
   wireIdentity(sheet, h);
   sheet.querySelector('.who').textContent = 'webhook';
   $('#overlay').classList.add('on');
+
+  // Everything in the settings is reached through the panel itself: it is
+  // moved into its own sheet when that comes up, and is no longer in #sheet.
+  const setP = sheet.querySelector('.pg-set');
+  const hookctl = setP.querySelector('.hookctl');
+  const acts = [...setP.querySelectorAll('.span.act')];
+  const spans = [...setP.querySelectorAll('.span:not(.act)')];
+
+  /* Saved as it changes, the way a setting is on a phone - a little after the
+   * last change, so dragging the brightness is one write and not twenty. */
+  let saveTimer = null;
+  let saving = null;
+  const save = async () => {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    const want = [...setP.querySelectorAll('.pick input:checked')].map(i => Number(i.value));
+    let j;
+    try {
+      j = await (await api('/api/bindings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ switch: h.node, bulbs: want,
+                               seconds: secs, action: act, ...val })
+      })).json();
+    } catch (err) { j = { error: String(err) }; }
+    if (j.error) { setStatus('not saved: ' + j.error, 'err'); return false; }
+    Object.assign(h, val, { bulbs: want, seconds: secs, action: act });
+    load();
+    return true;
+  };
+  const persist = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { saving = save(); }, 400);
+  };
 
   /* The same control a bulb's own sheet uses, over a stored value instead of a
    * live lamp. `on` is true because the value is what the lamps BECOME - a
@@ -7654,7 +7743,7 @@ function editHook(h) {
    * colour bulb in it gets a wheel, and the white strip travels only as far as
    * the narrowest of them can actually go. Offering travel no selected lamp
    * has is how a control ends up with a decorative third. */
-  const picked = () => [...sheet.querySelectorAll('.pick input:checked')]
+  const picked = () => [...setP.querySelectorAll('.pick input:checked')]
     .map(i => Number(i.value))
     .map(n => bulbs.find(x => x.node === n))
     .filter(Boolean);
@@ -7690,48 +7779,50 @@ function editHook(h) {
         ctHi: his.length ? Math.min(...his) : MIRED_MAX,
       };
     },
-    onLevel: v => { val.level = v; },
-    onMireds: m => { val.mireds = m; val.colorMode = 2; },
-    onColour: c => { val.hue = c.hue; val.sat = c.sat; val.colorMode = 0; },
-    onAdaptive: () => { val.colorMode = -1; },
+    onLevel: v => { val.level = v; persist(); },
+    onMireds: m => { val.mireds = m; val.colorMode = 2; persist(); },
+    onColour: c => { val.hue = c.hue; val.sat = c.sat; val.colorMode = 0; persist(); },
+    onAdaptive: () => { val.colorMode = -1; persist(); },
     onPicker: () => openPanel(sheet, 'pick'),
   });
 
   // Ticking a lamp can change what the control may offer, so it repaints.
-  sheet.querySelector('.pick').addEventListener('change', () => {
+  setP.querySelector('.pick').addEventListener('change', () => {
     ctl.paintStrip();
     ctl.paint();
+    persist();
   });
 
-  sheet.querySelectorAll('.span.act').forEach(b => {
+  acts.forEach(b => {
     b.onclick = () => {
       act = b.dataset.a;
-      sheet.querySelectorAll('.span.act').forEach(
-        x => x.classList.toggle('on', x.dataset.a === act));
+      acts.forEach(x => x.classList.toggle('on', x.dataset.a === act));
       // Turning lamps off has no brightness and no colour to choose.
-      sheet.querySelector('.hookctl').classList.toggle('dim', act === 'off');
+      hookctl.classList.toggle('dim', act === 'off');
       ctl.paint();
+      persist();
     };
   });
-  sheet.querySelectorAll('.span:not(.act)').forEach(b => {
+  spans.forEach(b => {
     b.onclick = () => {
       secs = Number(b.dataset.s);
-      sheet.querySelectorAll('.span:not(.act)').forEach(x => x.classList.toggle(
-        'on', Number(x.dataset.s) === secs));
+      spans.forEach(x => x.classList.toggle('on', Number(x.dataset.s) === secs));
+      persist();
     };
   });
 
-  sheet.querySelector('.hookdel').onclick = async (e) => {
-    const btn = e.target;
-    if (btn.dataset.sure !== '1') {
-      btn.dataset.sure = '1';
-      btn.textContent = 'really remove it?';
+  const del = setP.querySelector('.hookdel');
+  del.onclick = async () => {
+    if (del.dataset.sure !== '1') {
+      del.dataset.sure = '1';
+      del.textContent = 'really remove it?';
       setTimeout(() => {
-        if (btn.isConnected) { btn.dataset.sure = ''; btn.textContent = 'remove this webhook'; }
+        if (del.isConnected) { del.dataset.sure = ''; del.textContent = 'remove'; }
       }, 4000);
       return;
     }
-    btn.disabled = true;
+    del.disabled = true;
+    clearTimeout(saveTimer);
     try {
       await api('/api/hook', {
         method: 'POST',
@@ -7756,35 +7847,41 @@ function editHook(h) {
       sel.removeAllRanges();
       sel.addRange(range);
     }
-    e.target.textContent = ok ? 'copied' : 'selected \u2014 press \u2318C';
+    e.target.textContent = ok ? 'copied' : 'selected — press ⌘C';
     setTimeout(() => { e.target.textContent = 'copy'; }, 2500);
   };
 
-  sheet.querySelector('.go').onclick = async (e) => {
-    const btn = e.target;
-    btn.disabled = true;
-    btn.textContent = 'saving\u2026';
-    const want = [...sheet.querySelectorAll('.pick input:checked')].map(i => Number(i.value));
+  /* What a camera would do: POST to the address, here, now. Any change still
+   * waiting to be saved goes first, so the test is of what is on the screen.
+   * By path rather than by the printed address - the page may be open under
+   * another name for the same box, and a POST across names would be refused. */
+  const test = sheet.querySelector('.hooktest');
+  test.onclick = async () => {
+    test.disabled = true;
+    test.textContent = 'testing…';
+    if (saveTimer) { await save(); } else if (saving) { await saving; }
+    let j;
     try {
-      const j = await (await api('/api/bindings', {
+      j = await (await fetch(`/api/motion/${h.node}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ switch: h.node, bulbs: want,
-                               seconds: secs, action: act, ...val })
+        body: JSON.stringify({ name: 'test from the panel' })
       })).json();
-      if (j.error) {
-        sheet.innerHTML = `<h2>webhook</h2><div class="failed">${esc(j.error)}</div>`;
-        sheetOnClose = load;
-        return;
-      }
-    } catch (e2) {
-      sheet.innerHTML = `<h2>webhook</h2><div class="failed">${esc(String(e2))}</div>`;
-      sheetOnClose = load;
-      return;
+    } catch (err) { j = { error: String(err) }; }
+    test.disabled = false;
+    if (j.error) {
+      test.textContent = 'test';
+      return setStatus('test failed: ' + j.error, 'err');
     }
-    closeSheet();
-    load();
+    const n = (j.bulbs || h.bulbs || []).length;
+    test.textContent = 'sent';
+    setStatus(j.extended ? 'already running — made longer'
+      : `test sent — ${n} lamp${n === 1 ? '' : 's'} ${act} ${spanLabel(secs)}`, 'ok');
+    setTimeout(() => { if (test.isConnected) { test.textContent = 'test'; } }, 2500);
   };
+
+  // A change made just before closing is still saved.
+  sheetOnClose = () => { if (saveTimer) { save(); } };
 }
 
 function editRemote(sw) {
@@ -8472,8 +8569,8 @@ new MutationObserver(recs => {
 // not the end of the old one: stop closing, and bring it back to full size.
 new MutationObserver(() => {
   // A new page on the card - a link followed from the settings - takes the
-  // sheet over it away with the old page.
-  closePanel(true);
+  // sheets over it away with the old page.
+  closeAllPanels();
   if (!SHEET_CLOSING) { return; }
   SHEET_CLOSING.cancel();
   SHEET_CLOSING = null;
@@ -8492,9 +8589,9 @@ new MutationObserver(() => {
 }).observe($('#sheet'), { childList: true });
 
 function closeSheet() {
-  // The sheet over it first, at once: the card is about to shrink into its
+  // The sheets over it first, at once: the card is about to shrink into its
   // tile, and it should do that at its own size.
-  closePanel(true);
+  closeAllPanels();
   const after = sheetOnClose;
   sheetOnClose = null;
   SHEET_LIVE = null;
@@ -8643,7 +8740,8 @@ const closeTop = () => {
 };
 $('#sheet-x').onclick = closeTop;
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeTop(); });
-wireSubDrag();
+$('#sheetdim').onclick = () => closePanel(false);
+addEventListener('resize', () => SUBS.forEach(placeSub));
 
 // ---------- lock ----------
 //

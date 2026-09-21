@@ -30,10 +30,12 @@ count and the mark together — and the page is only the devices wearing it.
 **Brightness and colour follow the time of day.** The curve is yours to edit:
 drag a point, then save it for the whole house or for one lamp.
 
-**A camera can make a lamp answer.** A webhook is a tile like any other: it has
-a name, a room, an address to copy into whatever will be posting to it, and a
-list of lamps. POST to it — a camera that has seen movement, most likely — and
-those lamps do what it says for as long as it says, then go back to exactly
+**A camera can make a lamp answer.** A webhook is a tile like any other. Its
+page is its address — marked POST, with a copy button — and a **test** button
+that calls it the way a camera would; everything else is in its settings: a
+name, a room, what it does, for how long, to what and to which lamps, saved as
+you change them. POST to it — a camera that has seen movement, most likely —
+and those lamps do what it says for as long as it says, then go back to exactly
 what they were.
 
 Not off, because at the hour this matters a lamp is usually already on and
