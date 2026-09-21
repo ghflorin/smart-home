@@ -1514,6 +1514,10 @@
   }
   .hk-ico { width: 30px; height: 30px; color: var(--ink); opacity: .75; }
   .hk-ico svg { width: 100%; height: 100%; display: block; }
+  /* Struck through while the lamp is dark, and only then: the cut in the mask
+     and the line itself come and go together. */
+  .hk-lvl:not(.off) .hk-ico .cut,
+  .hk-lvl:not(.off) .hk-ico .slash { display: none; }
   .hk-pct {
     font-size: 15px;
     color: var(--ink);
@@ -4899,21 +4903,38 @@ function wireActions(sheet, dev, back) {
  * read() returns what to show when no finger is down:
  *   {on, norm, mireds, hue, sat, colorMode, held, adaptive, caption,
  *    canCt, canColour, ctLo, ctHi}
- * onLevel / onMireds / onColour / onAdaptive / onTap are what a gesture ends
- * in. They may be async: the drag is held until they resolve, so the control
+ * onLevel / onMireds / onColour / onAdaptive / onOff are what a gesture ends
+ * in; without onOff the level stops at the lowest light instead of off. They may be async: the drag is held until they resolve, so the control
  * does not snap back to a stale reading while the write is still in the air.
  * onPicker is the last preset, and brings the picker up.
  */
 // The first page: the brightness, alone, and the colours under it as presets -
 // Apple Home's layout. The strip and the wheel are the picker's own panel
 // (BULB_PICKER_HTML), and they have to be inside the same root.
+/* The panel's bulb, which is struck through while the lamp is dark. The line
+ * is cut out of the bulb on both sides, the way SF Symbols draws a slash, so
+ * it reads as a slash and not as one more stroke of the drawing. One copy per
+ * page - there is only ever one sheet - so the mask's id is safe. */
+const HK_BULB = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <mask id="hk-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+      <rect width="24" height="24" fill="#fff" stroke="none"/>
+      <path class="cut" d="M4 2.6 20 21.4" stroke="#000" stroke-width="4.6"/>
+    </mask>
+    <g mask="url(#hk-cut)">
+      <path d="M12 2.8a6.2 6.2 0 0 0-3.8 11.1c.6.5 1 1.2 1.1 1.9l.1.7h5.2l.1-.7c.1-.7.5-1.4 1.1-1.9A6.2 6.2 0 0 0 12 2.8Z"/>
+      <path d="M9.6 18.6h4.8"/><path d="M10.6 21.2h2.8"/>
+    </g>
+    <path class="slash" d="M4 2.6 20 21.4"/>
+  </svg>`;
+
 const BULB_CONTROL_HTML = () => `
     <div class="hk">
       <div class="hk-pad">
         <div class="hk-lvl" id="hk-lvl">
           <div class="hk-fill"></div>
           <div class="hk-face">
-            <span class="hk-ico">${ICONS.bulb}</span>
+            <span class="hk-ico">${HK_BULB}</span>
             <span class="hk-pct"></span>
           </div>
         </div>
@@ -5105,9 +5126,13 @@ function bulbControl(root, opts) {
     // Both controls, not just the brightness one. A dark lamp showing a full
     // blue-to-amber colour strip reads as live equipment - the one control
     // still in colour is the one the eye goes to, which is exactly backwards.
-    lvlBox.classList.toggle('off', !on);
+    // Lit follows the finger: pressing on a dark lamp's panel shows it coming
+    // on, and dragging to the bottom shows it going out, before either is
+    // sent.
+    const lit = dragLvl !== null ? dragLvl > 0 : on;
+    lvlBox.classList.toggle('off', !lit);
     ctBox.classList.toggle('off', !on);
-    hkBox.classList.toggle('off', !on);
+    hkBox.classList.toggle('off', !lit);
     fill.style.height = (v * 100).toFixed(1) + '%';
     fill.classList.toggle('full', v >= 0.995);
     pct.textContent = Math.round(v * 100) + '%';
@@ -5117,6 +5142,7 @@ function bulbControl(root, opts) {
     // hiding it there meant the one state you could not see was the one that
     // outlives the moment you set it.
     capL.textContent = cur.caption !== undefined ? cur.caption
+      : dragLvl === 0 ? 'off'
       : (cur.held ? (on ? 'on · held' : 'off · held')
                   : on ? 'on' : (cur.on === false ? 'off' : '—'));
     capL.title = cur.held
@@ -5166,41 +5192,37 @@ function bulbControl(root, opts) {
     }
   };
 
-  /* One gesture, two meanings, told apart by whether it moved.
-   *
-   * Drag the panel and it sets the value; press and let go without moving and
-   * it toggles the light. That is how the same control does both on a phone,
-   * and it is why there is no separate on/off pair here - two buttons whose job
-   * the big control already does, taking up the room the control wanted.
+  /* Where you press is the value, as in Apple Home: a tap lands the level
+   * there, and holding and dragging carries it with the finger. The panel used
+   * to toggle the lamp on a tap and set it only on a drag, which made the one
+   * gesture everybody tries first - touch the height you want - switch the
+   * light off instead. On and off without a new level is the tile's button;
+   * here, dragging all the way down is off.
    *
    * Sends on RELEASE. A control that fires while you drag puts a hundred
    * commands on the radio for one gesture and the bulb only shows the last. */
-  const SLOP = 12;
-  const grab = (el, set, commit, tap) => {
-    let moved = false;
-    let startY = 0;
-    el.onpointerdown = ev => {
-      ev.preventDefault();
-      moved = false;
-      startY = ev.clientY;
-      el.setPointerCapture(ev.pointerId);
-      el.classList.add('grabbed');
-    };
-    el.onpointermove = ev => {
-      if (!el.hasPointerCapture || !el.hasPointerCapture(ev.pointerId)) { return; }
-      if (!moved && Math.abs(ev.clientY - startY) < SLOP) { return; }
-      moved = true;
+  const grab = (el, set, commit) => {
+    const at = ev => {
       const r = el.getBoundingClientRect();
       set(Math.max(0, Math.min(1, (r.bottom - ev.clientY) / r.height)));
       paint();
     };
-    const up = ev => {
+    el.onpointerdown = ev => {
+      ev.preventDefault();
+      el.setPointerCapture(ev.pointerId);
+      el.classList.add('grabbed');
+      at(ev);
+    };
+    el.onpointermove = ev => {
+      if (!el.hasPointerCapture || !el.hasPointerCapture(ev.pointerId)) { return; }
+      at(ev);
+    };
+    el.onpointerup = ev => {
       if (!el.hasPointerCapture || !el.hasPointerCapture(ev.pointerId)) { return; }
       el.releasePointerCapture(ev.pointerId);
       el.classList.remove('grabbed');
-      if (moved) { commit(); } else if (tap) { tap(); }
+      commit();
     };
-    el.onpointerup = up;
     el.onpointercancel = ev => {
       if (el.hasPointerCapture && el.hasPointerCapture(ev.pointerId)) {
         el.releasePointerCapture(ev.pointerId);
@@ -5212,21 +5234,23 @@ function bulbControl(root, opts) {
     };
   };
 
+  // The very bottom is off, for a control that can switch a lamp off. The
+  // webhook's cannot - what it does is chosen above it - so there the floor
+  // is the lowest light.
+  const OFF_BELOW = 0.006;
   grab(lvlBox,
-       v => { dragLvl = Math.max(0.01, v); },
-       () => settle(opts.onLevel, levelFromPerceived(dragLvl)),
-       opts.onTap ? () => opts.onTap() : null);
+       v => { dragLvl = opts.onOff && v < OFF_BELOW ? 0 : Math.max(0.01, v); },
+       () => (dragLvl === 0 ? settle(opts.onOff)
+                            : settle(opts.onLevel, levelFromPerceived(dragLvl))));
   grab(ctBox,
        v => {
          const cur = opts.read();
          dragCt = Math.round(cur.ctHi - v * (cur.ctHi - cur.ctLo));
        },
-       () => settle(opts.onMireds, dragCt),
-       null);
+       () => settle(opts.onMireds, dragCt));
 
-  /* The wheel takes its value the moment it is touched, unlike the two sliders:
-   * there is nowhere on a disc that means "no change", so a press IS a value
-   * and there is nothing to tell apart. */
+  /* The wheel takes its value the moment it is touched, like the sliders:
+   * wherever the finger is, is the colour. */
   const wheelAt = ev => {
     const r = wheel.getBoundingClientRect();
     const dx = ev.clientX - (r.left + r.width / 2);
@@ -5385,7 +5409,7 @@ function openBulb(b) {
     onColour: c => send({ hue: c.hue, sat: c.sat }),
     onAdaptive: () => send({ adaptive: true }),
     onPicker: () => openPanel(sheet, 'pick'),
-    onTap: () => send({ action: 'toggle' }),
+    onOff: () => send({ action: 'off' }),
   });
   SHEET_LIVE = ctl.paint;
   SHEET_SAY = { node: b.node, say: sayTookover };
