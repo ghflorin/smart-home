@@ -463,11 +463,18 @@
   .grid[data-size="m"] { --tile: 158px; --ico: 44px; }
   .grid[data-size="l"] { --tile: 226px; --ico: 54px; }
 
+  /* One radius for a tile and the page it opens into. The page grows out of the
+     tile, and two different corners give the trick away at both ends of the
+     move - it stops being the tile getting bigger and becomes one box swapped
+     for another. The animation keeps the APPARENT radius at this value while
+     the card is scaled, too - see cardRadius. */
+  :root { --radius-card: 18px; }
+
   .tile {
     position: relative;
     overflow: hidden;              /* the level fill is clipped by the rounded edge */
     border: 1px solid var(--line-hi);
-    border-radius: 12px;
+    border-radius: var(--radius-card);
     background: linear-gradient(180deg, var(--panel-hi), var(--panel));
     padding: 14px;
     display: grid;
@@ -1193,9 +1200,12 @@
     justify-content: center;
     padding: 20px;
     z-index: 10;
-    animation: fade .2s ease;
   }
   #overlay.on { display: flex; }
+  /* The card is what moves; the scrim only fades. Transform on the wrapper so
+     the corner X travels with the sheet instead of waiting for it. */
+  .sheetwrap { transform-origin: 50% 50%; will-change: transform; }
+  .tile.ghost { transition: none; animation: none; will-change: transform, opacity; }
   @keyframes fade { from { opacity: 0; } }
 
   /* The wrapper carries the width. The X hangs off it rather than off the sheet
@@ -1214,7 +1224,7 @@
     --pad: 28px;
     background: var(--panel-hi);
     border: 1px solid var(--line-hi);
-    border-radius: 22px;
+    border-radius: var(--radius-card);
     width: 100%;
     padding: var(--pad);
     text-align: center;
@@ -2197,6 +2207,106 @@
     color: var(--ink);
     font-variant-numeric: tabular-nums;
   }
+  /* ---------- the two pages of a device sheet ----------
+     Apple Home's layout: the control alone on the first page, the settings a
+     page to the right. Only one page is in the flow at a time; during the
+     change the one leaving is lifted out so the two can pass each other. */
+  .pages { position: relative; }
+  .pages.moving { overflow: hidden; }
+  .pg { display: none; }
+  .pg.on, .pg.leaving { display: block; }
+  .pg.leaving {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    pointer-events: none;
+  }
+
+  /* The gear, where Apple puts it: the bottom corner of the control card. */
+  .pg-foot { display: flex; justify-content: flex-end; margin-top: 14px; }
+  .gear, .back {
+    width: 34px;
+    height: 34px;
+    padding: 7px;
+    border-radius: 50%;
+    border: 1px solid var(--line-hi);
+    background: var(--sunken);
+    color: var(--ink-dim);
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .gear svg, .back svg { width: 100%; height: 100%; display: block; }
+  .gear:hover, .back:hover { color: var(--ink); border-color: var(--ink-faint); }
+  .gear:focus-visible, .back:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+  .back { border-color: transparent; background: transparent; }
+
+  /* Back on the left, the title in the middle, as a navigation bar reads. */
+  .pg-head {
+    display: grid;
+    grid-template-columns: 34px 1fr 34px;
+    align-items: center;
+    row-gap: 2px;
+    margin: -6px 0 18px;
+  }
+  .pg-head .back { grid-row: 1; grid-column: 1; }
+  .pg-title {
+    grid-row: 1;
+    grid-column: 2;
+    font-size: 13px;
+    letter-spacing: .24em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+  .pg-sub {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  /* The actions as a grouped list, one row each - the shape of an accessory's
+     settings in Apple Home, and a better one for things you do once in a
+     while than a row of buttons competing for the eye. */
+  .sheet .pg-set .actions {
+    flex-direction: column;
+    gap: 0;
+    margin: 0 0 18px;
+    border: 1px solid var(--line-hi);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .sheet .pg-set .actions button {
+    flex: none;
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
+    gap: 12px;
+    padding: 14px 16px;
+    border: 0;
+    border-radius: 0;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+    text-align: left;
+  }
+  .sheet .pg-set .actions button:last-child { border-bottom: 0; }
+  .sheet .pg-set .actions button svg { width: 16px; height: 16px; }
+  .pg-set .links { margin-bottom: 18px; }
+
+  /* Remove, alone at the bottom, the one thing here that cannot be undone. */
+  .removebox { margin-top: 18px; }
+  /* Red from the start, as Apple draws Remove Accessory: the colour is the
+     warning, and it should not take a hover to find out. Armed, it fills. */
+  .sheet .removebox button.forget {
+    width: 100%;
+    color: var(--bad);
+    border-color: color-mix(in srgb, var(--bad) 35%, transparent);
+  }
+
   .sheet .actions { margin-top: 16px; }
   .sheet .actions button {
     display: inline-flex;
@@ -2923,6 +3033,19 @@ const ICONS = {
     <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
     <circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>`,
 
+  // The settings of a thing, in the place Apple Home keeps them.
+  gear: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="3.1"/>
+    <path d="M19.4 13.5a7.7 7.7 0 0 0 0-3l2-1.6-2-3.4-2.4.9a7.7 7.7 0 0 0-2.6-1.5L14 2.4h-4
+      l-.4 2.5A7.7 7.7 0 0 0 7 6.4l-2.4-.9-2 3.4 2 1.6a7.7 7.7 0 0 0 0 3l-2 1.6 2 3.4 2.4-.9
+      a7.7 7.7 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.7 7.7 0 0 0 2.6-1.5l2.4.9 2-3.4Z"/></svg>`,
+
+  // Back, as iOS draws it: a chevron and nothing else.
+  back: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M14.6 5.4 8 12l6.6 6.6"/></svg>`,
+
   // A bolt: something outside the house reached in and made this happen. It is
   // the one thing on the page that is not commanded by a person or a clock.
   bolt: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -3167,7 +3290,11 @@ function buildTile(o) {
     ev.stopPropagation();
     if (el._o.onQuick) { el._o.onQuick(q); }
   };
-  const open = () => { if (el._o.onOpen) { el._o.onOpen(); } };
+  const open = () => {
+    // The zoom starts from here, so it has to be known before the sheet is.
+    SHEET_ORIGIN = el;
+    if (el._o.onOpen) { el._o.onOpen(); }
+  };
   el.onclick = open;
   el.onkeydown = ev => {
     if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
@@ -4139,16 +4266,92 @@ async function identifySwitch(sw, q) {
 /* ---------- the settings sheet behind a tile ---------- */
 
 function sheetActions(dev, extra) {
-  // An icon each, in the same line-art as everything else. A row of four
-  // identical outlined words is read by reading all four; a row of glyphs is
-  // read at a glance, and these are the four you reach for most.
+  // An icon each, in the same line-art as everything else. On the settings
+  // page they read as a list, the way Apple Home lays out an accessory's
+  // settings: one row per thing you can do, glyph first.
   return `<div class="actions">${extra || ''}
     <button class="id">${ICONS.beacon}identify</button>
     <button class="inspect" type="button">${ICONS.table}properties</button>
     <button class="share">${ICONS.share}share</button>
-    <button class="forget" type="button">${ICONS.trash}remove</button>
+  </div>`;
+}
+
+/* Removing, on its own and last - where Apple Home puts "Remove Accessory". It
+ * sat in a row with identify and share, as though it were the same kind of
+ * thing; it is the one action here that cannot be taken back. */
+function sheetRemove() {
+  return `<div class="removebox">
+    <button class="forget" type="button">remove</button>
   </div>
   <div class="forget-note" hidden></div>`;
+}
+
+/* A device's sheet as two pages, the way Apple Home builds one.
+ *
+ * The first page is the thing itself - a lamp's control, a sensor's readings,
+ * a switch's lock and what it drives - and nothing else. Everything that is
+ * ABOUT the device rather than a use of it waits one tap away behind the gear:
+ * identifying it, its properties, sharing it to another home, its firmware,
+ * what it is wired to, and removing it. They were all on the first page, which
+ * made opening a lamp to dim it mean reading past four buttons about the lamp.
+ */
+function pagedSheet(main, settings) {
+  return `<div class="pages">
+    <section class="pg pg-main on">${main}
+      <div class="pg-foot">
+        <button type="button" class="gear" aria-label="settings"
+                title="settings">${ICONS.gear}</button>
+      </div>
+    </section>
+    <section class="pg pg-set" aria-hidden="true">
+      <div class="pg-head">
+        <button type="button" class="back" aria-label="back"
+                title="back">${ICONS.back}</button>
+        <span class="pg-title">settings</span>
+        <span class="pg-sub"></span>
+      </div>
+      ${settings}
+    </section>
+  </div>`;
+}
+
+/* Between the two pages, as iOS pushes a view: the new one comes in from the
+ * side while the old one slides a third of the way out and fades, and the card
+ * changes height to fit instead of jumping. */
+function goPage(sheet, to) {
+  const box = sheet.querySelector('.pages');
+  const from = box.querySelector('.pg.on');
+  const next = box.querySelector(to === 'set' ? '.pg-set' : '.pg-main');
+  if (!from || from === next) { return; }
+  const fwd = to === 'set';
+  const h0 = box.offsetHeight;
+  from.classList.remove('on');
+  from.classList.add('leaving');
+  from.setAttribute('aria-hidden', 'true');
+  next.classList.add('on');
+  next.removeAttribute('aria-hidden');
+  sheet.scrollTop = 0;
+  const done = () => from.classList.remove('leaving');
+  if (reducedMotion()) { done(); return; }
+  const h1 = box.offsetHeight;
+  const opts = { duration: 380, easing: SHEET_EASE_OPEN };
+  box.classList.add('moving');
+  box.animate([{ height: h0 + 'px' }, { height: h1 + 'px' }], opts)
+    .finished.then(() => box.classList.remove('moving')).catch(() => {});
+  next.animate([{ transform: `translateX(${fwd ? 100 : -30}%)`, opacity: fwd ? 1 : 0 },
+                { transform: 'none', opacity: 1 }], opts);
+  from.animate([{ transform: 'none', opacity: 1 },
+                { transform: `translateX(${fwd ? -30 : 100}%)`, opacity: fwd ? 0 : 1 }], opts)
+    .finished.then(done).catch(done);
+  const focusTo = next.querySelector(fwd ? '.back' : '.gear');
+  if (focusTo) { focusTo.focus({ preventScroll: true }); }
+}
+
+function wirePages(sheet, sub) {
+  sheet.querySelector('.gear').onclick = () => goPage(sheet, 'set');
+  sheet.querySelector('.back').onclick = () => goPage(sheet, 'main');
+  const el = sheet.querySelector('.pg-sub');
+  if (el) { el.textContent = sub || ''; }
 }
 
 /* Removing a device, in two presses.
@@ -4728,17 +4931,21 @@ function openBulb(b) {
   const drivers = state.switches.filter(sw =>
     (state.bySwitch[String(sw.node)] || []).some(e => String(e.node) === String(b.node)));
 
-  sheet.innerHTML = `
+  sheet.innerHTML = pagedSheet(`
     <h2></h2>
     <div class="who"></div>
-    ${BULB_CONTROL_HTML()}
-    ${sheetActions(b)}
+    ${BULB_CONTROL_HTML()}`, `
     <div class="links" id="drivers"></div>
-    <div class="links" id="sched-of"></div>`;
+    <div class="links" id="sched-of"></div>
+    ${sheetActions(b)}
+    <div class="fwslot"></div>
+    ${sheetRemove()}`);
+  wirePages(sheet, `bulb \u00b7 node ${b.node}`);
 
   nameable(sheet, b, () => openBulb(b));
-  sheet.querySelector('.who').textContent =
-    `bulb · node ${b.node}` + (b.where ? ` · ${b.where}` : '');
+  // Where it is, and nothing about how it is addressed: the node number is a
+  // setting, and it lives on the settings page.
+  sheet.querySelector('.who').textContent = b.where || 'no room';
 
   /* Which brightness to show.
    *
@@ -4768,7 +4975,7 @@ function openBulb(b) {
    * for three seconds, and fades back to the identity - so it interrupts
    * without costing anything permanent. */
   const whoBox = sheet.querySelector(".who");
-  const whoIs = `bulb · node ${b.node}` + (b.where ? ` · ${b.where}` : "");
+  const whoIs = b.where || 'no room';
 
   const fadeWho = (text, amber, then) => {
     whoBox.classList.add("gone");
@@ -4902,7 +5109,7 @@ function openBulb(b) {
   sheetListDone(list);
 
   wireActions(sheet, b, () => openBulb(b));
-  firmwareBox(sheet, b);
+  firmwareBox(sheet.querySelector('.fwslot'), b);
   $('#overlay').classList.add('on');
 }
 
@@ -4919,15 +5126,17 @@ function openDevice(d) {
   const keys = ((state.devices || {}).measures || [])
     .filter(m => !m.hidden).map(m => m.key).filter(k => k in measured);
 
-  sheet.innerHTML = `
+  sheet.innerHTML = pagedSheet(`
     <h2></h2>
     <div class="who"></div>
-    <div class="reads" id="reads"></div>
-    ${sheetActions(d)}`;
+    <div class="reads" id="reads"></div>`, `
+    ${sheetActions(d)}
+    <div class="fwslot"></div>
+    ${sheetRemove()}`);
+  wirePages(sheet, `${d.kind || 'device'} \u00b7 node ${d.node}`);
 
   nameable(sheet, d, () => openDevice(d));
-  sheet.querySelector('.who').textContent =
-    `${d.kind || 'device'} · node ${d.node}` + (d.where ? ` · ${d.where}` : '');
+  sheet.querySelector('.who').textContent = d.where || 'no room';
 
   /* The readings, repainted in place.
    *
@@ -4978,7 +5187,7 @@ function openDevice(d) {
   SHEET_LIVE = paintReads;
 
   wireActions(sheet, d, () => openDevice(d));
-  firmwareBox(sheet, d);
+  firmwareBox(sheet.querySelector('.fwslot'), d);
   $('#overlay').classList.add('on');
 
   // ONE fresh read, and only the numbers are repainted with it. A sheet that is
@@ -4995,21 +5204,25 @@ function openSwitch(sw) {
   const byNode = {};
   for (const e of bound) { (byNode[e.node] ||= []).push(e.cluster); }
 
-  sheet.innerHTML = `
+  // A switch's first page is its lock and what it drives - that IS the
+  // switch, the way a lamp is its brightness. How it is wired is edited from
+  // the settings page, with everything else about it.
+  sheet.innerHTML = pagedSheet(`
     <h2></h2>
     <div class="who"></div>
     ${isLock ? '' : `<div class="series big" id="lockpick">
       <button data-lock="0">unlocked</button>
       <button data-lock="1">locked</button>
     </div>`}
-    <div class="links" id="links"></div>
+    <div class="links" id="links"></div>`, `
     ${sheetActions(sw, `
-      <button class="edit" data-go="bind">${ICONS.link}bindings</button>`)}`;
+      <button class="edit" data-go="bind">${ICONS.link}bindings</button>`)}
+    <div class="fwslot"></div>
+    ${sheetRemove()}`);
+  wirePages(sheet, `${isLock ? 'lock' : 'switch'} \u00b7 node ${sw.node}`);
 
   nameable(sheet, sw, () => openSwitch(sw));
-  sheet.querySelector('.who').textContent =
-    `${isLock ? 'lock' : 'switch'} · node ${sw.node}` +
-    (sw.where ? ` · ${sw.where}` : '');
+  sheet.querySelector('.who').textContent = sw.where || 'no room';
 
   const list = sheet.querySelector('#links');
   // What the tail lists is the BINDING TABLE - the clusters this switch is
@@ -5084,7 +5297,7 @@ function openSwitch(sw) {
   // the switch drove nothing. The schedule lives in the header, and on the
   // sheet of each bulb it actually affects.
   wireActions(sheet, sw, () => openSwitch(sw));
-  firmwareBox(sheet, sw);
+  firmwareBox(sheet.querySelector('.fwslot'), sw);
   $('#overlay').classList.add('on');
 }
 
@@ -7416,16 +7629,319 @@ let countdownTimer = null;
  * device list on the way out have nowhere of their own left to hang that on. */
 let sheetOnClose = null;
 
+/* Opening and closing a sheet, the way Apple Home does it.
+ *
+ * The card grows out of the tile you touched and shrinks back into it: the
+ * tile IS the thing that opened, and the page says so instead of making a box
+ * appear from nowhere in the middle of the screen. Anything not opened from a
+ * tile - the add menu, the schedule - rises gently from where it will sit.
+ *
+ * Driven by the Web Animations API from one place, rather than by every
+ * function that shows a sheet: there are over a dozen of those, and the one
+ * thing they all do is put .on on the overlay. A MutationObserver sees that
+ * happen before the next paint, so the card never flashes at its final size
+ * before it starts from the tile.
+ *
+ * The curve is a fast start and a long settle - near enough to the spring UIKit
+ * uses, without a spring's overshoot, which on a card with text in it reads as
+ * wobble rather than life. Closing is quicker than opening, as it is on iOS:
+ * you are leaving, and the eye is already on the tile. */
+let SHEET_ORIGIN = null;
+let SHEET_CLOSING = null;
+const SHEET_EASE_OPEN = 'cubic-bezier(.2, .9, .25, 1)';
+const SHEET_EASE_CLOSE = 'cubic-bezier(.4, 0, .7, .2)';
+const reducedMotion = () => window.matchMedia
+  && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* Where the tile is, if it is still somewhere the card can go back to. A tile
+   redrawn away, or scrolled off, has nowhere to receive it. */
+function originRect() {
+  const el = SHEET_ORIGIN;
+  if (!el || !el.isConnected) { return null; }
+  const r = el.getBoundingClientRect();
+  if (r.width < 8 || r.bottom < 0 || r.top > innerHeight) { return null; }
+  return r;
+}
+
+function zoomScale(r) {
+  const f = $('#sheetwrap').getBoundingClientRect();
+  return f.width ? Math.max(.12, Math.min(1, r.width / f.width)) : .94;
+}
+
+/* The corner radius the card must HAVE so that, scaled down by `s`, it SHOWS
+ * the tile's radius. Scaling a box scales its corners with it: a 18px corner
+ * on a card drawn at 44% of its size is an 8px corner on screen, which is not
+ * the tile's. Dividing by the scale puts it back. */
+function cardRadius() {
+  return parseFloat(getComputedStyle(document.documentElement)
+    .getPropertyValue('--radius-card')) || 18;
+}
+
+function zoomTransform(r) {
+  const f = $('#sheetwrap').getBoundingClientRect();
+  if (!f.width) { return 'scale(.94)'; }
+  const s = Math.max(.12, Math.min(1, r.width / f.width));
+  const dx = (r.left + r.width / 2) - (f.left + f.width / 2);
+  const dy = (r.top + r.height / 2) - (f.top + f.height / 2);
+  return `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px) scale(${s.toFixed(3)})`;
+}
+
+function scrimFrom(ov) {
+  return getComputedStyle(ov).backgroundColor;
+}
+
+/* The tile you touched, lifted out of the list for as long as its page is open.
+ *
+ * This is the part that makes it read as going INTO the tile rather than a
+ * card appearing next to it: the tile is not left sitting in the grid under a
+ * copy of itself. Its gap stays open until the page closes back into it.
+ *
+ * Put back from more than one place on purpose - the end of a close, any
+ * moment the overlay goes away, a page opened from a different tile. A tile
+ * left invisible because one path forgot is a far worse bug than an animation
+ * that is slightly off, so every exit restores it.
+ */
+let SHEET_HIDDEN = null;
+
+function hideOrigin(el) {
+  revealOrigin();
+  if (!el) { return; }
+  el.style.visibility = 'hidden';
+  SHEET_HIDDEN = el;
+}
+
+function revealOrigin(fade) {
+  const el = SHEET_HIDDEN;
+  SHEET_HIDDEN = null;
+  if (!el) { return; }
+  el.style.visibility = '';
+  // After a close the empty box has just landed where the tile is; the icon
+  // and the name arriving over 140 ms is what makes it the tile again, rather
+  // than a box that swaps for a tile in one frame.
+  if (fade && !reducedMotion()) {
+    [...el.children].forEach(c => {
+      if (c.classList.contains('fill')) { return; }
+      c.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 140, easing: 'ease-out' });
+    });
+  }
+}
+
+/* A copy of the tile, drawn where it is and moved with the card.
+ *
+ * The card grows from the tile's size with its content faded, and the copy
+ * grows with it while it fades - so for the first half of the move what you
+ * see IS the tile, getting bigger, and by the second half it has become the
+ * page. Closing runs it the other way: the page shrinks, the tile resolves out
+ * of it, and lands in its own gap. */
+/* WHAT GOES INTO THE COPY is the tile's surface - its background, border,
+ * corners and, for a lit lamp, the level fill - and not its foreground. The
+ * icon and the name were in it at first, and they scale with the box: closing
+ * a page stretched the bulb glyph to the size of the card and faded it in on
+ * its way down, a huge distorted lamp for a fraction of a second. A morph moves
+ * the container and crossfades the contents; it does not balloon them.
+ *
+ * `keep` leaves the foreground in for the first moment of an OPEN, where it is
+ * faded out before the box has grown enough for it to distort - so a tap still
+ * reads as the tile itself lifting, rather than the tile emptying first. */
+function tileGhost(el, r, keep) {
+  const g = el.cloneNode(true);
+  if (!keep) {
+    [...g.children].forEach(c => { if (!c.classList.contains('fill')) { c.remove(); } });
+  }
+  g.classList.remove('fresh');
+  g.classList.add('ghost');
+  g.removeAttribute('tabindex');
+  g.setAttribute('aria-hidden', 'true');
+  Object.assign(g.style, {
+    position: 'fixed', left: r.left + 'px', top: r.top + 'px',
+    width: r.width + 'px', height: r.height + 'px', margin: '0',
+    zIndex: '11', pointerEvents: 'none', transformOrigin: '0 0',
+    visibility: 'visible', boxSizing: 'border-box',
+  });
+  document.body.append(g);
+  return g;
+}
+
+// From one rectangle onto another, corner to corner.
+function rectTransform(from, to) {
+  return `translate(${(to.left - from.left).toFixed(1)}px, ${(to.top - from.top).toFixed(1)}px) `
+    + `scale(${(to.width / from.width).toFixed(4)}, ${(to.height / from.height).toFixed(4)})`;
+}
+
+function sheetOpened() {
+  const ov = $('#overlay');
+  const wrap = $('#sheetwrap');
+  const scrim = scrimFrom(ov);
+  if (reducedMotion()) {
+    ov.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 120 });
+    return;
+  }
+  const r = originRect();
+  ov.animate([{ backgroundColor: 'rgba(0,0,0,0)' }, { backgroundColor: scrim }],
+             { duration: 320, easing: 'ease-out' });
+  if (!r) {
+    wrap.animate([
+      { transform: 'translateY(18px) scale(.96)', opacity: 0 },
+      { transform: 'none', opacity: 1 },
+    ], { duration: 320, easing: SHEET_EASE_OPEN });
+    return;
+  }
+
+  const f = wrap.getBoundingClientRect();
+  const ghost = tileGhost(SHEET_ORIGIN, r, true);
+  hideOrigin(SHEET_ORIGIN);
+  const dur = 480;
+  // The foreground goes in the first fifth, while the box is still near its own
+  // size - gone before it can be seen stretching.
+  [...ghost.children].forEach(c => {
+    if (c.classList.contains('fill')) { return; }
+    c.animate([{ opacity: 1 }, { opacity: 0, offset: .2 }, { opacity: 0 }],
+              { duration: dur, fill: 'forwards' });
+  });
+  const R = cardRadius();
+  const s0 = zoomScale(r);
+  // The card, scaled up from the tile: corners start at R / s so they read as
+  // R on screen, and end at R. The copy of the tile is stretched on both axes
+  // to meet the card, so its corners are divided on each axis separately.
+  $('#sheet').animate([{ borderRadius: `${(R / s0).toFixed(1)}px` },
+                       { borderRadius: `${R}px` }],
+                      { duration: dur, easing: SHEET_EASE_OPEN });
+  const sx = f.width / r.width, sy = f.height / r.height;
+  ghost.animate([{ borderRadius: `${R}px` },
+                 { borderRadius: `${(R / sx).toFixed(2)}px / ${(R / sy).toFixed(2)}px` }],
+                { duration: dur, easing: SHEET_EASE_OPEN });
+  wrap.animate([
+    { transform: zoomTransform(r), opacity: 0, offset: 0 },
+    { opacity: 0, offset: .18 },
+    { opacity: 1, offset: .62 },
+    { transform: 'none', opacity: 1, offset: 1 },
+  ], { duration: dur, easing: SHEET_EASE_OPEN });
+  ghost.animate([
+    { transform: 'none', opacity: 1, offset: 0 },
+    { opacity: 1, offset: .22 },
+    { opacity: 0, offset: .6 },
+    { transform: rectTransform(r, f), opacity: 0, offset: 1 },
+  ], { duration: dur, easing: SHEET_EASE_OPEN }).finished
+    .then(() => ghost.remove()).catch(() => ghost.remove());
+}
+
+// Whatever puts .on on the overlay, this is where the card starts to move.
+new MutationObserver(recs => {
+  const ov = $('#overlay');
+  for (const r of recs) {
+    const was = (r.oldValue || '').split(/\s+/).includes('on');
+    if (!was && ov.classList.contains('on')) { sheetOpened(); }
+    if (was && !ov.classList.contains('on')) { revealOrigin(); }
+  }
+}).observe($('#overlay'), { attributes: true, attributeFilter: ['class'],
+                            attributeOldValue: true });
+
+// A sheet written while the last one is still shrinking away is a new sheet,
+// not the end of the old one: stop closing, and bring it back to full size.
+new MutationObserver(() => {
+  if (!SHEET_CLOSING) { return; }
+  SHEET_CLOSING.cancel();
+  SHEET_CLOSING = null;
+  $('#sheetwrap').style.transform = '';
+  $('#overlay').getAnimations().forEach(a => a.cancel());
+  $('#sheet').getAnimations().forEach(a => a.cancel());
+  document.querySelectorAll('.ghost').forEach(g => g.remove());
+  // And it opens like one. The overlay never lost .on, so the observer above
+  // will not see an open - without this the new page appeared with no zoom,
+  // its own tile stayed in the grid, and the OLD tile stayed hidden for good,
+  // because the close that would have given it back was just cancelled.
+  // The old tile first, whatever opens next: a page that did not come from a
+  // tile never reaches the code that would have given it back.
+  revealOrigin();
+  sheetOpened();
+}).observe($('#sheet'), { childList: true });
+
 function closeSheet() {
   const after = sheetOnClose;
   sheetOnClose = null;
   SHEET_LIVE = null;
   SHEET_SAY = null;
   clearTimeout(tookoverTimer);
-  $('#sheetwrap').classList.remove('wide');
   clearInterval(countdownTimer);
   clearInterval(SCHED.tick);
-  $('#overlay').classList.remove('on');
+
+  const ov = $('#overlay');
+  const wrap = $('#sheetwrap');
+  let ghost = null;
+  const finish = () => {
+    // The tile first, then the overlay: the other way round, the overlay
+    // observer gives the tile back without the fade.
+    revealOrigin(true);
+    ov.classList.remove('on');
+    wrap.classList.remove('wide');
+    SHEET_ORIGIN = null;
+    if (ghost) { ghost.remove(); ghost = null; }
+  };
+  if (!ov.classList.contains('on') || reducedMotion()) {
+    finish();
+    if (after) { after(); }
+    return;
+  }
+
+  // Back into the tile it came from, if the tile is still there to receive it.
+  // The gap is measured, not the tile: the tile is hidden, but it still holds
+  // its place in the grid, and that place is exactly where it has to land.
+  const hidden = SHEET_HIDDEN && SHEET_HIDDEN.isConnected ? SHEET_HIDDEN : null;
+  const r = hidden ? hidden.getBoundingClientRect() : originRect();
+  SHEET_ORIGIN = null;
+  const onScreen = r && r.width >= 8 && r.bottom >= 0 && r.top <= innerHeight;
+  const scrim = scrimFrom(ov);
+  const dur = onScreen ? 340 : 200;
+  let card;
+  if (onScreen) {
+    const f = wrap.getBoundingClientRect();
+    const R = cardRadius();
+    const s0 = zoomScale(r);
+    $('#sheet').animate([{ borderRadius: `${R}px` },
+                         { borderRadius: `${(R / s0).toFixed(1)}px` }],
+                        { duration: dur, easing: SHEET_EASE_CLOSE, fill: 'forwards' });
+    if (hidden) {
+      ghost = tileGhost(hidden, r);
+      const sx = f.width / r.width, sy = f.height / r.height;
+      ghost.animate([{ borderRadius: `${(R / sx).toFixed(2)}px / ${(R / sy).toFixed(2)}px` },
+                     { borderRadius: `${R}px` }],
+                    { duration: dur, easing: SHEET_EASE_CLOSE, fill: 'forwards' });
+      ghost.animate([
+        { transform: rectTransform(r, f), opacity: 0, offset: 0 },
+        { opacity: 0, offset: .35 },
+        { opacity: 1, offset: .78 },
+        { transform: 'none', opacity: 1, offset: 1 },
+      ], { duration: dur, easing: SHEET_EASE_CLOSE, fill: 'forwards' });
+    }
+    card = wrap.animate([
+      { transform: 'none', opacity: 1, offset: 0 },
+      { opacity: 1, offset: .3 },
+      { opacity: 0, offset: .75 },
+      { transform: zoomTransform(r), opacity: 0, offset: 1 },
+    ], { duration: dur, easing: SHEET_EASE_CLOSE, fill: 'forwards' });
+  } else {
+    card = wrap.animate([
+      { transform: 'none', opacity: 1 },
+      { transform: 'translateY(14px) scale(.96)', opacity: 0 },
+    ], { duration: dur, easing: SHEET_EASE_CLOSE, fill: 'forwards' });
+  }
+  ov.animate([{ backgroundColor: scrim }, { backgroundColor: 'rgba(0,0,0,0)' }],
+             { duration: dur, easing: 'ease-in', fill: 'forwards' });
+  SHEET_CLOSING = card;
+  card.finished.then(() => {
+    if (SHEET_CLOSING !== card) {             // a new sheet took over mid-close
+      if (ghost) { ghost.remove(); ghost = null; }
+      return;
+    }
+    SHEET_CLOSING = null;
+    finish();
+    card.cancel();
+    ov.getAnimations().forEach(a => a.cancel());
+    $('#sheet').getAnimations().forEach(a => a.cancel());
+  }).catch(() => { if (ghost) { ghost.remove(); } });
+
+  // The data refresh does not wait for the animation - it is about the house,
+  // not about the card, and nobody should see a stale tile for 300 ms.
   if (after) { after(); }
 }
 
