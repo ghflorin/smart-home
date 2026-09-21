@@ -63,9 +63,9 @@ between them. See [`docs/devices.md`](../docs/devices.md).
 | `devices.json` | node IDs, names and rooms |
 
 `devices.json` is for you alone — Matter does not know the names you give. The
-panel appends to it when you commission a device from the interface; edit it by
-hand to rename things or to describe devices that were commissioned with
-`scripts/commission.sh`. The node IDs have to match the ones actually used at
+panel appends to it when you commission a device from the interface, and a
+device's name and room are the first two rows of its settings; edit the file by
+hand to describe devices that were commissioned with `scripts/commission.sh`. The node IDs have to match the ones actually used at
 commissioning.
 
 ## Theme
@@ -224,7 +224,9 @@ grouping, and it is most of the reason that file exists next to the fabric.
 
 `+ room` creates one; the wrench on a room's heading renames or deletes it. That
 is all the sheet does: which devices are in a room, and in what order, is
-answered by dragging them there, where the answer is also the question. Deleting
+answered by dragging them there, where the answer is also the question — or,
+for one device, by its room in its own settings, which puts it at the end of
+the room it goes to. A room typed there that does not exist yet is created. Deleting
 a room does not delete
 what is in it — the devices end up with no room, and land in the `no room`
 section — but you cannot know that before you press, so it asks twice.
