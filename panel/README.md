@@ -1026,19 +1026,14 @@ of its own, since what the webhook does is chosen above it; there the floor is
 
 ### What the brightness panel shows when the bulb is off
 
-`OnLevel` — what it will come up at — and not `CurrentLevel`.
+That it is off: an empty panel, the word `off` and the bulb struck through, in
+the same ink as when it is lit. Tap it and the lamp comes on at the height you
+tapped.
 
-A bulb that is off reports `CurrentLevel` 1. That is its off reading, not a
-setting, so showing it made the control read 4% while off and 25% the moment you
-switched it on, as though pressing on had also changed the brightness. While off,
-the honest number is the one the wall switch is about to produce, which is also
-the one dragging the control is about to change. The caption says
-`off · comes up here` so it is clear which question is being answered.
-
-Dragging brightness sets the *current* level and not the come-up level, so
-switching the lamp off and on again returns it to the schedule's value. That is
-the schedule owning the light, and the caption is what makes it visible instead
-of surprising.
+A bulb reports `CurrentLevel` 1 for a moment while it switches on — `OnOff`
+arrives first and the level climbs in the reports after. Level 1 under an on is
+read as `OnLevel`, the level the lamp is on its way to, so the panel does not
+flash 4% on the way up.
 
 ### The colour strip's travel is the bulb's range
 
