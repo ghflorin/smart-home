@@ -2359,15 +2359,15 @@
   .sw:first-child { margin-left: auto; }
   .sw:last-child { margin-right: auto; }
   /* The edge with more behind it fades, so a row that scrolls says so. */
-  .swatches.more-r {
+  .swatches.more-r, .presets.more-r {
     -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 30px), transparent);
     mask-image: linear-gradient(90deg, #000 calc(100% - 30px), transparent);
   }
-  .swatches.more-l {
+  .swatches.more-l, .presets.more-l {
     -webkit-mask-image: linear-gradient(90deg, transparent, #000 30px);
     mask-image: linear-gradient(90deg, transparent, #000 30px);
   }
-  .swatches.more-l.more-r {
+  .swatches.more-l.more-r, .presets.more-l.more-r {
     -webkit-mask-image: linear-gradient(90deg, transparent, #000 30px, #000 calc(100% - 30px), transparent);
     mask-image: linear-gradient(90deg, transparent, #000 30px, #000 calc(100% - 30px), transparent);
   }
@@ -2420,6 +2420,65 @@
   /* No hole in it: the dot is there only when the lamp is on a colour of its
      own, to say which. */
   .sw.custom:not(.on) i { display: none; }
+
+  /* A light show's presets: the colour row's circles, each with its name,
+     because "twinkle" is not a colour you can recognise at a glance. */
+  .presets {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 6px 7px 4px;
+    margin: 4px -7px 0;
+    scrollbar-width: none;
+  }
+  .presets::-webkit-scrollbar { display: none; }
+  .pre:first-child { margin-left: auto; }
+  .pre:last-child { margin-right: auto; }
+  .pre {
+    flex: none;
+    width: 60px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 7px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--ink-faint);
+    cursor: pointer;
+  }
+  .pre i {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    display: block;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 14%, transparent);
+    transition: box-shadow .18s ease, transform .12s ease;
+  }
+  .pre:active i { transform: scale(.94); }
+  .pre span { font-size: 9px; letter-spacing: .12em; text-transform: uppercase; white-space: nowrap; }
+  .pre.on i {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 14%, transparent),
+                0 0 0 3px var(--panel-hi), 0 0 0 5px var(--ink);
+  }
+  .pre.on span { color: var(--ink); }
+  .pre:focus-visible { outline: none; }
+  .pre:focus-visible i { outline: 2px solid var(--link); outline-offset: 5px; }
+  .pre-candycane i { background: repeating-linear-gradient(135deg, #d93a3a 0 7px, #2f9a55 7px 14px); }
+  .pre-twinkle i {
+    background:
+      radial-gradient(circle at 30% 34%, #fff 0 1.6px, transparent 2.6px),
+      radial-gradient(circle at 66% 28%, #fff 0 1.2px, transparent 2.2px),
+      radial-gradient(circle at 58% 64%, #fff 0 1.8px, transparent 2.8px),
+      radial-gradient(circle at 28% 70%, #ffe7a8 0 1.1px, transparent 2px),
+      radial-gradient(circle at 76% 52%, #ffe7a8 0 1px, transparent 2px),
+      #1c2744;
+  }
+  .pre-candle i { background: radial-gradient(circle at 50% 62%, #ffe2a0 0, #ff9c33 38%, #6e2a0c 100%); }
+  .pre-wave i { background: linear-gradient(90deg, #4a3a20, #ffd27a 50%, #4a3a20); }
+  .pre-breathe i { background: radial-gradient(circle, #fff3f0 0, #f09a9a 45%, #4f9d6b 100%); }
+  .pre-rainbow i { background: conic-gradient(#f33, #fd3, #3d3, #3dd, #33f, #d3d, #f33); }
 
   /* The picker's page: the white strip and the wheel side by side. */
   .hk-colour {
@@ -2967,6 +3026,7 @@ const $ = (s, r = document) => r.querySelector(s);
 const state = { devices: null, switches: [], bySwitch: {}, raw: null,
                 locks: {}, bulbs: {}, updates: {}, byButton: {},
                 remotes: new Set(), view: 'home', matterOk: true,
+                groups: [], presets: [], shows: {},
                 panelOk: true, onlyOffline: false };
 
 /* The one line in the header, and two things want it.
@@ -3006,11 +3066,13 @@ function adoptDevices(d) {
   state.devices = d;
   state.switches = d.switches || (d.switch ? [d.switch] : []);
   state.hooks = d.hooks || [];
+  state.groups = d.groups || [];
+  state.presets = d.presets || [];
 }
 
 /* A webhook is not a device: nothing answers for it, so it cannot be offline
    and has no business in a count of what is answering. */
-function isHook(d) { return (d || {}).kind === 'webhook'; }
+function isHook(d) { return ['webhook', 'group'].includes((d || {}).kind); }
 
 async function load() {
   try {
@@ -3297,6 +3359,13 @@ const ICONS = {
     stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d="M7.6 14.4a3.6 3.6 0 0 1-.2-7.2 5 5 0 0 1 9.4-1 3.4 3.4 0 0 1 .8 6.7"/>
     <path d="M12 11.6v8"/><path d="M9.1 16.8 12 19.6l2.9-2.8"/></svg>`,
+
+  // A light show: a sparkle, and two small ones.
+  show: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M10 3.6l1.5 4.7a2.2 2.2 0 0 0 1.4 1.4l4.7 1.5-4.7 1.5a2.2 2.2 0 0 0-1.4 1.4L10 18.8l-1.5-4.7a2.2 2.2 0 0 0-1.4-1.4L2.4 11.2l4.7-1.5a2.2 2.2 0 0 0 1.4-1.4Z"/>
+    <path d="M18.5 3.2v3.6"/><path d="M16.7 5h3.6"/>
+    <path d="M18.8 16.2v3.2"/><path d="M17.2 17.8h3.2"/></svg>`,
 
   // The theme switch's sun in its light-mode pose - the same rays and disc.
   sun: `<svg viewBox="0 0 24 24" aria-hidden="true">
@@ -4214,7 +4283,7 @@ function orderOf(d, i, isSwitch) {
 function allDevices() {
   const d = state.devices || {};
   return [...state.switches, ...(d.bulbs || []), ...(d.devices || []),
-          ...(d.hooks || [])];
+          ...(d.hooks || []), ...(d.groups || [])];
 }
 
 function roomMembers(name) {
@@ -4232,6 +4301,9 @@ function roomMembers(name) {
   });
   (state.devices.hooks || []).forEach((d, i) => {
     if (mine(d)) { out.push({ d, key: orderOf(d, i + 3000, false), opts: hookOpts }); }
+  });
+  (state.devices.groups || []).forEach((d, i) => {
+    if (mine(d)) { out.push({ d, key: orderOf(d, i + 4000, false), opts: groupOpts }); }
   });
   out.sort((a, b) => a.key - b.key);
   return out;
@@ -5308,11 +5380,14 @@ function bulbControl(root, opts) {
    * Springing back is the right behaviour when a bulb refuses something, and it
    * is still there as the backstop; it is the wrong way to find out that an
    * eighth of a control is decorative. */
+  // A light show borrows the panel without the picker: no strip, no wheel.
   const paintStrip = () => {
     const cur = opts.read();
     const at = f => ctColor(cur.ctHi - f * (cur.ctHi - cur.ctLo));
-    ctBox.style.background = `linear-gradient(0deg, ${at(0)}, ${at(.33)}, `
-      + `${at(.5)}, ${at(.67)}, ${at(1)})`;
+    if (ctBox) {
+      ctBox.style.background = `linear-gradient(0deg, ${at(0)}, ${at(.33)}, `
+        + `${at(.5)}, ${at(.67)}, ${at(1)})`;
+    }
     buildSwatches(cur);
   };
 
@@ -5435,6 +5510,7 @@ function bulbControl(root, opts) {
     // fully inside the strip. Positioned by its centre it was drawn half
     // outside at the top and clipped by the rounded corner, which read as the
     // control running past its own limit.
+    if (!ctBox || !wheel) { return; }
     knob.style.setProperty('--p',
       cur.ctHi > cur.ctLo ? (cur.ctHi - mir) / (cur.ctHi - cur.ctLo) : 0);
     capC.textContent = `${kelvin(mir)} K`;
@@ -5542,12 +5618,14 @@ function bulbControl(root, opts) {
        v => { dragLvl = opts.onOff && v < OFF_BELOW ? 0 : Math.max(0.01, v); },
        () => (dragLvl === 0 ? settle(opts.onOff)
                             : settle(opts.onLevel, levelFromPerceived(dragLvl))));
-  grab(ctBox,
-       v => {
-         const cur = opts.read();
-         dragCt = Math.round(cur.ctHi - v * (cur.ctHi - cur.ctLo));
-       },
-       () => settle(opts.onMireds, dragCt));
+  if (ctBox) {
+    grab(ctBox,
+         v => {
+           const cur = opts.read();
+           dragCt = Math.round(cur.ctHi - v * (cur.ctHi - cur.ctLo));
+         },
+         () => settle(opts.onMireds, dragCt));
+  }
 
   /* The wheel takes its value the moment it is touched, like the sliders:
    * wherever the finger is, is the colour. */
@@ -5566,32 +5644,34 @@ function bulbControl(root, opts) {
     };
     paint();
   };
-  wheel.onpointerdown = ev => {
-    ev.preventDefault();
-    gesture++;
-    hold = null;
-    wheel.setPointerCapture(ev.pointerId);
-    wheel.classList.add('grabbed');
-    wheelAt(ev);
-  };
-  wheel.onpointermove = ev => {
-    if (!wheel.hasPointerCapture || !wheel.hasPointerCapture(ev.pointerId)) { return; }
-    wheelAt(ev);
-  };
-  wheel.onpointerup = ev => {
-    if (!wheel.hasPointerCapture || !wheel.hasPointerCapture(ev.pointerId)) { return; }
-    wheel.releasePointerCapture(ev.pointerId);
-    wheel.classList.remove('grabbed');
-    if (dragCol) { settle(opts.onColour, { ...dragCol }); }
-  };
-  wheel.onpointercancel = ev => {
-    if (wheel.hasPointerCapture && wheel.hasPointerCapture(ev.pointerId)) {
+  if (wheel) {
+    wheel.onpointerdown = ev => {
+      ev.preventDefault();
+      gesture++;
+      hold = null;
+      wheel.setPointerCapture(ev.pointerId);
+      wheel.classList.add('grabbed');
+      wheelAt(ev);
+    };
+    wheel.onpointermove = ev => {
+      if (!wheel.hasPointerCapture || !wheel.hasPointerCapture(ev.pointerId)) { return; }
+      wheelAt(ev);
+    };
+    wheel.onpointerup = ev => {
+      if (!wheel.hasPointerCapture || !wheel.hasPointerCapture(ev.pointerId)) { return; }
       wheel.releasePointerCapture(ev.pointerId);
-    }
-    wheel.classList.remove('grabbed');
-    dragCol = null;
-    paint();
-  };
+      wheel.classList.remove('grabbed');
+      if (dragCol) { settle(opts.onColour, { ...dragCol }); }
+    };
+    wheel.onpointercancel = ev => {
+      if (wheel.hasPointerCapture && wheel.hasPointerCapture(ev.pointerId)) {
+        wheel.releasePointerCapture(ev.pointerId);
+      }
+      wheel.classList.remove('grabbed');
+      dragCol = null;
+      paint();
+    };
+  }
 
   paintStrip();
   paint();
@@ -7701,7 +7781,9 @@ function editHook(h) {
     <div class="hookctl${act === 'off' ? ' dim' : ''}">${BULB_CONTROL_HTML()}</div>
     <div class="section-label btn-sec"><span>which lamps</span>
       <span class="rule"></span></div>
-    <div class="pick">${renderPick(bulbs, new Set(h.bulbs || []), h.where, 'no bulbs')}</div>
+    <div class="pick">${renderPick([...bulbs, ...(state.groups || []).map(x => (
+        { node: x.node, name: '\u2726 ' + x.name, where: x.where }))],
+      new Set(h.bulbs || []), h.where, 'no bulbs')}</div>
     <div class="removebox">
       <button type="button" class="forget hookdel">remove</button>
     </div>`, BULB_PICKER_HTML());
@@ -7892,6 +7974,269 @@ function editHook(h) {
 
   // A change made just before closing is still saved.
   sheetOnClose = () => { if (saveTimer) { save(); } };
+}
+
+/* ---------- light shows ----------
+ *
+ * A group of lamps that plays an animation, and otherwise behaves like a lamp:
+ * its tile switches it on and off, its panel is a brightness, and a tap there
+ * starts it at that brightness. What it plays is the preset, chosen from a row
+ * under the panel the way a lamp's colours are. The lamps, the speed and the
+ * buttons that start it are its settings.
+ *
+ * The show runs on the hub - see shows.py - so a wall switch starts it through
+ * the hub, not over its own bindings, and it needs the hub up to play.
+ */
+const PRESET_FALLBACK = [
+  { key: 'candycane', label: 'candy cane' }, { key: 'twinkle', label: 'twinkle' },
+  { key: 'candle', label: 'candle' }, { key: 'wave', label: 'wave' },
+  { key: 'breathe', label: 'breathe' }, { key: 'rainbow', label: 'rainbow' },
+];
+const presets = () => (state.presets && state.presets.length ? state.presets : PRESET_FALLBACK);
+const presetLabel = k => (presets().find(p => p.key === k) || { label: k || '' }).label;
+const showOf = g => (state.shows || {})[String(g.node)] || null;
+
+function groupOpts(g) {
+  const run = showOf(g);
+  const n = (g.bulbs || []).length;
+  return {
+    node: g.node,
+    level: run ? Math.max(0.05, perceived(run.level || 254)) : 0,
+    icon: ICONS.show,
+    cls: run ? 'on' : '',
+    name: g.name,
+    state: run ? `${presetLabel(run.preset)} · on`
+               : (n ? `${n} lamp${n === 1 ? '' : 's'} · off` : 'no lamps yet'),
+    quickTitle: (run ? 'stop' : 'play') + ' — ' + g.name,
+    onQuick: q => showCommand(g, { action: 'toggle' }, q),
+    openTitle: 'settings for ' + g.name,
+    onOpen: () => openGroup(g),
+  };
+}
+
+// On, off or toggle, and the answer folded straight into the page.
+async function showCommand(g, payload, q) {
+  if (q) { q.classList.add('busy'); q.disabled = true; }
+  let j;
+  try {
+    j = await (await api('/api/show', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ node: g.node, ...payload })
+    })).json();
+  } catch (err) { j = { error: String(err) }; }
+  if (q) { q.classList.remove('busy'); q.disabled = false; }
+  if (j.error) { setStatus(j.error, 'err'); return false; }
+  state.shows = state.shows || {};
+  if (j.running) {
+    state.shows[String(g.node)] = { preset: j.preset, level: j.level, since: Date.now() / 1000 };
+    g.preset = j.preset;
+    g.level = j.level;
+  } else {
+    delete state.shows[String(g.node)];
+  }
+  render();
+  if (SHEET_LIVE) { SHEET_LIVE(); }
+  return true;
+}
+
+function openGroup(g) {
+  const sheet = $('#sheet');
+  const bulbs = state.devices.bulbs || [];
+
+  // The buttons that can start it: each of our switches as a whole - it has
+  // the one button - and each button of a remote on its own.
+  const btnRows = [];
+  state.switches.forEach(sw => {
+    if (state.remotes.has(sw.node)) {
+      const keys = Object.keys(state.byButton[String(sw.node)] || {});
+      (keys.length ? keys : ['1', '2']).forEach(k => btnRows.push(
+        { node: `${sw.node}:${k}`, name: `${sw.name} · button ${k}`, where: sw.where }));
+    } else {
+      btnRows.push({ node: String(sw.node), name: sw.name, where: sw.where });
+    }
+  });
+  const btnKey = x => (x.button === null || x.button === undefined
+    ? String(x.node) : `${x.node}:${x.button}`);
+  const btnOn = new Set((g.buttons || []).map(btnKey));
+
+  sheet.innerHTML = pagedSheet(`<h2></h2>
+    <div class="who"></div>
+    ${BULB_CONTROL_HTML()}
+    <div class="presets" role="group" aria-label="animation">${presets().map(p => `
+      <button type="button" class="pre pre-${p.key}" data-k="${p.key}"
+              title="${p.label}" aria-label="${p.label}"><i></i><span>${p.label}</span></button>`
+      ).join('')}</div>`, `
+    ${identityRows()}
+    <div class="section-label btn-sec"><span>which lamps</span>
+      <span class="rule"></span></div>
+    <div class="pick lampspick">${renderPick(bulbs, new Set(g.bulbs || []), g.where, 'no bulbs')}</div>
+    <div class="section-label btn-sec"><span>speed</span>
+      <span class="rule"></span></div>
+    <div class="spans">${['slow', 'normal', 'fast'].map(k => `
+      <button type="button" class="span${(g.speed || 'normal') === k ? ' on' : ''}"
+              data-v="${k}">${k}</button>`).join('')}</div>
+    <div class="section-label btn-sec"><span>which buttons</span>
+      <span class="rule"></span></div>
+    <div class="pick btnpick">${renderPick(btnRows, btnOn, g.where, 'no switches')}</div>
+    <div class="removebox">
+      <button type="button" class="forget groupdel">remove</button>
+    </div>`);
+  wirePages(sheet, `light show · ${g.node}`);
+  wireIdentity(sheet, g);
+  $('#overlay').classList.add('on');
+
+  const setP = sheet.querySelector('.pg-set');
+
+  // The panel is a lamp's: brightness, a tap to start at it, the bottom to
+  // stop. The colour row stays empty - a show has presets instead.
+  const ctl = bulbControl(sheet, {
+    read: () => {
+      const run = showOf(g);
+      return {
+        on: !!run,
+        norm: perceived((run && run.level) || g.level || 254),
+        mireds: 370, hue: 0, sat: 0, colorMode: 2, adaptive: false,
+        caption: run ? `${presetLabel(run.preset)} · playing` : 'off',
+        canCt: false, canColour: false, ctLo: MIRED_MIN, ctHi: MIRED_MAX,
+      };
+    },
+    onLevel: v => showCommand(g, { action: 'on', level: v }),
+    onOff: () => showCommand(g, { action: 'off' }),
+  });
+
+  const pres = [...sheet.querySelectorAll('.pre')];
+  // The row scrolls on a narrow card; the edge with more behind it fades, as
+  // the colour row's does.
+  const row = sheet.querySelector('.presets');
+  const edges = () => {
+    const room = row.scrollWidth - row.clientWidth;
+    row.classList.toggle('more-l', room > 2 && row.scrollLeft > 2);
+    row.classList.toggle('more-r', room > 2 && row.scrollLeft < room - 2);
+  };
+  row.addEventListener('scroll', edges, { passive: true });
+  requestAnimationFrame(edges);
+  const paintPresets = () => {
+    const run = showOf(g);
+    const cur = run ? run.preset : g.preset;
+    pres.forEach(b => {
+      b.classList.toggle('on', b.dataset.k === cur);
+      b.classList.toggle('playing', !!run && b.dataset.k === cur);
+      b.setAttribute('aria-pressed', b.dataset.k === cur ? 'true' : 'false');
+    });
+  };
+  pres.forEach(b => {
+    b.onclick = () => {
+      g.preset = b.dataset.k;
+      paintPresets();
+      showCommand(g, { action: 'on', preset: b.dataset.k });
+    };
+  });
+  paintPresets();
+  SHEET_LIVE = () => { ctl.paint(); paintPresets(); };
+
+  /* Settings save as they change, as a webhook's do. */
+  let saveTimer = null;
+  const save = async () => {
+    saveTimer = null;
+    const lamps = [...setP.querySelectorAll('.lampspick input:checked')].map(i => Number(i.value));
+    const buttons = [...setP.querySelectorAll('.btnpick input:checked')].map(i => {
+      const [node, button] = String(i.value).split(':');
+      return { node: Number(node), button: button === undefined ? null : Number(button) };
+    });
+    const speed = (setP.querySelector('.spans .span.on') || {}).dataset?.v || 'normal';
+    let j;
+    try {
+      j = await (await api('/api/group', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ update: { node: g.node, bulbs: lamps, buttons, speed } })
+      })).json();
+    } catch (err) { j = { error: String(err) }; }
+    if (j.error) { setStatus('not saved: ' + j.error, 'err'); return; }
+    Object.assign(g, { bulbs: lamps, buttons, speed });
+    load();
+  };
+  const persist = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(save, 400);
+  };
+  setP.querySelector('.lampspick').addEventListener('change', persist);
+  setP.querySelector('.btnpick').addEventListener('change', persist);
+  const speeds = [...setP.querySelectorAll('.spans .span')];
+  speeds.forEach(b => {
+    b.onclick = () => {
+      speeds.forEach(x => x.classList.toggle('on', x === b));
+      persist();
+    };
+  });
+  sheetOnClose = () => { if (saveTimer) { clearTimeout(saveTimer); save(); } };
+
+  const del = setP.querySelector('.groupdel');
+  del.onclick = async () => {
+    if (del.dataset.sure !== '1') {
+      del.dataset.sure = '1';
+      del.textContent = 'really remove it?';
+      setTimeout(() => {
+        if (del.isConnected) { del.dataset.sure = ''; del.textContent = 'remove'; }
+      }, 4000);
+      return;
+    }
+    del.disabled = true;
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    try {
+      await api('/api/group', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delete: g.node })
+      });
+    } catch (e2) { setStatus(String(e2), 'err'); }
+    closeSheet();
+    load();
+  };
+}
+
+function addGroup() {
+  const sheet = $('#sheet');
+  sheet.innerHTML = `<h2>add a light show</h2>
+    <div class="who">lamps that play an animation together</div>
+    <label>name</label>
+    <input id="f-name" placeholder="Christmas" autocomplete="off">
+    <label>room</label>
+    <div class="combo">
+      <input id="f-where" placeholder="search, or type a new one" autocomplete="off">
+      <div class="combo-list" id="f-where-list"></div>
+    </div>
+    <button class="go">add</button>`;
+  $('#overlay').classList.add('on');
+  setupRoomCombo();
+  $('#f-name').focus();
+  sheet.querySelector('.go').onclick = async (e) => {
+    const btn = e.target;
+    btn.disabled = true;
+    btn.textContent = 'adding…';
+    let j;
+    try {
+      j = await (await api('/api/group', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: $('#f-name').value.trim(),
+                               where: $('#f-where').value.trim() })
+      })).json();
+    } catch (err) { j = { error: String(err) }; }
+    if (j.error) {
+      setStatus(j.error, 'err');
+      btn.disabled = false;
+      btn.textContent = 'add';
+      return;
+    }
+    closeSheet();
+    await load();
+    // Straight into it: a show with no lamps is not finished.
+    const made = (state.groups || []).find(x => x.node === j.node);
+    if (made) { openGroup(made); openPanel($('#sheet'), 'set'); }
+  };
 }
 
 function editRemote(sw) {
@@ -8136,6 +8481,12 @@ function addAnything() {
               seen movement, most likely. The lamps you give it go to full for
               a few seconds and then back to exactly what they were.</span>
       </button>
+      <button type="button" class="choice" data-go="show">
+        <b>a light show</b>
+        <span>Lamps that play an animation together &mdash; candy cane,
+              twinkle, candle. It switches on and off like a lamp, from its
+              tile, a wall switch or a webhook.</span>
+      </button>
       <button type="button" class="choice" data-go="room">
         <b>a room</b>
         <span>Just a name to group things under. Nothing is commissioned and
@@ -8145,7 +8496,7 @@ function addAnything() {
   $('#overlay').classList.add('on');
   sheet.querySelectorAll('.choice').forEach(b => {
     b.onclick = () => ({ device: addDevice, switch: addSwitch, hook: addHook,
-                         room: () => editRoom(null) })[b.dataset.go]();
+                         show: addGroup, room: () => editRoom(null) })[b.dataset.go]();
   });
 }
 
@@ -8867,6 +9218,7 @@ async function loadBulbs(fresh) {
     noteReleases(state.bulbs || {}, fresh_);
     if (say) { delete TOOKOVER[String(SHEET_SAY.node)]; SHEET_SAY.say(); }
     state.bulbs = fresh_;
+    state.shows = j.shows || {};
     render();
     // An open sheet used to be a snapshot: it only ever redrew from its own
     // commands, so a bulb changing underneath it - by the schedule, by the wall
