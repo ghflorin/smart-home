@@ -328,6 +328,19 @@
     display: grid;
     place-items: center;
   }
+  /* On a phone the row is the name, two round buttons and the theme. With its
+     word the schedule button made the header about 50px wider than a 375px
+     screen, and the whole page - an open card included - slid sideways. */
+  @media (max-width: 440px) {
+    #go-sched {
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      border-radius: 50%;
+      justify-content: center;
+    }
+    #go-sched span { display: none; }
+  }
 
   /* The three ways to add something, asked once instead of standing as three
      permanent buttons. Each says what it is and what it is for, because
@@ -1225,8 +1238,9 @@
     background: var(--panel-hi);
     border: 1px solid var(--line-hi);
     border-radius: var(--radius-card);
+    --pad-y: 28px;
     width: 100%;
-    padding: var(--pad);
+    padding: var(--pad-y) var(--pad);
     text-align: center;
     /* Without this a long sheet grows past both edges of the screen and takes
        its own controls with it. */
@@ -2046,7 +2060,7 @@
      plot is in svg user units - so it shrinks with the element and the hour
      labels come out around 5px unless they are put back. */
   @media (max-width: 560px) {
-    .sheet { --pad: 16px; padding: 20px var(--pad); }
+    .sheet { --pad: 16px; --pad-y: 20px; }
     .sched-top { flex-wrap: wrap; gap: 10px; }
     .sched-save { margin-left: 0; flex: 1; }
     .split { flex: 1; }
@@ -2207,25 +2221,54 @@
     color: var(--ink);
     font-variant-numeric: tabular-nums;
   }
-  /* ---------- the two pages of a device sheet ----------
-     Apple Home's layout: the control alone on the first page, the settings a
-     page to the right. Only one page is in the flow at a time; during the
-     change the one leaving is lifted out so the two can pass each other. */
-  .pages { position: relative; }
-  .pages.moving { overflow: hidden; }
-  .pg { display: none; }
-  .pg.on, .pg.leaving { display: block; }
-  .pg.leaving {
+  /* ---------- the pages of a device sheet ----------
+     The first page is in the flow. The settings and the colour picker are a
+     sheet of their own that comes up from the bottom of the card and covers
+     it: laid over the first page while it moves, and in the flow once it is
+     up, so the card is exactly as tall as what it is showing and anything that
+     arrives late - the firmware check, the schedule row - has room. */
+  .pages { position: relative; display: flow-root; }
+  .pg-main { transform-origin: 50% 0; }
+  .pg-panel {
+    position: relative;
+    margin: calc(-1 * var(--pad-y)) calc(-1 * var(--pad));
+    padding: var(--pad-y) var(--pad);
+    background: var(--panel-hi);
+    border-radius: var(--radius-card) var(--radius-card) 0 0;
+  }
+  .pages.up:not(.moving) > .pg-main { display: none; }
+  .pages.moving > .pg-panel {
     position: absolute;
     top: 0;
     left: 0;
-    width: 100%;
+    right: 0;
+    margin-bottom: 0;
+    /* The shadow is lost on the dark card, so the edge also gets a hairline -
+       inset, so it follows the corners and moves nothing. */
+    box-shadow: 0 -14px 30px -16px rgba(0, 0, 0, .6),
+                inset 0 1px 0 color-mix(in srgb, var(--ink) 14%, transparent);
+  }
+  /* A sheet reaches the bottom of the card. The picker is shorter than a long
+     page, and while the card shrinks to it, the page would show under the
+     panel's lower edge as well as over its top one. */
+  .pages.moving > .pg-panel::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 100%;
+    height: 100vh;
+    background: inherit;
     pointer-events: none;
   }
+  /* Nothing scrolls while a sheet is on its way: the one coming up starts
+     below the card, and a scrollbar flashing for it would be the only thing
+     on the screen that knew. */
+  .sheet.panel-moving { overflow: hidden; }
 
   /* The gear, where Apple puts it: the bottom corner of the control card. */
   .pg-foot { display: flex; justify-content: flex-end; margin-top: 14px; }
-  .gear, .back {
+  .gear {
     width: 34px;
     height: 34px;
     padding: 7px;
@@ -2238,36 +2281,117 @@
     place-items: center;
     transition: color .15s, border-color .15s, background .15s;
   }
-  .gear svg, .back svg { width: 100%; height: 100%; display: block; }
-  .gear:hover, .back:hover { color: var(--ink); border-color: var(--ink-faint); }
-  .gear:focus-visible, .back:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
-  .back { border-color: transparent; background: transparent; }
+  .gear svg { width: 100%; height: 100%; display: block; }
+  .gear:hover { color: var(--ink); border-color: var(--ink-faint); }
+  .gear:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 
-  /* Back on the left, the title in the middle, as a navigation bar reads. */
+  /* A panel's head: what it is, centred where the device's name was. The X
+     in the corner closes the panel first and the card after, as the X on a
+     sheet over a sheet does. */
   .pg-head {
-    display: grid;
-    grid-template-columns: 34px 1fr 34px;
+    display: flex;
+    flex-direction: column;
     align-items: center;
-    row-gap: 2px;
-    margin: -6px 0 18px;
+    gap: 4px;
+    margin: 0 0 22px;
   }
-  .pg-head .back { grid-row: 1; grid-column: 1; }
   .pg-title {
-    grid-row: 1;
-    grid-column: 2;
     font-size: 13px;
     letter-spacing: .24em;
     text-transform: uppercase;
     font-weight: 700;
+    min-height: 26px;
+    display: flex;
+    align-items: center;
   }
   .pg-sub {
-    grid-row: 2;
-    grid-column: 1 / -1;
     font-size: 11px;
-    letter-spacing: .12em;
+    letter-spacing: .14em;
     text-transform: uppercase;
-    color: var(--ink-faint);
+    color: var(--ink-dim);
   }
+  .pg-sub:empty { display: none; }
+
+  /* ---------- the presets under the brightness ----------
+     Round swatches in a row that scrolls sideways, as Apple Home lays them.
+     The ring is drawn outside the swatch with a gap in the card's own colour,
+     so it reads as a ring around a colour and not as the colour's border. */
+  .swatches {
+    position: relative;
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    padding: 6px 7px 12px;
+    margin: 4px -7px 0;
+    scroll-snap-type: x proximity;
+    scroll-padding: 0 7px;
+    scrollbar-width: none;
+  }
+  .swatches::-webkit-scrollbar { display: none; }
+  /* Centred while the row fits, from the start once it does not: auto margins
+     take the spare room and give it back when there is none, which plain
+     centring would not - it pushes the first swatch out of reach. */
+  .sw:first-child { margin-left: auto; }
+  .sw:last-child { margin-right: auto; }
+  /* The edge with more behind it fades, so a row that scrolls says so. */
+  .swatches.more-r {
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 30px), transparent);
+    mask-image: linear-gradient(90deg, #000 calc(100% - 30px), transparent);
+  }
+  .swatches.more-l {
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 30px);
+    mask-image: linear-gradient(90deg, transparent, #000 30px);
+  }
+  .swatches.more-l.more-r {
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 30px, #000 calc(100% - 30px), transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 30px, #000 calc(100% - 30px), transparent);
+  }
+  .sw {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
+    background: var(--sunken);
+    cursor: pointer;
+    scroll-snap-align: start;
+    display: grid;
+    place-items: center;
+    transition: box-shadow .18s ease, transform .12s ease;
+  }
+  .sw:active { transform: scale(.94); }
+  .sw.on { box-shadow: 0 0 0 3px var(--panel-hi), 0 0 0 5px var(--ink); }
+  .sw:focus-visible { outline: 2px solid var(--link); outline-offset: 5px; }
+  /* Adaptive: the whole day's whites in one swatch, warm to cool. */
+  .sw.adaptive {
+    background: linear-gradient(135deg, #ffb45a 0%, #ffe3b8 48%, #dfeeff 52%, #b9d7ff 100%);
+  }
+  .sw.adaptive b { font-size: 13px; color: #5a3d12; letter-spacing: 0; }
+  /* The picker: every hue, with the lamp's own colour in the middle when it is
+     on one that no preset matches. */
+  .sw.custom {
+    background: conic-gradient(from 0deg, #f33, #fd3, #3d3, #3dd, #33f, #d3d, #f33);
+  }
+  .sw.custom i {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--custom, transparent);
+    box-shadow: 0 0 0 2px var(--panel-hi);
+  }
+  .sw.custom:not(.on) i { background: var(--panel-hi); }
+
+  /* The picker's page: the white strip and the wheel side by side. */
+  .hk-colour {
+    display: flex;
+    gap: 22px;
+    justify-content: center;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    margin: 6px 0 8px;
+  }
+  .hk-colour .hk-wheel-pad { margin: 0; }
 
   /* The actions as a grouped list, one row each - the shape of an accessory's
      settings in Apple Home, and a better one for things you do once in a
@@ -2730,7 +2854,8 @@
          chips plus a schedule chip, which put four permanent buttons across
          the top of a page whose subject is the rooms underneath them. -->
     <div class="hdr-acts">
-      <button type="button" class="hact" id="go-sched">schedule</button>
+      <button type="button" class="hact" id="go-sched" title="schedule"
+              aria-label="schedule">schedule</button>
       <button type="button" class="hact add" id="go-add"
               title="add a device, a switch or a room" aria-label="add">+</button>
     </div>
@@ -4218,6 +4343,13 @@ function adoptBulb(node, j) {
   if (typeof j.ctMin === 'number' && j.ctMin) { next.ctMin = j.ctMin; }
   if (typeof j.ctMax === 'number' && j.ctMax) { next.ctMax = j.ctMax; }
   if (typeof j.held === 'boolean') { next.held = j.held; }
+  // Which facets are held is what the presets read "adaptive" from, and the
+  // colour is what they find their ring by - both straight from the answer,
+  // so a preset shows as chosen when it is, not a report later.
+  if (Array.isArray(j.heldWhat)) { next.heldWhat = j.heldWhat; }
+  if (typeof j.colorMode === 'number') { next.colorMode = j.colorMode; }
+  if (typeof j.hue === 'number') { next.hue = j.hue; }
+  if (typeof j.sat === 'number') { next.sat = j.sat; }
   noteHeld(node, cur.held, next.held);
   state.bulbs[String(node)] = next;
 }
@@ -4286,70 +4418,146 @@ function sheetRemove() {
   <div class="forget-note" hidden></div>`;
 }
 
-/* A device's sheet as two pages, the way Apple Home builds one.
+/* A device's sheet the way Apple Home builds one.
  *
- * The first page is the thing itself - a lamp's control, a sensor's readings,
- * a switch's lock and what it drives - and nothing else. Everything that is
- * ABOUT the device rather than a use of it waits one tap away behind the gear:
- * identifying it, its properties, sharing it to another home, its firmware,
- * what it is wired to, and removing it. They were all on the first page, which
- * made opening a lamp to dim it mean reading past four buttons about the lamp.
+ * The first page is the thing itself - a lamp's brightness and its colours, a
+ * sensor's readings, a switch's lock and what it drives - and nothing else.
+ * Everything that is ABOUT the device rather than a use of it waits behind the
+ * gear: identifying it, its properties, sharing it, its firmware, what it is
+ * wired to, and removing it. They were all on the first page, so opening a
+ * lamp to dim it meant reading past four buttons about the lamp.
+ *
+ * The settings and the colour picker come UP FROM THE BOTTOM, over the first
+ * page, as iOS stacks a sheet on a sheet: the page underneath sinks back and
+ * dims while they are up, and it is still there when they go down again.
  */
-function pagedSheet(main, settings) {
-  return `<div class="pages">
-    <section class="pg pg-main on">${main}
+function panelHead(title, withSub) {
+  return `<div class="pg-head">
+      <span class="pg-title">${title}</span>
+      ${withSub ? '<span class="pg-sub"></span>' : ''}
+    </div>`;
+}
+
+function pagedSheet(main, settings, picker) {
+  const gear = settings === null || settings === undefined ? '' : `
       <div class="pg-foot">
         <button type="button" class="gear" aria-label="settings"
                 title="settings">${ICONS.gear}</button>
-      </div>
-    </section>
-    <section class="pg pg-set" aria-hidden="true">
-      <div class="pg-head">
-        <button type="button" class="back" aria-label="back"
-                title="back">${ICONS.back}</button>
-        <span class="pg-title">settings</span>
-        <span class="pg-sub"></span>
-      </div>
-      ${settings}
-    </section>
+      </div>`;
+  return `<div class="pages">
+    <section class="pg-main">${main}${gear}</section>
+    ${picker ? `<section class="pg-panel pg-pick" hidden data-title="colour">
+      ${panelHead('colour')}${picker}</section>` : ''}
+    ${gear ? `<section class="pg-panel pg-set" hidden data-title="settings">
+      ${panelHead('settings', true)}${settings}</section>` : ''}
   </div>`;
 }
 
-/* Between the two pages, as iOS pushes a view: the new one comes in from the
- * side while the old one slides a third of the way out and fades, and the card
- * changes height to fit instead of jumping. */
-function goPage(sheet, to) {
+/* A panel moving is one animation on three things - the card's height, the
+ * first page sinking back, the panel rising - and a second request while it
+ * runs lands it where it was going before starting on its own. Two sets of
+ * keyframes fighting over one card is how a panel ends up half-way up. */
+function panelSettle(box) {
+  const done = box._done;
+  box._done = null;
+  [box, ...box.children].forEach(el => el.getAnimations().forEach(x => x.cancel()));
+  if (done) { done(); }
+}
+
+function panelPads(panel) {
+  const cs = getComputedStyle(panel);
+  return parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+}
+
+/* Up over whatever part of the first page is on screen, not over its top: a
+ * long sheet scrolled down to the colours opens the picker where the colours
+ * were, and closing it gives the page back at the same place. The panel is
+ * moved into the flow only once it is up - at the top of the card, with the
+ * card scrolled to the top, which is the same place on the screen. */
+function openPanel(sheet, which) {
   const box = sheet.querySelector('.pages');
-  const from = box.querySelector('.pg.on');
-  const next = box.querySelector(to === 'set' ? '.pg-set' : '.pg-main');
-  if (!from || from === next) { return; }
-  const fwd = to === 'set';
+  if (!box) { return; }
+  panelSettle(box);
+  const panel = box.querySelector(which === 'set' ? '.pg-set' : '.pg-pick');
+  const main = box.querySelector('.pg-main');
+  if (!panel || !panel.hidden) { return; }
+  box.querySelectorAll('.pg-panel').forEach(x => { x.hidden = x !== panel; });
+  const st = sheet.scrollTop;
+  box._scroll = st;
   const h0 = box.offsetHeight;
-  from.classList.remove('on');
-  from.classList.add('leaving');
-  from.setAttribute('aria-hidden', 'true');
-  next.classList.add('on');
-  next.removeAttribute('aria-hidden');
-  sheet.scrollTop = 0;
-  const done = () => from.classList.remove('leaving');
-  if (reducedMotion()) { done(); return; }
-  const h1 = box.offsetHeight;
-  const opts = { duration: 380, easing: SHEET_EASE_OPEN };
+  const from = st + sheet.clientHeight;
+  box.classList.remove('up');
   box.classList.add('moving');
-  box.animate([{ height: h0 + 'px' }, { height: h1 + 'px' }], opts)
-    .finished.then(() => box.classList.remove('moving')).catch(() => {});
-  next.animate([{ transform: `translateX(${fwd ? 100 : -30}%)`, opacity: fwd ? 1 : 0 },
-                { transform: 'none', opacity: 1 }], opts);
-  from.animate([{ transform: 'none', opacity: 1 },
-                { transform: `translateX(${fwd ? -30 : 100}%)`, opacity: fwd ? 0 : 1 }], opts)
-    .finished.then(done).catch(done);
-  const focusTo = next.querySelector(fwd ? '.back' : '.gear');
-  if (focusTo) { focusTo.focus({ preventScroll: true }); }
+  panel.hidden = false;
+  main.inert = true;
+  const h1 = panel.offsetHeight - panelPads(panel);
+  const x = $('#sheet-x');
+  x.title = 'close ' + panel.dataset.title;
+  x.setAttribute('aria-label', x.title);
+  box._done = () => {
+    box.classList.remove('moving');
+    box.classList.add('up');
+    sheet.classList.remove('panel-moving');
+    main.style.transformOrigin = '';
+    sheet.scrollTop = 0;
+  };
+  if (reducedMotion()) { panelSettle(box); return; }
+  sheet.classList.add('panel-moving');
+  main.style.transformOrigin = `50% ${st}px`;
+  const o = { duration: 460, easing: SHEET_EASE_OPEN, fill: 'forwards' };
+  box.animate([{ height: h0 + 'px' }, { height: h1 + 'px' }], o);
+  main.animate([{ transform: 'none', opacity: 1 },
+                { transform: 'scale(.94)', opacity: .2 }], o);
+  panel.animate([{ transform: `translateY(${from}px)` },
+                 { transform: `translateY(${st}px)` }], o)
+    .finished.then(() => { if (box._done) { panelSettle(box); } }).catch(() => {});
+}
+
+// Answers whether there was a panel to close, so the X and Escape can take
+// the panel down first and the card only when there is nothing left on it.
+function closePanel(sheet, instant) {
+  const box = sheet.querySelector('.pages');
+  if (!box) { return false; }
+  panelSettle(box);
+  const panel = box.querySelector('.pg-panel:not([hidden])');
+  const main = box.querySelector('.pg-main');
+  if (!panel) { return false; }
+  const x = $('#sheet-x');
+  x.title = 'close';
+  x.setAttribute('aria-label', 'close');
+  const sp = sheet.scrollTop;
+  const h0 = box.offsetHeight;
+  box.classList.add('moving');
+  box.classList.remove('up');
+  main.inert = false;
+  sheet.scrollTop = box._scroll || 0;
+  const st = sheet.scrollTop;
+  const h1 = box.offsetHeight;
+  box._done = () => {
+    panel.hidden = true;
+    box.classList.remove('moving');
+    sheet.classList.remove('panel-moving');
+    main.style.transformOrigin = '';
+    const gear = main.querySelector('.gear');
+    if (gear && panel.classList.contains('pg-set')) { gear.focus({ preventScroll: true }); }
+  };
+  if (instant || reducedMotion()) { panelSettle(box); return true; }
+  sheet.classList.add('panel-moving');
+  main.style.transformOrigin = `50% ${st}px`;
+  const o = { duration: 340, easing: SHEET_EASE_CLOSE, fill: 'forwards' };
+  box.animate([{ height: h0 + 'px' }, { height: h1 + 'px' }], o);
+  main.animate([{ transform: 'scale(.94)', opacity: .2 },
+                { transform: 'none', opacity: 1 }],
+               { duration: 340, easing: SHEET_EASE_OPEN, fill: 'forwards' });
+  panel.animate([{ transform: `translateY(${st - sp}px)` },
+                 { transform: `translateY(${st + h1 + panelPads(panel)}px)` }], o)
+    .finished.then(() => { if (box._done) { panelSettle(box); } }).catch(() => {});
+  return true;
 }
 
 function wirePages(sheet, sub) {
-  sheet.querySelector('.gear').onclick = () => goPage(sheet, 'set');
-  sheet.querySelector('.back').onclick = () => goPage(sheet, 'main');
+  const gear = sheet.querySelector('.gear');
+  if (gear) { gear.onclick = () => openPanel(sheet, 'set'); }
   const el = sheet.querySelector('.pg-sub');
   if (el) { el.textContent = sub || ''; }
 }
@@ -4677,7 +4885,8 @@ function wireActions(sheet, dev, back) {
   wireForget(sheet, dev);
 }
 
-/* The bulb control: a level column, a white strip and a colour wheel.
+/* The bulb control: a level column, the colour presets under it, and the
+ * picker - a white strip and a colour wheel - for everything else.
  *
  * Built once and used twice. A bulb's own sheet shows a lamp and commands it; a
  * webhook's sheet shows a value and stores it. Everything that differs between
@@ -4688,11 +4897,16 @@ function wireActions(sheet, dev, back) {
  * that tells a tap from a drag.
  *
  * read() returns what to show when no finger is down:
- *   {on, norm, mireds, hue, sat, colorMode, held, caption, canColour, ctLo, ctHi}
- * onLevel / onMireds / onColour / onTap are what a gesture ends in. They may be
- * async: the drag is held until they resolve, so the control does not snap back
- * to a stale reading while the write is still in the air.
+ *   {on, norm, mireds, hue, sat, colorMode, held, adaptive, caption,
+ *    canCt, canColour, ctLo, ctHi}
+ * onLevel / onMireds / onColour / onAdaptive / onTap are what a gesture ends
+ * in. They may be async: the drag is held until they resolve, so the control
+ * does not snap back to a stale reading while the write is still in the air.
+ * onPicker is the last preset, and brings the picker up.
  */
+// The first page: the brightness, alone, and the colours under it as presets -
+// Apple Home's layout. The strip and the wheel are the picker's own panel
+// (BULB_PICKER_HTML), and they have to be inside the same root.
 const BULB_CONTROL_HTML = () => `
     <div class="hk">
       <div class="hk-pad">
@@ -4705,15 +4919,58 @@ const BULB_CONTROL_HTML = () => `
         </div>
         <div class="hk-cap" id="cap-lvl"></div>
       </div>
-      <div class="hk-pad">
+    </div>
+    <div class="swatches" role="group" aria-label="colour"></div>`;
+
+const BULB_PICKER_HTML = () => `
+    <div class="hk-colour">
+      <div class="hk-pad hk-ctpad">
         <div class="hk-ct" id="hk-ct"><div class="hk-knob"></div></div>
         <div class="hk-cap" id="cap-ct"></div>
       </div>
-    </div>
-    <div class="hk-wheel-pad" id="wheel-pad" hidden>
-      <div class="hk-wheel" id="hk-wheel"><div class="hk-dot"></div></div>
-      <div class="hk-cap" id="cap-col"></div>
+      <div class="hk-wheel-pad" id="wheel-pad" hidden>
+        <div class="hk-wheel" id="hk-wheel"><div class="hk-dot"></div></div>
+        <div class="hk-cap" id="cap-col"></div>
+      </div>
     </div>`;
+
+/* The presets, in Apple Home's order: adaptive first - the colour the schedule
+ * has the lamp on - then a few whites, then colours for the lamps that have
+ * them, and last the picker for anything else.
+ *
+ * Whites are in kelvin and clamped to the lamp's own range, so a lamp that
+ * stops at 2200 K does not offer 1800 K and then quietly land somewhere else;
+ * two presets that clamp to the same place are one preset. */
+const SWATCH_WHITES = [2200, 2700, 4000, 6500];
+const SWATCH_COLOURS = [
+  { name: 'red', hue: 0, sat: 254 },
+  { name: 'orange', hue: 21, sat: 254 },
+  { name: 'yellow', hue: 42, sat: 225 },
+  { name: 'green', hue: 85, sat: 215 },
+  { name: 'blue', hue: 170, sat: 254 },
+  { name: 'purple', hue: 198, sat: 215 },
+  { name: 'pink', hue: 228, sat: 170 },
+];
+
+function swatchesFor(cur) {
+  const out = [];
+  if (!cur.canCt && !cur.canColour) { return out; }
+  out.push({ kind: 'adaptive', title: 'adaptive \u2014 the colour follows the schedule' });
+  if (cur.canCt) {
+    const seen = new Set();
+    SWATCH_WHITES.forEach(k => {
+      const m = Math.min(cur.ctHi, Math.max(cur.ctLo, Math.round(1e6 / k)));
+      if (seen.has(m)) { return; }
+      seen.add(m);
+      out.push({ kind: 'ct', m, title: `${kelvin(m)} K \u2014 ${ctWord(m)}` });
+    });
+  }
+  if (cur.canColour) {
+    SWATCH_COLOURS.forEach(c => out.push({ kind: 'hs', ...c, title: c.name }));
+  }
+  out.push({ kind: 'custom', title: 'another colour' });
+  return out;
+}
 
 function bulbControl(root, opts) {
   const lvlBox = root.querySelector('#hk-lvl');
@@ -4728,6 +4985,18 @@ function bulbControl(root, opts) {
   const wheel = root.querySelector('#hk-wheel');
   const dot = root.querySelector('.hk-dot');
   const capW = root.querySelector('#cap-col');
+  const swBox = root.querySelector('.swatches');
+  const ctPad = root.querySelector('.hk-ctpad');
+  let swKey = '';
+  let swShow = false;
+
+  const swEdges = () => {
+    if (!swBox) { return; }
+    const room = swBox.scrollWidth - swBox.clientWidth;
+    swBox.classList.toggle('more-l', room > 2 && swBox.scrollLeft > 2);
+    swBox.classList.toggle('more-r', room > 2 && swBox.scrollLeft < room - 2);
+  };
+  if (swBox) { swBox.addEventListener('scroll', swEdges, { passive: true }); }
 
   // What the controls show while a finger is down. null means "whatever read()
   // says"; a number means the finger is in charge.
@@ -4748,11 +5017,87 @@ function bulbControl(root, opts) {
     const at = f => ctColor(cur.ctHi - f * (cur.ctHi - cur.ctLo));
     ctBox.style.background = `linear-gradient(0deg, ${at(0)}, ${at(.33)}, `
       + `${at(.5)}, ${at(.67)}, ${at(1)})`;
+    buildSwatches(cur);
+  };
+
+  /* Rebuilt only when what the lamp can do changes - its range read for the
+   * first time, a colour bulb ticked into a webhook's list - and repainted on
+   * every change of what it is showing. */
+  const buildSwatches = cur => {
+    if (!swBox) { return; }
+    const list = swatchesFor(cur);
+    const key = list.map(x => x.kind + (x.m || '') + (x.name || '')).join('|');
+    if (key === swKey) { return; }
+    swKey = key;
+    swBox.hidden = !list.length;
+    swBox.innerHTML = list.map((x, i) => {
+      const bg = x.kind === 'ct' ? ctColor(x.m)
+        : x.kind === 'hs' ? hsColor(x.hue, x.sat) : '';
+      const inner = x.kind === 'adaptive' ? '<b>A</b>'
+        : x.kind === 'custom' ? '<i></i>' : '';
+      return `<button type="button" class="sw ${x.kind}" data-i="${i}"
+                title="${x.title}" aria-label="${x.title}"
+                ${bg ? `style="background:${bg}"` : ''}>${inner}</button>`;
+    }).join('');
+    swShow = true;
+    swBox.querySelectorAll('.sw').forEach(b => {
+      const x = list[Number(b.dataset.i)];
+      b._x = x;
+      b.onclick = () => {
+        if (x.kind === 'custom') { if (opts.onPicker) { opts.onPicker(); } return; }
+        if (x.kind === 'adaptive') { settle(opts.onAdaptive); return; }
+        if (x.kind === 'ct') { settle(opts.onMireds, x.m); return; }
+        settle(opts.onColour, { hue: x.hue, sat: x.sat });
+      };
+    });
+  };
+
+  // Which preset the lamp is on, if any. Near enough counts: a lamp asked for
+  // 370 mireds reports 369, and a ring that vanished over one mired would
+  // read as the choice not having taken.
+  const paintSwatches = cur => {
+    if (!swBox || swBox.hidden) { return; }
+    let hit = false;
+    swBox.querySelectorAll('.sw').forEach(b => {
+      const x = b._x;
+      let on = false;
+      if (x.kind === 'adaptive') { on = !!cur.adaptive; }
+      else if (!cur.adaptive && x.kind === 'ct') {
+        on = cur.colorMode !== 0 && Math.abs((cur.mireds || 0) - x.m) <= 6;
+      } else if (!cur.adaptive && x.kind === 'hs') {
+        const dh = Math.abs(((cur.hue ?? -99) - x.hue + 381) % 254 - 127);
+        on = cur.colorMode === 0 && dh <= 6 && Math.abs((cur.sat ?? 0) - x.sat) <= 30;
+      }
+      if (on) { hit = true; }
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    // Nothing matched: it is a colour of its own, and the picker is where it
+    // was chosen, so the picker wears the ring - in the colour itself.
+    const pick = swBox.querySelector('.sw.custom');
+    if (pick) {
+      pick.classList.toggle('on', !hit);
+      pick.setAttribute('aria-pressed', hit ? 'false' : 'true');
+      pick.style.setProperty('--custom', hit ? 'transparent'
+        : (cur.colorMode === 0 ? hsColor(cur.hue ?? 0, cur.sat ?? 0) : ctColor(cur.mireds || 370)));
+    }
+    // A row built for a lamp that is on blue opens with blue in view, not
+    // eight swatches to the left of it. After a frame: the card is not laid
+    // out yet when the control is first painted.
+    if (swShow) {
+      swShow = false;
+      requestAnimationFrame(() => {
+        const on = swBox.querySelector('.sw.on');
+        if (on) { swBox.scrollLeft = on.offsetLeft - (swBox.clientWidth - on.offsetWidth) / 2; }
+        swEdges();
+      });
+    }
   };
 
   const paint = () => {
     const cur = opts.read();
     const on = cur.on === true;
+    paintSwatches(cur);
     const v = Math.max(0, Math.min(1, dragLvl !== null ? dragLvl : cur.norm));
     const mir = dragCt !== null ? dragCt
       : Math.min(cur.ctHi, Math.max(cur.ctLo, cur.mireds));
@@ -4786,6 +5131,7 @@ function bulbControl(root, opts) {
     capC.textContent = `${kelvin(mir)} K`;
     capC.title = ctWord(mir);
 
+    if (ctPad) { ctPad.hidden = cur.canCt === false; }
     wheelPad.hidden = !cur.canColour;
     if (!wheelPad.hidden) {
       const hs = dragCol || { hue: cur.hue ?? 0, sat: cur.sat ?? 0 };
@@ -4939,7 +5285,7 @@ function openBulb(b) {
     <div class="links" id="sched-of"></div>
     ${sheetActions(b)}
     <div class="fwslot"></div>
-    ${sheetRemove()}`);
+    ${sheetRemove()}`, BULB_PICKER_HTML());
   wirePages(sheet, `bulb \u00b7 node ${b.node}`);
 
   nameable(sheet, b, () => openBulb(b));
@@ -5018,6 +5364,12 @@ function openBulb(b) {
         sat: cur.sat,
         colorMode: cur.colorMode,
         held: cur.held,
+        // Adaptive is "the colour is the schedule's": nothing holds it. A
+        // lamp dimmed by hand is still adaptive - the hold is on its
+        // brightness, and the white goes on following the day.
+        adaptive: !(cur.heldWhat || []).includes('mireds'),
+        canCt: typeof caps.featureMap === 'number' ? (caps.featureMap & 16) === 16
+                                                   : caps.ct !== false,
         canColour: typeof cur.hasColor === 'boolean' ? cur.hasColor
           : (typeof caps.featureMap === 'number' ? (caps.featureMap & 1) === 1
                                                  : !!caps.color),
@@ -5031,6 +5383,8 @@ function openBulb(b) {
     onLevel: v => send({ level: v }),
     onMireds: m => send({ mireds: m }),
     onColour: c => send({ hue: c.hue, sat: c.sat }),
+    onAdaptive: () => send({ adaptive: true }),
+    onPicker: () => openPanel(sheet, 'pick'),
     onTap: () => send({ action: 'toggle' }),
   });
   SHEET_LIVE = ctl.paint;
@@ -6989,9 +7343,11 @@ function editHook(h) {
     mireds: typeof h.mireds === 'number' ? h.mireds : 370,
     hue: typeof h.hue === 'number' ? h.hue : 0,
     sat: typeof h.sat === 'number' ? h.sat : 0,
-    colorMode: h.colorMode === 0 ? 0 : 2,
+    // -1 is adaptive: the lamps keep the schedule's colour and only the
+    // brightness is the webhook's.
+    colorMode: h.colorMode === 0 || h.colorMode === -1 ? h.colorMode : 2,
   };
-  sheet.innerHTML = `<h2></h2>
+  sheet.innerHTML = pagedSheet(`<h2></h2>
     <div class="who"></div>
     <div class="hookurl">
       <code>${esc(h.url || '')}</code>
@@ -7023,7 +7379,8 @@ function editHook(h) {
       <span class="rule"></span></div>
     <div class="pick">${renderPick(bulbs, new Set(h.bulbs || []), h.where, 'no bulbs')}</div>
     <button class="go">save</button>
-    <button type="button" class="danger hookdel">remove this webhook</button>`;
+    <button type="button" class="danger hookdel">remove this webhook</button>`,
+    null, BULB_PICKER_HTML());
 
   nameable(sheet, h, () => editHook(h));
   sheet.querySelector('.who').textContent = 'webhook'
@@ -7043,7 +7400,7 @@ function editHook(h) {
     .map(n => bulbs.find(x => x.node === n))
     .filter(Boolean);
 
-  const ctl = bulbControl(sheet.querySelector('.hookctl'), {
+  const ctl = bulbControl(sheet, {
     read: () => {
       const mine = picked();
       const caps = mine.map(x => x.caps || {});
@@ -7055,6 +7412,10 @@ function editHook(h) {
         : true;
       const los = live.map(c => c.ctMin).filter(x => typeof x === 'number');
       const his = live.map(c => c.ctMax).filter(x => typeof x === 'number');
+      const white = mine.length
+        ? caps.some(c => typeof c.featureMap === 'number' ? (c.featureMap & 16) === 16
+                                                           : c.ct !== false)
+        : true;
       return {
         on: true,
         norm: perceived(val.level),
@@ -7062,7 +7423,9 @@ function editHook(h) {
         hue: val.hue,
         sat: val.sat,
         colorMode: val.colorMode,
+        adaptive: val.colorMode === -1,
         caption: act === 'off' ? 'not used when it turns lamps off' : 'brightness',
+        canCt: white,
         canColour: colour,
         ctLo: los.length ? Math.max(...los) : MIRED_MIN,
         ctHi: his.length ? Math.min(...his) : MIRED_MAX,
@@ -7071,6 +7434,8 @@ function editHook(h) {
     onLevel: v => { val.level = v; },
     onMireds: m => { val.mireds = m; val.colorMode = 2; },
     onColour: c => { val.hue = c.hue; val.sat = c.sat; val.colorMode = 0; },
+    onAdaptive: () => { val.colorMode = -1; },
+    onPicker: () => openPanel(sheet, 'pick'),
   });
 
   // Ticking a lamp can change what the control may offer, so it repaints.
@@ -7839,6 +8204,10 @@ new MutationObserver(recs => {
 // A sheet written while the last one is still shrinking away is a new sheet,
 // not the end of the old one: stop closing, and bring it back to full size.
 new MutationObserver(() => {
+  const x = $('#sheet-x');
+  x.title = 'close';
+  x.setAttribute('aria-label', 'close');
+  $('#sheet').classList.remove('panel-moving');
   if (!SHEET_CLOSING) { return; }
   SHEET_CLOSING.cancel();
   SHEET_CLOSING = null;
@@ -7857,6 +8226,9 @@ new MutationObserver(() => {
 }).observe($('#sheet'), { childList: true });
 
 function closeSheet() {
+  const x = $('#sheet-x');
+  x.title = 'close';
+  x.setAttribute('aria-label', 'close');
   const after = sheetOnClose;
   sheetOnClose = null;
   SHEET_LIVE = null;
@@ -7996,8 +8368,15 @@ async function share(btn) {
 }
 
 $('#overlay').onclick = e => { if (e.target.id === 'overlay') closeSheet(); };
-$('#sheet-x').onclick = closeSheet;
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+// The X and Escape take down whatever is on top: a panel if one is up, and
+// the card when there is nothing left on it. A click on the dark around the
+// card is a way out of all of it.
+const closeTop = () => {
+  if ($('#overlay').classList.contains('on') && closePanel($('#sheet'))) { return; }
+  closeSheet();
+};
+$('#sheet-x').onclick = closeTop;
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeTop(); });
 
 // ---------- lock ----------
 //

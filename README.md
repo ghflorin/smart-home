@@ -12,9 +12,13 @@ panel on a small Linux box to administer it all.
 A section per room, a tile per device. The round icon is the quick action —
 on/off for a bulb, lock/unlock for a switch — and anywhere else opens it, the
 way Apple Home does: the tile grows into its page and shrinks back into its own
-gap when you close it. The page is the device and nothing else; identifying it,
-sharing it, its firmware and removing it are one tap away, behind the gear. A
-battery gauge and a small cloud appear in a tile's corner when they apply: one
+gap when you close it. The page is the device and nothing else. For a lamp that
+is its brightness and a row of colours: **adaptive** first, which follows the
+schedule, then a few whites, the colours if the lamp has them, and last a picker
+for anything else. Identifying it, sharing it, its firmware and removing it are
+one tap away, behind the gear. The settings and the picker come up from the
+bottom, over the page, and the X takes them down again before it closes the
+card. A battery gauge and a small cloud appear in a tile's corner when they apply: one
 for the devices that run on a cell, one when firmware is waiting. A red crossed
 signal takes that corner when a device has stopped answering — the last reading
 stays on the tile, so you can see what its battery was on the way out.
@@ -41,10 +45,11 @@ wrong.
 
 Each one says what it does, for how long, and to what: **turn on** or **turn
 off**; 5s, 15s, 1m, 5m, 15m or **always**; and — through the same control a
-bulb's own sheet uses — the brightness and the colour it turns them to. The
-control follows the lamps you tick: a list with one colour bulb in it gets the
-wheel, and the white strip travels only as far as the narrowest of them can
-actually go. A span puts every lamp back exactly as it
+bulb's own sheet uses — the brightness and the colour it turns them to, or
+adaptive, which leaves the colour to the schedule. The control follows the lamps
+you tick: a list with one colour bulb in it gets the colours and the wheel, and
+the white strip travels only as far as the narrowest of them can actually
+go. A span puts every lamp back exactly as it
 was afterwards; always leaves them where it put them — and when that is on, it
 takes a hold, the same one a long press on a wall switch takes, or the schedule
 would pull the light back to the curve inside a minute. Turning them off needs

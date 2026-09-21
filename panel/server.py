@@ -2382,7 +2382,15 @@ def hook_value(hook: dict) -> dict:
         return max(lo, min(hi, int(round(v))))
 
     out = {"level": num("level", 1, 254) or MOTION_LEVEL}
-    if int(hook.get("colorMode", 2) or 0) == 0:
+    try:
+        mode = int(hook.get("colorMode", 2))
+    except (TypeError, ValueError):
+        mode = 2
+    # -1 is "adaptive": the lamp keeps whatever colour the schedule has it on,
+    # and only the brightness is the hook's business.
+    if mode == -1:
+        return out
+    if mode == 0:
         h, sat = num("hue", 0, 254), num("sat", 0, 254)
         if h is not None and sat is not None:
             out["hue"], out["sat"] = h, sat
@@ -3094,7 +3102,8 @@ def refresh_bulbs(force: bool = False) -> dict:
                         "hue": st.get("hue"), "sat": st.get("sat"),
                         "colorMode": st.get("colorMode"),
                         "hasColor": st.get("hasColor"),
-                        "held": overridden(dev["node"])})
+                        "held": overridden(dev["node"]),
+                        "heldWhat": sorted(held_facets(dev["node"]))})
         else:
             row["measured"] = st.get("measured")
         out[str(dev["node"])] = row
@@ -3499,6 +3508,31 @@ def release_hold(node, why: str) -> bool:
     return True
 
 
+def release_facet(node, facet: str, why: str) -> bool:
+    """Give ONE of the schedule's writes back, and keep the other held.
+
+    What "adaptive" means on a lamp somebody has dimmed by hand: the colour goes
+    back to following the time of day, the brightness stays where the hand put
+    it. When nothing is left held, it is the whole hold that ends.
+
+    The memo for that facet goes with it, for the reason release_hold gives:
+    left behind, the next tick compares the curve against the value set by hand,
+    finds them close, and sends nothing.
+    """
+    left = held_facets(node) - {facet}
+    if not left:
+        return release_hold(node, why)
+    with _state_lock:
+        entry = _state.get("bulbs", {}).get(str(node))
+        if not entry:
+            return False
+        entry["heldWhat"] = sorted(left)
+        entry.pop(facet, None)
+    state_save()
+    log(f"bulb {node}: {why} - {facet} back on the schedule", "step")
+    return True
+
+
 def overridden(node) -> bool:
     with _state_lock:
         started = _state.get("bulbs", {}).get(str(node), {}).get("override")
@@ -3741,7 +3775,14 @@ def apply_light_schedule(force: bool = False, only=None) -> dict:
         # says the bulb is already there", and nothing more. Conflating the
         # two meant a restart stamped the curve onto a lamp somebody was
         # using, because startup applies with force.
-        if overridden(b["node"]):
+        # Per facet, which is what a hold was always recorded as and never
+        # used as. held_facets existed, with a docstring promising that a long
+        # press holds the brightness while the time of day goes on deciding
+        # the white - and nothing called it. Every hold held everything, so a
+        # lamp dimmed by hand also stopped following the schedule's colour,
+        # and "adaptive" could not mean anything on a lamp somebody had
+        # touched.
+        if held_facets(b["node"]) >= set(HOLD_FACETS):
             out["held"] = out.get("held", 0) + 1
             continue
 
@@ -3764,12 +3805,12 @@ def apply_light_schedule(force: bool = False, only=None) -> dict:
         # bulb has to be resolved first. A hand on the panel inside that window
         # was answered by the curve landing afterwards, so the lamp somebody had
         # just set to full went back to the schedule while they watched.
-        def free():
-            return not overridden(b["node"])
+        def free(facet):
+            return facet not in held_facets(b["node"])
 
         # What it comes up at. Stepped, because this one is flash.
         last_on = sent.get("onlevel")
-        if (force or last_on is None or abs(last_on - level) >= ONLEVEL_STEP) and free():
+        if (force or last_on is None or abs(last_on - level) >= ONLEVEL_STEP) and free("level"):
             e = m_write(b["node"], ep, 0x0008, 0x0011, level)
             if e:
                 log(f"bulb {b['node']}: OnLevel failed: {e}", "err")
@@ -3777,7 +3818,7 @@ def apply_light_schedule(force: bool = False, only=None) -> dict:
                 wrote["onlevel"] = level
 
         # What it should be doing right now, if it is lit at all.
-        if (force or sent.get("level") != level) and free():
+        if (force or sent.get("level") != level) and free("level"):
             e = m_cmd(b["node"], ep, 0x0008, "MoveToLevel",
                       {"level": level, "transitionTime": tenths,
                        "optionsMask": 0, "optionsOverride": 0})
@@ -3788,7 +3829,7 @@ def apply_light_schedule(force: bool = False, only=None) -> dict:
 
         if mireds:
             last_ct = sent.get("mireds")
-            if (force or last_ct is None or abs(last_ct - mireds) >= MIRED_STEP) and free():
+            if (force or last_ct is None or abs(last_ct - mireds) >= MIRED_STEP) and free("mireds"):
                 # optionsMask=1, optionsOverride=1 -> ExecuteIfOff, so the
                 # colour lands with the bulb off as well, which is exactly
                 # when we need it.
@@ -5048,6 +5089,24 @@ class Handler(BaseHTTPRequestHandler):
             mireds = body.get("mireds")
             hue = body.get("hue")
             sat = body.get("sat")
+            # The colour back to the schedule, and nothing else. Answered here
+            # rather than by a save of the schedule, which would let go of the
+            # brightness as well.
+            if body.get("adaptive"):
+                if not node:
+                    return self._send({"error": "missing 'node'"}, status=400)
+                log(f"--- bulb {node}: colour back to the schedule ---", "step")
+                release_facet(node, "mireds", "adaptive")
+                apply_light_schedule(force=True, only=[node])
+                st = state_of(node)
+                return self._send({"node": node, "on": st.get("on"),
+                                   "level": st.get("level"), "mireds": st.get("mireds"),
+                                   "onlevel": st.get("onlevel"),
+                                   "held": overridden(node),
+                                   "heldWhat": sorted(held_facets(node)),
+                                   "colorMode": st.get("colorMode"),
+                                   "hue": st.get("hue"), "sat": st.get("sat"),
+                                   "ctMin": st.get("ctMin"), "ctMax": st.get("ctMax")})
             if action and action not in ("on", "off", "toggle"):
                 return self._send({"error": "unknown action"}, status=400)
             # Hue and saturation are one gesture, not two: a hue with no
@@ -5191,6 +5250,11 @@ class Handler(BaseHTTPRequestHandler):
             # falling through with the honest current reading says it.
             asked = None if level is None else max(LEVEL_MIN, min(254, int(level)))
             asked_ct = None if mireds is None else max(100, min(700, int(mireds)))
+            # A colour is settled when the lamp says it is showing one, near
+            # the hue it was given: lamps round, and the preset ring that
+            # reads this back allows for it the same way.
+            asked_hs = None if hue is None else (max(0, min(254, int(hue))),
+                                                 max(0, min(254, int(sat))))
             want_on = {"on": True, "off": False}.get(action)
             deadline = time.time() + 1.5
             while True:
@@ -5205,6 +5269,10 @@ class Handler(BaseHTTPRequestHandler):
                     and (asked is None or st.get("on") is False
                          or st.get("level") == asked)
                     and (asked_ct is None or st.get("mireds") == asked_ct)
+                    and (asked_hs is None
+                         or (st.get("colorMode") == 0
+                             and abs((st.get("hue") or 0) - asked_hs[0]) <= 2
+                             and abs((st.get("sat") or 0) - asked_hs[1]) <= 3))
                     # An On sitting at the floor while OnLevel says otherwise is
                     # a bulb still on its way up - one genuinely dimmed to 1 by
                     # hand has an OnLevel of 1 to match.
@@ -5229,6 +5297,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send({"node": node, "action": action, "on": st.get("on"),
                                "level": st.get("level"), "mireds": st.get("mireds"),
                                "onlevel": st.get("onlevel"), "held": overridden(node),
+                               "heldWhat": sorted(held_facets(node)),
+                               "colorMode": st.get("colorMode"),
+                               "hue": st.get("hue"), "sat": st.get("sat"),
                                "ctMin": st.get("ctMin"), "ctMax": st.get("ctMax")})
 
         if self.path == "/api/firmware":
