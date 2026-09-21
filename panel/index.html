@@ -2372,11 +2372,13 @@
   .sw:active { transform: scale(.94); }
   .sw.on { box-shadow: var(--sw-edge), 0 0 0 3px var(--panel-hi), 0 0 0 5px var(--ink); }
   .sw:focus-visible { outline: 2px solid var(--link); outline-offset: 5px; }
-  /* Adaptive: the whole day's whites in one swatch - warm where the light
-     comes from, top left, cooling toward the far edge. */
+  /* Adaptive: the whole day's whites in one swatch, going round it - warmest
+     at the top left, coolest at the bottom right, and back the other way, so
+     there is no seam where the two ends meet. */
   .sw.adaptive {
-    background: radial-gradient(farthest-corner at 30% 30%,
-      #ffb65c 0%, #ffd49a 24%, #fff0de 42%, #d8e7ff 60%, #a3c7ff 80%);
+    background: conic-gradient(from 315deg,
+      #ffb65c, #ffd49a 45deg, #fff0de 90deg, #d8e7ff 135deg, #a3c7ff 180deg,
+      #d8e7ff 225deg, #fff0de 270deg, #ffd49a 315deg, #ffb65c);
   }
   /* The sun from the theme switch, as it stands in light mode: the day's
      light, which is what adaptive follows. */
@@ -2384,9 +2386,7 @@
   /* The picker: every hue, with the lamp's own colour in the middle when it is
      on one that no preset matches. */
   .sw.custom {
-    background:
-      radial-gradient(farthest-corner at 30% 30%, #fff 0%, rgba(255, 255, 255, 0) 58%),
-      conic-gradient(from 0deg at 30% 30%, #f33, #fd3, #3d3, #3dd, #33f, #d3d, #f33);
+    background: conic-gradient(from 0deg, #f33, #fd3, #3d3, #3dd, #33f, #d3d, #f33);
   }
   .sw.custom i {
     width: 16px;
@@ -5209,14 +5209,14 @@ function bulbControl(root, opts) {
    * first time, a colour bulb ticked into a webhook's list - and repainted on
    * every change of what it is showing. */
   // A lamp with no colours has no rainbow to offer: its picker is its own
-  // whites, warmest it can go at the top left to coolest at the far edge -
-  // the same fall as adaptive, over this lamp's range.
+  // whites, going round it the way adaptive does - warmest it can go at the
+  // top left, coolest at the bottom right - over this lamp's range.
   const whiteWheel = cur => {
     const at = f => ctColor(Math.round(cur.ctHi - f * (cur.ctHi - cur.ctLo)));
-    // Stops end at 80%: the farthest corner is outside the circle, and the
-    // coolest white has to land on the rim, not past it.
-    return `radial-gradient(farthest-corner at 30% 30%, ${[0, .25, .5, .75, 1]
-      .map(f => `${at(f)} ${f * 80}%`).join(', ')})`;
+    const half = [0, .25, .5, .75, 1];
+    const stops = [...half, ...half.slice(0, -1).reverse()]
+      .map((f, i) => `${at(f)} ${i * 45}deg`);
+    return `conic-gradient(from 315deg, ${stops.join(', ')})`;
   };
 
   const buildSwatches = cur => {
