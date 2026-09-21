@@ -24,6 +24,7 @@ import math
 import os
 import pathlib
 import queue
+import random
 import re
 import socket
 import subprocess
@@ -42,6 +43,7 @@ except ImportError:
 
 # Beside this file, so it shares the panel's dependencies and nothing else.
 from matter_link import MatterCall, MatterError, MatterLink
+import shows
 
 try:
     import segno
@@ -163,7 +165,8 @@ def all_devices(devices: dict) -> list:
     whatever is in it, and a drag moves whatever it grabbed."""
     return (switches(devices) + list(devices.get("bulbs", []))
             + list(devices.get("devices", []))
-            + list(devices.get("hooks") or []))
+            + list(devices.get("hooks") or [])
+            + list(devices.get("groups") or []))
 
 
 # A remote is a switch that cannot be wired to anything.
@@ -2474,6 +2477,44 @@ def motion_restore_target(node: int, bulb: dict) -> dict:
             "hue": st.get("hue"), "sat": st.get("sat")}
 
 
+def put_back(n: int, ep: int, was: dict, colour: bool, cmd=None):
+    """A lamp back to what it was doing before something borrowed it - its
+    power and level, and its colour if the borrower changed it. Returns
+    (error, what it went back to).
+
+    Only the colour it was showing, and only if it was touched: writing a colour
+    nobody changed would be noise on the radio and an argument with the
+    schedule."""
+    cmd = cmd or m_cmd
+    if was.get("on") is True and isinstance(was.get("level"), int):
+        err = cmd(n, ep, 0x0008, "MoveToLevelWithOnOff",
+                  {"level": was["level"], "transitionTime": 0,
+                   "optionsMask": 0, "optionsOverride": 0}, timeout=20.0)
+        where = str(was["level"])
+    else:
+        err = cmd(n, ep, 0x0006, "Off", timeout=20.0)
+        where = "off"
+    if not err and colour:
+        if was.get("colorMode") == 0 and isinstance(was.get("hue"), int) \
+                and isinstance(was.get("sat"), int):
+            e = cmd(n, ep, 0x0300, "MoveToHueAndSaturation",
+                    {"hue": was["hue"], "saturation": was["sat"],
+                     "transitionTime": 0, "optionsMask": 1,
+                     "optionsOverride": 1}, timeout=20.0)
+            where += ", its colour"
+        elif isinstance(was.get("mireds"), int) and was["mireds"]:
+            e = cmd(n, ep, 0x0300, "MoveToColorTemperature",
+                    {"colorTemperatureMireds": was["mireds"],
+                     "transitionTime": 0, "optionsMask": 1,
+                     "optionsOverride": 1}, timeout=20.0)
+            where += f", {was['mireds']} mireds"
+        else:
+            e = None
+        if e:
+            log(f"bulb {n} kept the colour it was given: {e}", "warn")
+    return err, where
+
+
 def motion_worker(node: int, targets: list, secs: float, action: str = "on") -> None:
     """Up, hold until the deadline stops moving, back. Off the request thread:
     a camera wants its POST answered now, not in five seconds.
@@ -2490,11 +2531,22 @@ def motion_worker(node: int, targets: list, secs: float, action: str = "on") -> 
             log(f"motion: hook {node} drives no bulbs yet", "warn")
             return
         try:
-            bulbs = {b["node"]: b for b in load_devices().get("bulbs", [])}
+            devs = load_devices()
+            bulbs = {b["node"]: b for b in devs.get("bulbs", [])}
         except (OSError, ValueError):
             return
         plan = [(n, bulbs[n]) for n in targets if n in bulbs]
-        want = hook_value(hook_of(load_devices(), node) or {})
+        want = hook_value(hook_of(devs, node) or {})
+        # A light show in the list is switched the way a lamp is: on plays it
+        # for the span, off stops it.
+        staged = [n for n in targets if group_of(devs, n) is not None]
+
+        def stage(on):
+            for gn in staged:
+                if on:
+                    show_start(gn, why=f"webhook {hook_of(devs, node).get('name') or node}")
+                else:
+                    show_stop(gn)
 
         def drive(n, b):
             """Whatever this hook does, done to one lamp."""
@@ -2541,6 +2593,7 @@ def motion_worker(node: int, targets: list, secs: float, action: str = "on") -> 
                             str(n), {})["level"] = want["level"]
                     set_override(n, True, ("level",))
                 log(f"motion: bulb {n} {action}, and staying that way", "ok")
+            stage(action == "on")
             return
 
         back = {n: motion_restore_target(n, b) for n, b in plan}
@@ -2550,6 +2603,7 @@ def motion_worker(node: int, targets: list, secs: float, action: str = "on") -> 
                 err = drive(n, b)
                 if err:
                     log(f"motion: bulb {n} did not go {action}: {err}", "err")
+            stage(action == "on")
 
             while True:
                 left = _motion_until.get(node, 0) - time.time()
@@ -2558,42 +2612,14 @@ def motion_worker(node: int, targets: list, secs: float, action: str = "on") -> 
                 time.sleep(min(left, 0.25))
 
             for n, b in plan:
-                ep = int(b.get("endpoint", 1))
-                was = back.get(n) or {}
-                if was.get("on") is True and isinstance(was.get("level"), int):
-                    err = m_cmd(n, ep, 0x0008, "MoveToLevelWithOnOff",
-                                {"level": was["level"], "transitionTime": 0,
-                                 "optionsMask": 0, "optionsOverride": 0}, timeout=20.0)
-                    where = str(was["level"])
-                else:
-                    err = m_cmd(n, ep, 0x0006, "Off", timeout=20.0)
-                    where = "off"
-                # Only the lamps whose colour we actually changed, and only the
-                # one of the two they were showing. Writing a colour we never
-                # touched would be noise on the radio and an argument with the
-                # schedule.
-                if not err and ("hue" in want or "mireds" in want):
-                    if was.get("colorMode") == 0 and isinstance(was.get("hue"), int) \
-                            and isinstance(was.get("sat"), int):
-                        e = m_cmd(n, ep, 0x0300, "MoveToHueAndSaturation",
-                                  {"hue": was["hue"], "saturation": was["sat"],
-                                   "transitionTime": 0, "optionsMask": 1,
-                                   "optionsOverride": 1}, timeout=20.0)
-                        where += ", its colour"
-                    elif isinstance(was.get("mireds"), int) and was["mireds"]:
-                        e = m_cmd(n, ep, 0x0300, "MoveToColorTemperature",
-                                  {"colorTemperatureMireds": was["mireds"],
-                                   "transitionTime": 0, "optionsMask": 1,
-                                   "optionsOverride": 1}, timeout=20.0)
-                        where += f", {was['mireds']} mireds"
-                    else:
-                        e = None
-                    if e:
-                        log(f"motion: bulb {n} kept the colour it was given: {e}", "warn")
+                err, where = put_back(n, int(b.get("endpoint", 1)), back.get(n) or {},
+                                      "hue" in want or "mireds" in want)
                 if err:
                     log(f"motion: bulb {n} did not go back: {err}", "err")
                 else:
                     log(f"motion: bulb {n} back to {where}", "ok")
+            if action == "on":
+                stage(False)
 
             # A burst that landed while the restore was in flight. Same targets
             # to restore to, so a lamp cannot be left standing at full.
@@ -2605,6 +2631,200 @@ def motion_worker(node: int, targets: list, secs: float, action: str = "on") -> 
     finally:
         with _motion_lock:
             _motion_busy.discard(node)
+
+
+# ---------------------------------------------------------------- light shows
+#
+# A group of lamps that plays an animation - see shows.py for what a preset is,
+# and why a show is a sequence of steps the lamps fade between rather than
+# frames. The group behaves like a lamp: switched on and off from its tile, a
+# wall switch or a webhook, with a brightness of its own; what it plays while
+# it is on is its preset.
+#
+# While a show plays, its lamps are the show's: the schedule leaves them alone,
+# and when it stops every lamp goes back to exactly what it was doing, the way
+# a webhook's span puts them back.
+GROUP_NODE_BASE = 8001
+
+_show_lock = threading.Lock()
+_shows = {}            # group node -> what it is playing
+_show_bulbs = set()    # the lamps shows have: the schedule does not touch them
+
+# Its own socket to matter-server: a show is a steady stream of commands, and
+# on the shared one it would queue behind - and in front of - everything else.
+SHOW_MS = MatterCall(MATTER_WS, log)
+
+
+def groups(devices: dict) -> list:
+    return list(devices.get("groups") or [])
+
+
+def group_of(devices: dict, node):
+    return next((g for g in groups(devices) if int(g.get("node", 0)) == int(node)), None)
+
+
+def next_group_node(devices: dict) -> int:
+    used = {int(g.get("node", 0)) for g in groups(devices)}
+    n = GROUP_NODE_BASE
+    while n in used:
+        n += 1
+    return n
+
+
+def show_state() -> dict:
+    """What is playing, for the tiles."""
+    with _show_lock:
+        return {str(n): {"preset": s["preset"], "level": s["level"], "since": s["since"]}
+                for n, s in _shows.items()}
+
+
+def show_start(node: int, preset: str = None, level=None, why: str = "") -> dict:
+    """Play, or - if it already is - change what it plays and how bright."""
+    g = group_of(load_devices(), node)
+    if g is None:
+        return {"error": f"no such group: {node}"}
+    if preset not in shows.KEYS:
+        preset = g.get("preset") if g.get("preset") in shows.KEYS else shows.KEYS[0]
+    level = max(LEVEL_MIN, min(254, int(level if level is not None else g.get("level") or 254)))
+    speed = g.get("speed") if g.get("speed") in shows.SPEEDS else "normal"
+    with _show_lock:
+        s = _shows.get(node)
+        if s:
+            s.update(preset=preset, level=level, speed=speed)
+            fresh = False
+        else:
+            _shows[node] = {"preset": preset, "level": level, "speed": speed,
+                            "since": time.time(), "stop": threading.Event()}
+            fresh = True
+    if fresh:
+        threading.Thread(target=show_worker, args=(node,), name=f"show-{node}",
+                         daemon=True).start()
+    log(f"show {g.get('name') or node}: {shows.LABELS[preset]}, "
+        f"{round(level / 254 * 100)}%" + (f" - {why}" if why else ""), "step")
+    state_wake()
+    return {"ok": True, "running": True, "preset": preset, "level": level}
+
+
+def show_stop(node: int) -> bool:
+    with _show_lock:
+        s = _shows.get(node)
+        if not s:
+            return False
+        s["stop"].set()
+    return True
+
+
+def show_send(lamp: dict, ch: dict) -> None:
+    """One step for one lamp. A lamp that fails is left out for half a minute
+    rather than holding up every step behind a timeout."""
+    if time.time() < lamp.get("skip", 0):
+        return
+    tt = int(ch.get("tt", 0))
+    todo = []
+    if "level" in ch:
+        todo.append((0x0008, "MoveToLevelWithOnOff",
+                     {"level": int(ch["level"]), "transitionTime": tt,
+                      "optionsMask": 0, "optionsOverride": 0}))
+    if "hue" in ch:
+        todo.append((0x0300, "MoveToHueAndSaturation",
+                     {"hue": int(ch["hue"]), "saturation": int(ch["sat"]),
+                      "transitionTime": tt, "optionsMask": 1, "optionsOverride": 1}))
+    elif "mireds" in ch:
+        todo.append((0x0300, "MoveToColorTemperature",
+                     {"colorTemperatureMireds": int(ch["mireds"]), "transitionTime": tt,
+                      "optionsMask": 1, "optionsOverride": 1}))
+    for cluster, name, payload in todo:
+        try:
+            SHOW_MS.call("device_command", {"node_id": lamp["ms"], "endpoint_id": lamp["ep"],
+                                            "cluster_id": cluster, "command_name": name,
+                                            "payload": payload}, timeout=4.0)
+        except MatterError as exc:
+            lamp["skip"] = time.time() + 30
+            log(f"show: bulb {lamp['node']} left out for 30 s: {exc}", "warn")
+            return
+
+
+def show_worker(node: int) -> None:
+    plan, lamps, back = [], [], {}
+    try:
+        devices = load_devices()
+        g = group_of(devices, node) or {}
+        by = {b["node"]: b for b in devices.get("bulbs", [])}
+        plan = [by[n] for n in (g.get("bulbs") or []) if n in by]
+        for b in plan:
+            ms = ms_of(b["node"])
+            if ms is None:
+                continue
+            st = state_of(b["node"])
+            caps = b.get("caps") or {}
+            colour = st.get("hasColor") if isinstance(st.get("hasColor"), bool) else (
+                (caps["featureMap"] & 1) == 1 if isinstance(caps.get("featureMap"), int)
+                else bool(caps.get("color")))
+            lamps.append({"node": b["node"], "ms": ms, "ep": int(b.get("endpoint", 1)),
+                          "colour": colour, "ctLo": int(st.get("ctMin") or 153),
+                          "ctHi": int(st.get("ctMax") or 454)})
+        if not lamps:
+            log(f"show {g.get('name') or node}: it has no lamps yet", "warn")
+            return
+        # What to go back to, read now - the same as a webhook's span.
+        back = {lamp["node"]: motion_restore_target(lamp["node"], by[lamp["node"]])
+                for lamp in lamps}
+        with _show_lock:
+            _show_bulbs.update(back)
+            s = _shows[node]
+        rng = random.Random()
+        memo, step, playing, lvl = {}, 0, None, None
+        while not s["stop"].is_set():
+            # A new preset, or a new brightness, starts the preset again from
+            # its first step - the one that sets every lamp.
+            if (s["preset"], s["level"]) != (playing, lvl):
+                playing, lvl, step, memo = s["preset"], s["level"], 0, {}
+            out, delay = shows.frame(playing, step, lamps, lvl, s["speed"], rng, memo)
+            t0 = time.time()
+            for lamp in lamps:
+                ch = out.get(lamp["node"])
+                if ch:
+                    show_send(lamp, ch)
+            step += 1
+            s["stop"].wait(max(0.05, delay - (time.time() - t0)))
+    except Exception as exc:  # noqa: BLE001 - a show must always give its lamps back
+        log(f"show {node}: {exc}", "err")
+    finally:
+        by = {b["node"]: b for b in plan}
+        for n, was in back.items():
+            err, where = put_back(n, int(by[n].get("endpoint", 1)), was or {}, True)
+            if err:
+                log(f"show: bulb {n} did not go back: {err}", "err")
+        with _show_lock:
+            _show_bulbs.difference_update(back)
+            _shows.pop(node, None)
+        if back:
+            log(f"show {node} stopped - {len(back)} lamp"
+                f"{'' if len(back) == 1 else 's'} back as they were", "ok")
+        state_wake()
+
+
+def show_buttons(devices: dict, node: int, button: int, gesture: str, name: str) -> None:
+    """A light show answers the buttons it was given: a press switches it on or
+    off, a long press moves it on to the next preset. Whatever else the button
+    does - its own lamps, over its own bindings - it goes on doing."""
+    for g in groups(devices):
+        mine = any(int(x.get("node", 0)) == int(node)
+                   and x.get("button") in (None, int(button))
+                   for x in (g.get("buttons") or []))
+        if not mine:
+            continue
+        gn = int(g["node"])
+        if gesture == "press":
+            if str(gn) in show_state():
+                show_stop(gn)
+            else:
+                show_start(gn, why=f"button on {name}")
+        elif gesture == "long":
+            cur = (show_state().get(str(gn)) or {}).get("preset") or g.get("preset")
+            nxt = shows.KEYS[(shows.KEYS.index(cur) + 1) % len(shows.KEYS)] \
+                if cur in shows.KEYS else shows.KEYS[0]
+            show_start(gn, nxt, why=f"long press on {name}")
 
 
 SWITCH_CLUSTER = 0x003B
@@ -2740,6 +2960,7 @@ def remote_act(node, button, gesture):
     entry = next((x for x in switches(devices) if x["node"] == node), None)
     if entry is None:
         return
+    show_buttons(devices, node, button, gesture, entry.get("name") or str(node))
 
     # OUR OWN switch: it has already done the work.
     #
@@ -3782,6 +4003,8 @@ def apply_light_schedule(force: bool = False, only=None) -> dict:
         # lamp dimmed by hand also stopped following the schedule's colour,
         # and "adaptive" could not mean anything on a lamp somebody had
         # touched.
+        if b["node"] in _show_bulbs:
+            continue
         if held_facets(b["node"]) >= set(HOLD_FACETS):
             out["held"] = out.get("held", 0) + 1
             continue
@@ -3975,6 +4198,8 @@ class Handler(BaseHTTPRequestHandler):
             d = load_devices()
             d.setdefault("devices", [])
             d.setdefault("hooks", [])
+            d.setdefault("groups", [])
+            d["presets"] = shows.PRESETS
             # The address a camera can reach, worked out here rather than in the
             # browser: the page knows the name IT was opened under, which is
             # the one thing the camera cannot be assumed to resolve.
@@ -4089,7 +4314,8 @@ class Handler(BaseHTTPRequestHandler):
             since = int(q.get("since", [-1])[0] or -1)
             if wait > 0 and since >= 0:
                 wait_for_change(since, min(wait, 30.0))
-            self._send({"byNode": refresh_bulbs(force=fresh), "rev": state_rev()})
+            self._send({"byNode": refresh_bulbs(force=fresh), "rev": state_rev(),
+                        "shows": show_state()})
 
         elif self.path.startswith("/api/log"):
             since = 0
@@ -4217,7 +4443,7 @@ class Handler(BaseHTTPRequestHandler):
                 after a delete that reported success. The same hole meant a
                 sensor could not be dragged between rooms at all.
                 """
-                for group in ("switches", "bulbs", "devices", "hooks"):
+                for group in ("switches", "bulbs", "devices", "hooks", "groups"):
                     for d in devices.get(group, []):
                         if d["node"] in nodes:
                             yield d
@@ -4431,7 +4657,8 @@ class Handler(BaseHTTPRequestHandler):
             # whole operation, and it takes effect on the next event.
             hook = hook_of(devices, sw_node)
             if hook is not None:
-                known = {b["node"] for b in devices.get("bulbs", [])}
+                known = {b["node"] for b in devices.get("bulbs", [])} \
+                    | {int(g["node"]) for g in groups(devices)}
                 keep = [n for n in want if n in known]
                 hook["bulbs"] = keep
                 if "seconds" in body:
@@ -4883,6 +5110,108 @@ class Handler(BaseHTTPRequestHandler):
             state_wake()
             return self._send({"ok": True, "node": node, "name": name})
 
+        if self.path == "/api/group":
+            # A light show: created, changed, or taken away. Like a webhook it
+            # is ours alone - Matter never hears of it - so all of this is a
+            # write to devices.json.
+            devices = load_devices()
+            drop = body.get("delete")
+            if drop is not None:
+                node = int(drop)
+                show_stop(node)
+                left = [g for g in groups(devices) if int(g.get("node", 0)) != node]
+                if len(left) == len(groups(devices)):
+                    return self._send({"error": f"no such show: {node}"}, status=404)
+                devices["groups"] = left
+                # Out of every webhook's list too, or a camera would go on
+                # asking for a show that is not there.
+                for h in hooks(devices):
+                    h["bulbs"] = [n for n in (h.get("bulbs") or []) if int(n) != node]
+                save_devices(devices)
+                log(f"show {node} removed", "ok")
+                state_wake()
+                return self._send({"ok": True, "deleted": node})
+
+            upd = body.get("update")
+            if upd is not None:
+                node = int(upd.get("node") or 0)
+                g = group_of(devices, node)
+                if g is None:
+                    return self._send({"error": f"no such show: {node}"}, status=404)
+                known = {b["node"] for b in devices.get("bulbs", [])}
+                relamp = False
+                if "bulbs" in upd:
+                    want = [int(n) for n in (upd.get("bulbs") or []) if int(n) in known]
+                    relamp = want != g.get("bulbs")
+                    g["bulbs"] = want
+                if upd.get("preset") in shows.KEYS:
+                    g["preset"] = upd["preset"]
+                if upd.get("speed") in shows.SPEEDS:
+                    g["speed"] = upd["speed"]
+                if "level" in upd:
+                    g["level"] = max(LEVEL_MIN, min(254, int(upd["level"])))
+                if "buttons" in upd:
+                    g["buttons"] = [{"node": int(x["node"]),
+                                     "button": (int(x["button"])
+                                                if x.get("button") is not None else None)}
+                                    for x in (upd.get("buttons") or []) if x.get("node")]
+                save_devices(devices)
+                # Playing: the new speed takes at once; new lamps need a fresh
+                # start, which gives the old ones back first.
+                if str(node) in show_state():
+                    if relamp:
+                        show_stop(node)
+                        def again(n=node):
+                            for _ in range(100):
+                                if str(n) not in show_state():
+                                    break
+                                time.sleep(0.1)
+                            show_start(n, why="its lamps changed")
+                        threading.Thread(target=again, daemon=True).start()
+                    else:
+                        show_start(node, g.get("preset"), g.get("level"))
+                state_wake()
+                return self._send({"ok": True, "group": g})
+
+            name = (body.get("name") or "").strip() or "Christmas"
+            where = (body.get("where") or "").strip()
+            node = next_group_node(devices)
+            devices.setdefault("groups", []).append({
+                "node": node, "name": name, "where": where, "kind": "group",
+                "bulbs": [], "preset": shows.KEYS[0], "speed": "normal",
+                "level": 254, "buttons": [],
+            })
+            save_devices(devices)
+            log(f"show {node} ({name}) added", "ok")
+            state_wake()
+            return self._send({"ok": True, "node": node, "name": name})
+
+        if self.path == "/api/show":
+            # On, off or toggle - the three things a lamp answers to. Starting
+            # with a preset or a brightness also keeps them, so the next start
+            # from a wall switch plays the same thing.
+            node = int(body.get("node") or 0)
+            action = str(body.get("action") or "toggle").strip().lower()
+            if action == "toggle":
+                action = "off" if str(node) in show_state() else "on"
+            if action == "off":
+                show_stop(node)
+                return self._send({"ok": True, "running": False})
+            if action != "on":
+                return self._send({"error": "on, off or toggle?"}, status=400)
+            devices = load_devices()
+            g = group_of(devices, node)
+            if g is None:
+                return self._send({"error": f"no such show: {node}"}, status=404)
+            if body.get("preset") in shows.KEYS or body.get("level") is not None:
+                if body.get("preset") in shows.KEYS:
+                    g["preset"] = body["preset"]
+                if body.get("level") is not None:
+                    g["level"] = max(LEVEL_MIN, min(254, int(body["level"])))
+                save_devices(devices)
+            return self._send(show_start(node, g.get("preset"), g.get("level"),
+                                         why="the panel"))
+
         if self.path == "/api/rename":
             """Change a device's name. Ours alone - Matter never sees it.
 
@@ -4904,7 +5233,7 @@ class Handler(BaseHTTPRequestHandler):
             # All three lists plus the single-switch layout - the same lesson the
             # room operations had to learn: a sensor lives in neither of the two
             # you first think of.
-            for group in ("switches", "bulbs", "devices", "hooks"):
+            for group in ("switches", "bulbs", "devices", "hooks", "groups"):
                 for d in devices.get(group, []):
                     if d.get("node") == node:
                         d["name"] = name

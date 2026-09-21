@@ -30,6 +30,13 @@ count and the mark together — and the page is only the devices wearing it.
 **Brightness and colour follow the time of day.** The curve is yours to edit:
 drag a point, then save it for the whole house or for one lamp.
 
+**Lamps can play a light show.** A show is a group of lamps with a row of
+presets — candy cane, twinkle, candle, wave, breathe, rainbow — and it behaves
+like a lamp: its tile switches it on and off, its panel is a brightness, and a
+wall switch or a webhook can start it. Colour lamps play the colours; white
+ones play the same rhythm in warm and cool white. When it stops, every lamp goes
+back to exactly what it was doing.
+
 **A camera can make a lamp answer.** A webhook is a tile like any other. Its
 page is its address — marked POST, with a copy button — and a **test** button
 that calls it the way a camera would; everything else is in its settings: a
