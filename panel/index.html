@@ -2490,44 +2490,53 @@
     gap: 8px;
     min-height: 26px;
   }
-  /* Out of the way until wanted, and never moving the title when it appears -
-     the space is reserved whether it is visible or not. */
-  .sheet h2 .pen {
-    width: 15px;
-    height: 15px;
-    flex: none;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--ink-faint);
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity .15s, color .15s;
-  }
-  .sheet h2 .pen svg { width: 100%; height: 100%; display: block; }
-  .sheet h2:hover .pen, .sheet h2 .pen:focus-visible { opacity: 1; }
-  .sheet h2 .pen:hover { color: var(--link); }
-  .sheet h2 .nmedit {
-    font: inherit;
-    letter-spacing: inherit;
-    text-transform: inherit;
-    text-align: center;
-    color: var(--ink);
-    background: var(--sunken);
-    border: 1px solid var(--link);
-    border-radius: 8px;
-    padding: 3px 10px;
-    width: 100%;
-    max-width: 260px;
-  }
-  .sheet h2 .nmedit:focus { outline: none; }
   .sheet .who {
     color: var(--ink-dim);
     font-size: 11px;
     letter-spacing: .14em;
     text-transform: uppercase;
     margin-bottom: 22px;
+    /* Kept at its height when empty, so a message arriving in it does not
+       push the controls down. */
+    min-height: 1.4em;
   }
+
+  /* Name and room: the first group of a device's settings. The rows are the
+     fields - no box inside a box - and the room's list opens over what is
+     below, so the group does not clip it. */
+  .sheet .ident {
+    border: 1px solid var(--line-hi);
+    border-radius: 14px;
+    margin: 0 0 18px;
+    background: var(--panel);
+    text-align: left;
+  }
+  .sheet .ident-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 3px 6px 3px 16px;
+    border-bottom: 1px solid var(--line);
+    cursor: text;
+  }
+  .sheet .ident-row:last-child { border-bottom: 0; }
+  .sheet .ident-k {
+    flex: none;
+    width: 48px;
+    font-size: 10px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .sheet .ident input {
+    border: 0;
+    background: transparent;
+    padding: 10px;
+    border-radius: 8px;
+  }
+  .sheet .ident input:focus { background: var(--sunken); }
+  .sheet .ident-combo { flex: 1; min-width: 0; }
+  .sheet .ident .combo-list { z-index: 5; }
   /* The identity line doubles as the one place the panel explains itself. It
      crossfades to the message and back, so nothing moves and nothing is added -
      the line you were already reading simply says something else for a moment.
@@ -3068,46 +3077,47 @@ function sheetListDone(box) {
   if (rows && !rows.children.length) { rows.remove(); }
 }
 
-/* The title is the name, so the title is where you rename it.
+/* Name and room, first in a device's settings.
  *
- * Not a fifth button in a row of four: the name is already on screen, and the
- * thing you want to change is the thing you are looking at. A pencil appears on
- * hover, the heading becomes a field, Enter saves and Escape puts it back.
+ * The title is only the name: no pencil on it and no room under it - a lamp
+ * opened from its room does not need telling which room it is in. Both are
+ * set here instead, as the two things about a device you set once and then
+ * leave alone, which is where Apple Home keeps them too.
  *
- * The name is ours alone - Matter never sees it - so this is a write to
- * devices.json and nothing else. */
-function nameable(sheet, dev, after) {
-  const h = sheet.querySelector('h2');
-  h.innerHTML = '<span class="nmtext"></span>'
-              + '<button type="button" class="pen" title="rename"'
-              + ' aria-label="rename">' + ICONS.pencil + '</button>';
-  h.querySelector('.nmtext').textContent = dev.name;
+ * The name is ours alone - Matter never sees it - so a rename is a write to
+ * devices.json and nothing else. A room typed that does not exist yet is
+ * created by the move, as a drop into a new room is. */
+function identityRows() {
+  return `<div class="ident">
+      <div class="ident-row"><span class="ident-k">name</span>
+        <input class="ident-name" maxlength="40" autocomplete="off"
+               spellcheck="false" aria-label="name"></div>
+      <div class="ident-row"><span class="ident-k">room</span>
+        <div class="combo ident-combo">
+          <input class="ident-room" placeholder="no room" autocomplete="off"
+                 spellcheck="false" aria-label="room">
+          <div class="combo-list"></div>
+        </div></div>
+    </div>`;
+}
 
-  const edit = () => {
-    const input = document.createElement('input');
-    input.className = 'nmedit';
-    input.value = dev.name;
-    input.maxLength = 40;
-    h.replaceChildren(input);
-    input.focus();
-    input.select();
+function wireIdentity(sheet, dev) {
+  const title = sheet.querySelector('h2');
+  const nameIn = sheet.querySelector('.ident-name');
+  const roomIn = sheet.querySelector('.ident-room');
+  const list = sheet.querySelector('.ident-combo .combo-list');
+  title.textContent = dev.name;
+  nameIn.value = dev.name;
+  roomIn.value = dev.where || '';
+  sheet.querySelectorAll('.ident-row').forEach(row => {
+    row.onclick = ev => { if (ev.target === row) { row.querySelector('input').focus(); } };
+  });
 
-    let done = false;
-    const stop = keep => {
-      if (done) { return; }
-      done = true;
-      const want = input.value.trim();
-      if (!keep || !want || want === dev.name) { nameable(sheet, dev, after); return; }
-      save(want);
-    };
-    input.onkeydown = ev => {
-      if (ev.key === 'Enter') { ev.preventDefault(); stop(true); }
-      if (ev.key === 'Escape') { ev.preventDefault(); stop(false); }
-    };
-    input.onblur = () => stop(true);
-  };
-
-  const save = async want => {
+  let naming = false;
+  const saveName = async () => {
+    const want = nameIn.value.trim();
+    if (naming || !want || want === dev.name) { nameIn.value = dev.name; return; }
+    naming = true;
     let j;
     try {
       j = await (await api('/api/rename', {
@@ -3116,18 +3126,60 @@ function nameable(sheet, dev, after) {
         body: JSON.stringify({ node: dev.node, name: want })
       })).json();
     } catch (err) { j = { error: String(err) }; }
+    naming = false;
     if (j.error) {
-      nameable(sheet, dev, after);
+      nameIn.value = dev.name;
       return setStatus('not renamed: ' + j.error, 'err');
     }
     dev.name = j.name;
-    nameable(sheet, dev, after);
+    nameIn.value = j.name;
+    title.textContent = j.name;
     setStatus('renamed to ' + j.name, 'ok');
-    await load();
-    if (after) { after(); }
+    load();
   };
+  nameIn.onkeydown = ev => {
+    if (ev.key === 'Enter') { ev.preventDefault(); nameIn.blur(); }
+    // Escape puts the name back and stays here; it does not close the sheet.
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      nameIn.value = dev.name;
+      nameIn.blur();
+    }
+  };
+  nameIn.onblur = saveName;
 
-  h.querySelector('.pen').onclick = edit;
+  let moving = false;
+  const saveRoom = async typed => {
+    const rooms = (state.devices && state.devices.rooms) || [];
+    const t = (typed ?? roomIn.value).trim();
+    // "dormitor" is Dormitor: a second room differing only in case is how a
+    // house ends up with two bedrooms.
+    const to = rooms.find(r => r.toLowerCase() === t.toLowerCase()) || t;
+    roomIn.value = to;
+    if (moving || to === (dev.where || '')) { return; }
+    moving = true;
+    // At the end of the room it goes to; the rest of that room keeps its order.
+    const nodes = roomMembers(to).map(m => m.d.node).filter(n => n !== dev.node);
+    nodes.push(dev.node);
+    const j = await room({ op: 'order', name: to, nodes });
+    moving = false;
+    if (j.error) {
+      roomIn.value = dev.where || '';
+      return setStatus(j.error, 'err');
+    }
+    dev.where = to;
+    if (j.devices) { adoptDevices(j.devices); render(); }
+    setStatus(to ? 'moved to ' + to : 'in no room now', 'ok');
+  };
+  setupRoomCombo(roomIn, list, r => saveRoom(r));
+  roomIn.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter' && !list.querySelector('div.sel')) { ev.preventDefault(); roomIn.blur(); }
+    if (ev.key === 'Escape') { ev.stopPropagation(); roomIn.value = dev.where || ''; roomIn.blur(); }
+  });
+  // After the list has had its chance: a pick is a mousedown that keeps the
+  // focus, and it saves on its own.
+  roomIn.addEventListener('blur', () => setTimeout(() => saveRoom(), 150));
 }
 
 function linkRow(name, open, tail, where, icon) {
@@ -3324,11 +3376,6 @@ const ICONS = {
     <rect x="3.5" y="5" width="17" height="14" rx="2"/>
     <path d="M3.5 9.5h17"/><path d="M13 9.5V19"/>
     <path d="M6.5 12.8h3.2"/><path d="M6.5 15.8h3.2"/></svg>`,
-
-  pencil: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z"/>
-    <path d="M14.5 6.5l3 3"/></svg>`,
 
   // Anything that is neither a switch nor a bulb: a sensor, a plug, a blind.
   // A dial, because what these have in common is that they READ - the panel
@@ -5500,6 +5547,7 @@ function openBulb(b) {
     <h2></h2>
     <div class="who"></div>
     ${BULB_CONTROL_HTML()}`, `
+    ${identityRows()}
     <div class="links" id="drivers"></div>
     <div class="links" id="sched-of"></div>
     ${sheetActions(b)}
@@ -5507,10 +5555,10 @@ function openBulb(b) {
     ${sheetRemove()}`, BULB_PICKER_HTML());
   wirePages(sheet, `bulb \u00b7 node ${b.node}`);
 
-  nameable(sheet, b, () => openBulb(b));
-  // Where it is, and nothing about how it is addressed: the node number is a
-  // setting, and it lives on the settings page.
-  sheet.querySelector('.who').textContent = b.where || 'no room';
+  wireIdentity(sheet, b);
+  // Empty: the room is a setting now. The line stays, for the one thing it
+  // still has to say - that the schedule has just set the values.
+  sheet.querySelector('.who').textContent = '';
 
   /* Which brightness to show while the lamp is on. A dark lamp shows as off -
    * an empty panel - and never reaches here.
@@ -5535,7 +5583,7 @@ function openBulb(b) {
    * for three seconds, and fades back to the identity - so it interrupts
    * without costing anything permanent. */
   const whoBox = sheet.querySelector(".who");
-  const whoIs = b.where || 'no room';
+  const whoIs = '';
 
   const fadeWho = (text, amber, then) => {
     whoBox.classList.add("gone");
@@ -5695,13 +5743,13 @@ function openDevice(d) {
     <h2></h2>
     <div class="who"></div>
     <div class="reads" id="reads"></div>`, `
+    ${identityRows()}
     ${sheetActions(d)}
     <div class="fwslot"></div>
     ${sheetRemove()}`);
   wirePages(sheet, `${d.kind || 'device'} \u00b7 node ${d.node}`);
 
-  nameable(sheet, d, () => openDevice(d));
-  sheet.querySelector('.who').textContent = d.where || 'no room';
+  wireIdentity(sheet, d);
 
   /* The readings, repainted in place.
    *
@@ -5780,14 +5828,14 @@ function openSwitch(sw) {
       <button data-lock="1">locked</button>
     </div>`}
     <div class="links" id="links"></div>`, `
+    ${identityRows()}
     ${sheetActions(sw, `
       <button class="edit" data-go="bind">${ICONS.link}bindings</button>`)}
     <div class="fwslot"></div>
     ${sheetRemove()}`);
   wirePages(sheet, `${isLock ? 'lock' : 'switch'} \u00b7 node ${sw.node}`);
 
-  nameable(sheet, sw, () => openSwitch(sw));
-  sheet.querySelector('.who').textContent = sw.where || 'no room';
+  wireIdentity(sheet, sw);
 
   const list = sheet.querySelector('#links');
   // What the tail lists is the BINDING TABLE - the clusters this switch is
@@ -7560,6 +7608,7 @@ function editHook(h) {
   };
   sheet.innerHTML = pagedSheet(`<h2></h2>
     <div class="who"></div>
+    ${identityRows()}
     <div class="hookurl">
       <code>${esc(h.url || '')}</code>
       <button type="button" class="hact hookcopy">copy</button>
@@ -7593,9 +7642,8 @@ function editHook(h) {
     <button type="button" class="danger hookdel">remove this webhook</button>`,
     null, BULB_PICKER_HTML());
 
-  nameable(sheet, h, () => editHook(h));
-  sheet.querySelector('.who').textContent = 'webhook'
-    + (h.where ? ` \u00b7 ${h.where}` : '');
+  wireIdentity(sheet, h);
+  sheet.querySelector('.who').textContent = 'webhook';
   $('#overlay').classList.add('on');
 
   /* The same control a bulb's own sheet uses, over a stored value instead of a
@@ -7749,18 +7797,18 @@ function editRemote(sw) {
     <div class="pick" data-button="${ep}">${renderPick(
         bulbs, new Set((per[String(ep)] || [])), sw.where, 'no bulbs')}</div>`;
 
-  // The heading is the name, and the name is editable there, exactly as it is
-  // on a bulb or a sensor. This sheet is what opens when you tap the tile, so
-  // it is the device's page - "bindings" described the form rather than the
-  // thing, and left no way to rename it at all.
+  // The heading is the name, and the name and the room are the first two
+  // rows, as on every other device. This sheet is what opens when you tap the
+  // tile, so it is the device's page - "bindings" described the form rather
+  // than the thing, and left no way to rename it at all.
   sheet.innerHTML = `<h2></h2>
     <div class="who"></div>
+    ${identityRows()}
     ${section(1)}${section(2)}
     <button class="go">save</button>`;
 
-  nameable(sheet, sw, () => editRemote(sw));
-  sheet.querySelector('.who').textContent =
-    `remote \u00b7 node ${sw.node}` + (sw.where ? ` \u00b7 ${sw.where}` : '');
+  wireIdentity(sheet, sw);
+  sheet.querySelector('.who').textContent = `remote \u00b7 node ${sw.node}`;
   $('#overlay').classList.add('on');
 
   sheet.querySelector('.go').onclick = async (e) => {
@@ -8137,8 +8185,7 @@ async function submitCommission(btn, sheet, kind) {
 // Room combobox: searches among the existing ones and explicitly offers to
 // create a new one. Without it you end up with "bedroom" and "Bedroom" as two
 // separate rooms.
-function setupRoomCombo() {
-  const input = $('#f-where'), list = $('#f-where-list');
+function setupRoomCombo(input = $('#f-where'), list = $('#f-where-list'), onPick = null) {
   const rooms = (state.devices && state.devices.rooms) || [];
   let idx = -1;
 
@@ -8153,14 +8200,23 @@ function setupRoomCombo() {
     if (q && !exact) {
       const el = document.createElement('div');
       el.className = 'new';
-      el.innerHTML = `+ new room: <b>${input.value.trim()}</b>`;
-      el.onmousedown = e => { e.preventDefault(); close(); };
+      el.innerHTML = `+ new room: <b>${esc(input.value.trim())}</b>`;
+      el.onmousedown = e => {
+        e.preventDefault();
+        close();
+        if (onPick) { onPick(input.value.trim()); }
+      };
       list.append(el);
     }
     hits.forEach(r => {
       const el = document.createElement('div');
       el.textContent = r;
-      el.onmousedown = e => { e.preventDefault(); input.value = r; close(); };
+      el.onmousedown = e => {
+        e.preventDefault();
+        input.value = r;
+        close();
+        if (onPick) { onPick(r); }
+      };
       list.append(el);
     });
     if (!list.children.length) {
