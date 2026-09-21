@@ -3777,8 +3777,13 @@ function heardAgo(at) {
  *
  * The reading itself is a lower bound, so a cell can measure full and still be
  * too tired to transmit - which is why the age is on the label rather than a
- * verdict about the cell. */
-function battOf(measured, st) {
+ * verdict about the cell.
+ *
+ * A remote is never stale for this: it sleeps until pressed, so "not
+ * answering" is its normal state, and fading its gauge said the reading was a
+ * memory when it was a fresh one - the same exception that keeps the crossed
+ * signal off its tile. */
+function battOf(measured, st, sleeps = false) {
   if (!measured || typeof measured.battery !== 'number') { return null; }
   const pct = Math.round(measured.battery);
   const state = measureText('batteryState', measured.batteryState);
@@ -3786,7 +3791,7 @@ function battOf(measured, st) {
     : (pct <= 10 ? 'critical' : pct <= 25 ? 'low' : 'ok');
   const volts = typeof measured.batteryVolts === 'number'
     ? ` \u00b7 ${measured.batteryVolts.toFixed(2)} V` : '';
-  const stale = st && st.ok === false
+  const stale = !sleeps && st && st.ok === false
     ? ` \u2014 not answering, last read ${heardAgo(st.readAt)}` : '';
   return { pct, state: said, stale: !!stale,
            title: `battery ${pct}%` + (said === 'ok' ? '' : ' \u2014 ' + said)
@@ -4024,7 +4029,7 @@ function switchOpts(sw) {
       // battery device. Nothing announces a flat remote except the remote
       // quietly not working.
       batt: battOf((state.bulbs[String(sw.node)] || {}).measured,
-                   state.bulbs[String(sw.node)]),
+                   state.bulbs[String(sw.node)], true),
       icon: ICONS.switch,
       cls: '',
       name: sw.name,
