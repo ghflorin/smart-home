@@ -1146,6 +1146,45 @@ button wired where it was built still works, and it goes back into the card
 when the sheet comes down. A link followed from the settings takes the sheet
 away with the page it belonged to.
 
+### Light shows
+
+A show is a group of lamps playing an animation, and it is a lamp as far as
+anything else is concerned: its tile's round button switches it on and off,
+its panel is a brightness — a tap starts it there, the bottom stops it — and
+the row under the panel holds its presets where a lamp holds its colours. Its
+settings are the lamps (in order: a wave travels down the list), a speed, and
+the wall switches and remote buttons that start it.
+
+A lamp is one pixel that can change a few times a second, not a strip of LEDs.
+Every change is a Matter command over Thread — measured at about 35 ms, with no
+queueing at eight a second — and a command that carries a transition time is
+faded by the lamp itself: a 3 s fade from 40% to 100% passes through 32 levels
+with one command. So a preset (`shows.py`) is a sequence of steps, where each
+lamp is going and how long it takes, and the lamps draw the movement. Commands
+to different lamps overlap, so a step reaches eight lamps within about 150 ms
+of each other: nothing for a slow effect, and the reason there is no strobe.
+
+| preset | what it does | colour lamps | white lamps |
+|---|---|---|---|
+| candy cane | neighbours swap every 2 s | red / green | warm / cool |
+| twinkle | a few lamps at a time dip out and back | gold | warm |
+| candle | uneven flicker between half and full | ember | warmest |
+| wave | a crest of light travels down the list | gold | warm |
+| breathe | slow in and out together | red, then green | warm |
+| rainbow | round the colour wheel, spread evenly | hue | slow warm ↔ cool |
+
+While a show plays, its lamps are the show's: the schedule leaves them alone.
+When it stops — from the tile, the panel, a button, or a webhook's span ending
+— every lamp goes back to what it was doing, read from the lamp as the show
+started, exactly as a webhook puts its lamps back.
+
+It runs on the hub, on a socket of its own to matter-server so its stream of
+commands does not queue behind the panel's. A wall switch starts it through the
+hub, from the press the switch reports, rather than over its own bindings — so
+unlike a switch's lamps, a show needs the hub up. A press switches it on or
+off; a long press moves it on to the next preset. A webhook lists shows among
+its lamps: on plays for the span, off stops it.
+
 ### The API behind them
 
 They post to `/api/light`, which takes `action`, `level`, `mireds` and `hue`
