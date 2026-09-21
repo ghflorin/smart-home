@@ -1015,6 +1015,16 @@ already shows the value it was given and stays live, a preset wears its ring
 from the moment it is pressed, and an answer that arrives after a newer command
 has gone out is left alone.
 
+**What was asked stays on the panel until the lamp says the same.** A lamp
+switching on reports `on` first and its level after — measured, about a second
+apart — and in between it is honestly "on, at level 1, coming up at" whatever
+the schedule last left in `OnLevel`. Drawn report by report, a tap at 40% on a
+lamp just switched off went to 100%, dropped to nothing and climbed back to
+40%. The panel holds the asked value until a reading agrees with it, or for
+three seconds, after which the lamp's own reading wins. A command that fails
+lets go at once. The server's answer waits the same way: a level is done when
+the lamp is on at that level.
+
 **The drag is absolute** — the level follows the pointer, so letting go
 four-fifths of the way up the panel means four-fifths. That is the whole point of
 a control shaped like a column, and anything else fights what it looks like.
