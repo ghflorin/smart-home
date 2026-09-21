@@ -10,7 +10,10 @@ panel on a small Linux box to administer it all.
 ## The panel
 
 A section per room, a tile per device. The round icon is the quick action —
-on/off for a bulb, lock/unlock for a switch — and anywhere else opens it. A
+on/off for a bulb, lock/unlock for a switch — and anywhere else opens it, the
+way Apple Home does: the tile grows into its page and shrinks back into its own
+gap when you close it. The page is the device and nothing else; identifying it,
+sharing it, its firmware and removing it are one tap away, behind the gear. A
 battery gauge and a small cloud appear in a tile's corner when they apply: one
 for the devices that run on a cell, one when firmware is waiting. A red crossed
 signal takes that corner when a device has stopped answering — the last reading
