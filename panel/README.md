@@ -988,13 +988,12 @@ so a node ID still tells you what it is at a glance.
 
 ## Driving a bulb by hand
 
-A bulb's sheet is **two tall panels you drag**, the way a phone does it, rather
-than a row of labelled sliders. Not fashion: brightness is the thing you came
-here for, and a control the size of your thumb that shows its value as a filled
-area is faster to read and to hit than a 6px track with a number beside it. The
-fill is painted in the bulb's own light colour, so the two controls explain each
-other — drag the colour and you can see what the brightness is going to look
-like.
+A bulb's sheet is **a tall panel you drag**, the way a phone does it, rather
+than a labelled slider. Not fashion: brightness is the thing you came here for,
+and a control the size of your thumb that shows its value as a filled area is
+faster to read and to hit than a 6px track with a number beside it. The colours
+sit under it as presets, and the white strip and the colour wheel are one tap
+further, in the picker.
 
 Until these existed the panel could switch a bulb and nothing else; everything
 about how the light looked came from the schedule, so "why is it dim?" had no
@@ -1069,10 +1068,54 @@ The handle's travel is inset by its own height at both ends. Positioned by its
 centre it was drawn half outside at the top and clipped by the rounded corner,
 which read as the control running past its own limit.
 
+### The colours are presets
+
+Under the brightness, a row of round swatches that scrolls sideways, in Apple
+Home's order:
+
+- **adaptive** — the colour the schedule has the lamp on. It is the one with the
+  ring whenever nothing holds the lamp's colour.
+- **whites** — 2200, 2700, 4000 and 6500 K, clamped to the lamp's own range. Two
+  that clamp to the same place are one swatch, so a lamp that stops at 2200 K
+  never offers a warmer white and quietly lands somewhere else.
+- **colours** — red to pink, only for lamps whose FeatureMap says hue and
+  saturation.
+- **the picker** — last, a colour wheel with the lamp's own colour in its middle
+  when no swatch matches. It opens the white strip and the wheel on a panel of
+  their own.
+
+A swatch counts as chosen when the lamp is near it — six mireds, or six steps of
+hue — because a lamp asked for 370 reports 369, and a ring that vanished over
+one mired would read as the choice not having taken. The row opens with the
+chosen swatch in view, and the edge with more behind it fades.
+
+**Adaptive gives back the colour and nothing else.** A hold is per facet: set
+the brightness by hand and then the colour, and both are yours; choose adaptive
+and the colour goes back to following the day while the brightness stays where
+your hand put it. The server drops the colour from the hold, forgets its memo of
+the colour it last wrote — or the next tick would find the curve close to it and
+send nothing — and applies the schedule to that lamp straight away.
+
+### Panels come up from the bottom
+
+The settings behind the gear and the colour picker are sheets over the sheet,
+as iOS stacks them: they rise from the bottom of the card while the page under
+them sinks back and dims, and the card grows or shrinks to what they hold. A
+panel rises over whatever part of the page is on screen, so a long sheet
+scrolled down to its colours opens the picker there, and closing it gives the
+page back at the same place.
+
+The X and `Escape` take a panel down first and close the card only when nothing
+is left on it; the backdrop still closes everything. While a panel moves it is
+laid over the page; once it is up it is in the flow, so the card is exactly as
+tall as what it shows, and anything that arrives late — the firmware check, the
+schedule row — has room.
+
 ### The API behind them
 
-They post to `/api/light`, which takes `action`, `level` and `mireds` in any
-combination and applies them in that order. `level` goes out as
+They post to `/api/light`, which takes `action`, `level`, `mireds` and `hue`
+with `sat` in any combination and applies them in that order, or
+`{"adaptive": true}` on its own. `level` goes out as
 `MoveToLevelWithOnOff`, so asking for light gives light instead of silently
 arming a bulb that is switched off; `mireds` goes out with `ExecuteIfOff`, so a
 colour lands even on a bulb that is off, which is when it matters most.
@@ -1081,7 +1124,8 @@ Brightness is perceptual, the same axis as the schedule: level 127 does not look
 like half, so a control reading 50% there would be lying about the light.
 
 After every command the server re-reads the bulb and answers with what it found,
-not with what was asked for. A confirmed command is not proof the bulb obeyed,
+not with what was asked for — the colour mode, the hue and which facets are held
+included, which is what lets a preset show as chosen the moment it is. A confirmed command is not proof the bulb obeyed,
 and on a device you are looking straight at, showing the value you requested
 instead of the one you got is the expensive kind of wrong.
 
