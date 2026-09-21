@@ -1497,8 +1497,15 @@
     transition: height .3s cubic-bezier(.25, .8, .25, 1);
   }
   .hk-fill.full { border-top-color: transparent; }
+  /* Empty takes its top line away too - once the fill has finished going
+     down, so the edge travels with it and does not stay behind as a stripe.
+     "zero", as on a tile: .empty is the placeholder line, and padded. */
+  .hk-fill.zero {
+    border-top-color: transparent;
+    background-clip: padding-box;
+    transition: height .3s cubic-bezier(.25, .8, .25, 1), border-top-color 0s linear .3s;
+  }
   .hk-lvl.grabbed .hk-fill { transition: background .25s ease; }
-  .hk-lvl.off .hk-fill { opacity: .18; }
 
   /* The face sits above the fill and does not move with it: the number stays
      where your eye already is instead of sliding up and down the panel. */
@@ -1523,33 +1530,11 @@
     color: var(--ink);
     font-variant-numeric: tabular-nums;
   }
-  .hk-lvl.off .hk-ico, .hk-lvl.off .hk-pct { opacity: .4; }
-  /* Off does not merely lose its colour - it sinks into the sheet. Grey on its
-     own was still a solid object sitting there being grey; what should be left
-     is the outline of a control and nothing that looks live.
-     Everything tints toward --panel-hi, the sheet's own background, so this
-     holds in both themes instead of being a light-mode guess. The brightness
-     panel keeps its number readable: with the lamp dark that number is OnLevel,
-     which is the one thing worth knowing about a light that is off. */
-  /* Two knobs, named, because this is the kind of thing that gets tuned by eye
-     several times: how much colour is drained, and how far the whole thing is
-     pulled toward the sheet. Fully grey and fully blended read as broken rather
-     than as off - the lamp should look asleep, not absent. */
-  .hk { --off-grey: .55; --off-blend: 22%; }
-  .hk-lvl.off, .hk-ct.off {
-    filter: grayscale(var(--off-grey));
-    border-color: color-mix(in srgb, var(--line-hi) 65%, var(--panel-hi));
-  }
-  .hk-lvl.off {
-    background: color-mix(in srgb, var(--panel-hi) var(--off-blend), var(--sunken));
-  }
-  .hk-lvl.off .hk-fill { opacity: .3; }
-  .hk-ct.off { opacity: .55; }
-  .hk-lvl, .hk-ct { transition: filter .3s ease, opacity .3s ease; }
-  .hk.off .hk-cap { opacity: .55; }
-  @media (prefers-reduced-motion: reduce) {
-    .hk-lvl, .hk-ct { transition: none; }
-  }
+  /* Off is off: an empty panel that says so, the bulb struck through, in the
+     same ink as when it is on. It used to go grey and keep showing what the
+     lamp would come up at, and a lamp switched off that answers "100%" in a
+     faded panel read as something half-done rather than as a light that is
+     off. */
 
   /* The colour handle is a bar across the strip and not a dot, so it reads
      against a gradient that is pale at one end and saturated at the other. */
@@ -1667,7 +1652,6 @@
      the way to leave it, so it has to stay usable - it just should not look like
      it is describing what the bulb is doing, because it is not. */
   .hk-wheel.white { filter: saturate(.35) opacity(.55); }
-  .hk-wheel.off { filter: grayscale(.55) opacity(.5); }
   .hk-wheel, .hk-dot { transition: filter .3s ease; }
   .hk-dot {
     position: absolute;
@@ -5140,7 +5124,6 @@ function swatchesFor(cur) {
 function bulbControl(root, opts) {
   const lvlBox = root.querySelector('#hk-lvl');
   const ctBox = root.querySelector('#hk-ct');
-  const hkBox = root.querySelector('.hk');
   const fill = root.querySelector('.hk-fill');
   const knob = root.querySelector('.hk-knob');
   const pct = root.querySelector('.hk-pct');
@@ -5284,24 +5267,21 @@ function bulbControl(root, opts) {
   const paint = () => {
     const cur = opts.read();
     const on = cur.on === true;
+    const dark = cur.on === false;
     paintSwatches(cur);
-    const v = Math.max(0, Math.min(1, dragLvl !== null ? dragLvl : cur.norm));
+    const v = Math.max(0, Math.min(1, dragLvl !== null ? dragLvl : dark ? 0 : cur.norm));
     const mir = dragCt !== null ? dragCt
       : Math.min(cur.ctHi, Math.max(cur.ctLo, cur.mireds));
 
-    // Both controls, not just the brightness one. A dark lamp showing a full
-    // blue-to-amber colour strip reads as live equipment - the one control
-    // still in colour is the one the eye goes to, which is exactly backwards.
     // Lit follows the finger: pressing on a dark lamp's panel shows it coming
     // on, and dragging to the bottom shows it going out, before either is
     // sent.
-    const lit = dragLvl !== null ? dragLvl > 0 : on;
+    const lit = dragLvl !== null ? dragLvl > 0 : !dark;
     lvlBox.classList.toggle('off', !lit);
-    ctBox.classList.toggle('off', !on);
-    hkBox.classList.toggle('off', !lit);
     fill.style.height = (v * 100).toFixed(1) + '%';
     fill.classList.toggle('full', v >= 0.995);
-    pct.textContent = Math.round(v * 100) + '%';
+    fill.classList.toggle('zero', v <= 0.001);
+    pct.textContent = lit ? Math.round(v * 100) + '%' : 'off';
     // "held" is worth a word, because otherwise the next question is why the
     // schedule has stopped touching this lamp. It is shown while the lamp is
     // dark too: a hold set on a dark lamp is waiting for its power-on, and
@@ -5332,7 +5312,6 @@ function bulbControl(root, opts) {
       // room and one that describes a memory.
       const white = !dragCol && cur.colorMode === 2;
       wheel.classList.toggle('white', white);
-      wheel.classList.toggle('off', on === false);
       const ang = (hs.hue / 254) * 2 * Math.PI;
       const rad = Math.min(1, hs.sat / 254) * 50;
       dot.style.left = `${50 + rad * Math.sin(ang)}%`;
@@ -5494,20 +5473,15 @@ function openBulb(b) {
   // setting, and it lives on the settings page.
   sheet.querySelector('.who').textContent = b.where || 'no room';
 
-  /* Which brightness to show.
+  /* Which brightness to show while the lamp is on. A dark lamp shows as off -
+   * an empty panel - and never reaches here.
    *
-   * A bulb that is OFF reports CurrentLevel 1 - that is its off reading, not a
-   * setting - so showing it made the control read 4% while off and 25% the
-   * moment you switched it on, as though pressing ON had also changed the
-   * brightness. While off, the honest number is OnLevel: what it will come up
-   * at, which is also what dragging the control is about to change.
-   *
-   * The same 1 also arrives for a moment when the bulb is switching ON, and now
-   * that every attribute is subscribed we see it. OnOff flips to true in one
-   * report and CurrentLevel climbs in the ones after, so there is a beat where
-   * the bulb is honestly "on at level 1" - which drew 4% and then jumped to
-   * whatever it settled at. Level 1 under an On is a bulb on its way up, not a
-   * brightness anybody chose, so it reads as OnLevel like the dark case does. */
+   * A bulb reports CurrentLevel 1 for a moment when it is switching ON: OnOff
+   * flips to true in one report and CurrentLevel climbs in the ones after, so
+   * there is a beat where the bulb is honestly "on at level 1" - which drew 4%
+   * and then jumped to whatever it settled at. Level 1 under an On is a bulb on
+   * its way up, not a brightness anybody chose, so it reads as OnLevel, the
+   * level it is on its way to. */
   const shownNorm = cur => {
     if (cur.on === true && typeof cur.level === 'number' && cur.level > 1) {
       return perceived(cur.level);
