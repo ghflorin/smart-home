@@ -1060,16 +1060,19 @@ which read as the control running past its own limit.
 Under the brightness, a row of round swatches that scrolls sideways, in Apple
 Home's order:
 
-- **adaptive** — the colour the schedule has the lamp on. It is the one with the
-  ring whenever nothing holds the lamp's colour.
+- **adaptive** — the colour the schedule has the lamp on, drawn with the theme
+  switch's sun. It is the one with the ring whenever nothing holds the lamp's
+  colour.
 - **whites** — 2200, 2700, 4000 and 6500 K, clamped to the lamp's own range. Two
   that clamp to the same place are one swatch, so a lamp that stops at 2200 K
   never offers a warmer white and quietly lands somewhere else.
 - **colours** — red to pink, only for lamps whose FeatureMap says hue and
   saturation.
 - **the picker** — last, a colour wheel with the lamp's own colour in its middle
-  when no swatch matches. It opens the white strip and the wheel on a panel of
-  their own.
+  when no swatch matches. A lamp with only whites gets a ring of its own whites
+  instead, warmest to coolest it can go, because a rainbow would promise colours
+  it does not have. It opens the white strip and the wheel on a panel of their
+  own.
 
 A swatch counts as chosen when the lamp is near it — six mireds, or six steps of
 hue — because a lamp asked for 370 reports 369, and a ring that vanished over
