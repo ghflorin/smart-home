@@ -1514,10 +1514,9 @@
   }
   .hk-ico { width: 30px; height: 30px; color: var(--ink); opacity: .75; }
   .hk-ico svg { width: 100%; height: 100%; display: block; }
-  /* Struck through while the lamp is dark, and only then: the cut in the mask
-     and the line itself come and go together. */
-  .hk-lvl:not(.off) .hk-ico .cut,
-  .hk-lvl:not(.off) .hk-ico .slash { display: none; }
+  /* The struck-through bulb while the lamp is dark, the plain one otherwise. */
+  .hk-lvl.off .hk-ico .lit,
+  .hk-lvl:not(.off) .hk-ico .dark { display: none; }
   .hk-pct {
     font-size: 15px;
     color: var(--ink);
@@ -4911,21 +4910,28 @@ function wireActions(sheet, dev, back) {
 // The first page: the brightness, alone, and the colours under it as presets -
 // Apple Home's layout. The strip and the wheel are the picker's own panel
 // (BULB_PICKER_HTML), and they have to be inside the same root.
-/* The panel's bulb, which is struck through while the lamp is dark. The line
- * is cut out of the bulb on both sides, the way SF Symbols draws a slash, so
- * it reads as a slash and not as one more stroke of the drawing. One copy per
- * page - there is only ever one sheet - so the mask's id is safe. */
-const HK_BULB = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+/* The panel's bulb, and the same bulb struck through while the lamp is dark.
+ * The line is cut out of the bulb on both sides, the way SF Symbols draws a
+ * slash, so it reads as a slash and not as one more stroke of the drawing.
+ *
+ * Two drawings, and the page shows one of them. Switching the cut on and off
+ * inside a single mask left Safari painting the old mask: the line went and
+ * the gap it had cut stayed, on a lamp that was lit. A mask that never
+ * changes, on a drawing that is shown or not, has nothing to go stale. One
+ * copy per page - there is only ever one sheet - so the mask's id is safe. */
+const HK_BULB_PATHS = `
+      <path d="M12 2.8a6.2 6.2 0 0 0-3.8 11.1c.6.5 1 1.2 1.1 1.9l.1.7h5.2l.1-.7c.1-.7.5-1.4 1.1-1.9A6.2 6.2 0 0 0 12 2.8Z"/>
+      <path d="M9.6 18.6h4.8"/><path d="M10.6 21.2h2.8"/>`;
+const HK_SVG = `viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"`;
+const HK_BULB = `<svg class="lit" ${HK_SVG}>${HK_BULB_PATHS}</svg>
+  <svg class="dark" ${HK_SVG}>
     <mask id="hk-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
       <rect width="24" height="24" fill="#fff" stroke="none"/>
-      <path class="cut" d="M4 2.6 20 21.4" stroke="#000" stroke-width="4.6"/>
+      <path d="M4 2.6 20 21.4" stroke="#000" stroke-width="4.6"/>
     </mask>
-    <g mask="url(#hk-cut)">
-      <path d="M12 2.8a6.2 6.2 0 0 0-3.8 11.1c.6.5 1 1.2 1.1 1.9l.1.7h5.2l.1-.7c.1-.7.5-1.4 1.1-1.9A6.2 6.2 0 0 0 12 2.8Z"/>
-      <path d="M9.6 18.6h4.8"/><path d="M10.6 21.2h2.8"/>
-    </g>
-    <path class="slash" d="M4 2.6 20 21.4"/>
+    <g mask="url(#hk-cut)">${HK_BULB_PATHS}</g>
+    <path d="M4 2.6 20 21.4"/>
   </svg>`;
 
 const BULB_CONTROL_HTML = () => `
