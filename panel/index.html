@@ -1455,7 +1455,6 @@
     justify-content: center;
     margin: 20px 0 16px;
   }
-  .hk.busy { opacity: .55; pointer-events: none; }
   .hk-pad { display: flex; flex-direction: column; gap: 8px; }
   .hk-cap {
     font-size: 10px;
@@ -1491,9 +1490,11 @@
     bottom: 0;
     background: var(--lit);
     border-top: 1px solid color-mix(in srgb, var(--amber) 55%, transparent);
-    /* Quick enough to feel attached to the finger, slow enough that a jump
-       coming from the bulb reads as the bulb moving, not as a glitch. */
-    transition: height .18s ease;
+    /* A tap travels from the old level to the new one, and so does a change
+       that comes from the bulb - it reads as the light moving, not as a
+       glitch. A drag turns it off once the finger moves, and the fill stays
+       under the finger. */
+    transition: height .3s cubic-bezier(.25, .8, .25, 1);
   }
   .hk-fill.full { border-top-color: transparent; }
   .hk-lvl.grabbed .hk-fill { transition: background .25s ease; }
@@ -1567,7 +1568,7 @@
     background: #fff;
     box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 1px 3px rgba(0,0,0,.4);
     pointer-events: none;
-    transition: bottom .18s ease;
+    transition: bottom .3s cubic-bezier(.25, .8, .25, 1);
   }
   .hk-ct.grabbed .hk-knob { transition: none; }
 
@@ -5052,6 +5053,11 @@ function bulbControl(root, opts) {
   let dragLvl = null;
   let dragCt = null;
   let dragCol = null;
+  // The preset just pressed, ringed at once rather than a reply later.
+  let swPending = null;
+  // Counts gestures, so an answer to an older one cannot take the control
+  // away from a newer one still in the air or under the finger.
+  let gesture = 0;
 
   /* The strip's travel is THIS lamp's range, not the Matter range.
    *
@@ -5104,6 +5110,9 @@ function bulbControl(root, opts) {
       b._x = x;
       b.onclick = () => {
         if (x.kind === 'custom') { if (opts.onPicker) { opts.onPicker(); } return; }
+        gesture++;
+        swPending = x;
+        paint();
         if (x.kind === 'adaptive') { settle(opts.onAdaptive); return; }
         if (x.kind === 'ct') { settle(opts.onMireds, x.m); return; }
         settle(opts.onColour, { hue: x.hue, sat: x.sat });
@@ -5120,7 +5129,8 @@ function bulbControl(root, opts) {
     swBox.querySelectorAll('.sw').forEach(b => {
       const x = b._x;
       let on = false;
-      if (x.kind === 'adaptive') { on = !!cur.adaptive; }
+      if (swPending) { on = x === swPending; }
+      else if (x.kind === 'adaptive') { on = !!cur.adaptive; }
       else if (!cur.adaptive && x.kind === 'ct') {
         on = cur.colorMode !== 0 && Math.abs((cur.mireds || 0) - x.m) <= 6;
       } else if (!cur.adaptive && x.kind === 'hs') {
@@ -5221,10 +5231,14 @@ function bulbControl(root, opts) {
   // The drag is held until the commit resolves, then cleared. Clearing it first
   // would show the old reading for as long as the write took.
   const settle = async (fn, arg) => {
+    const g = gesture;
     try { if (fn) { await fn(arg); } } finally {
-      dragLvl = null;
-      dragCt = null;
-      dragCol = null;
+      if (g === gesture) {
+        dragLvl = null;
+        dragCt = null;
+        dragCol = null;
+        swPending = null;
+      }
       paintStrip();
       paint();
     }
@@ -5240,19 +5254,25 @@ function bulbControl(root, opts) {
    * Sends on RELEASE. A control that fires while you drag puts a hundred
    * commands on the radio for one gesture and the bulb only shows the last. */
   const grab = (el, set, commit) => {
+    let startY = 0;
     const at = ev => {
       const r = el.getBoundingClientRect();
       set(Math.max(0, Math.min(1, (r.bottom - ev.clientY) / r.height)));
       paint();
     };
+    // Not "grabbed" on the press: the fill glides from the old level to the
+    // tapped one. Only a finger that moves takes the glide away, so a drag
+    // is not always a third of a second behind it.
     el.onpointerdown = ev => {
       ev.preventDefault();
+      gesture++;
+      startY = ev.clientY;
       el.setPointerCapture(ev.pointerId);
-      el.classList.add('grabbed');
       at(ev);
     };
     el.onpointermove = ev => {
       if (!el.hasPointerCapture || !el.hasPointerCapture(ev.pointerId)) { return; }
+      if (Math.abs(ev.clientY - startY) > 4) { el.classList.add('grabbed'); }
       at(ev);
     };
     el.onpointerup = ev => {
@@ -5306,6 +5326,7 @@ function bulbControl(root, opts) {
   };
   wheel.onpointerdown = ev => {
     ev.preventDefault();
+    gesture++;
     wheel.setPointerCapture(ev.pointerId);
     wheel.classList.add('grabbed');
     wheelAt(ev);
@@ -5452,9 +5473,13 @@ function openBulb(b) {
   SHEET_LIVE = ctl.paint;
   SHEET_SAY = { node: b.node, say: sayTookover };
 
+  /* Nothing dims while the bulb answers: the control already shows the
+   * value it was given, and it stays live, so the next tap does not have to
+   * wait for this one. An answer that arrives after a newer command has gone
+   * out is about a value the control has moved past, and is left alone. */
+  let sent = 0;
   const send = async payload => {
-    const box = sheet.querySelector('.hk');
-    box.classList.add('busy');
+    const mine = ++sent;
     let j;
     try {
       j = await (await api('/api/light', {
@@ -5463,8 +5488,8 @@ function openBulb(b) {
         body: JSON.stringify({ node: b.node, endpoint: b.endpoint ?? 1, ...payload })
       })).json();
     } catch (err) { j = { error: String(err) }; }
-    box.classList.remove('busy');
     if (j.error) { return setStatus(j.error, 'err'); }
+    if (mine !== sent) { return; }
     // The explanation goes first. Adopting the new state repaints the controls,
     // and the whole point is that the message is already there when they move.
     if (tookoverNow(b.node, j.on)) {

@@ -1008,6 +1008,13 @@ They send on **release**. A control that fires while you drag puts a hundred
 commands on the radio for one gesture, and the bulb only ever shows the last of
 them.
 
+A tap **glides** from the old level to the new one, the way a change coming from
+the bulb does; a finger that moves takes the glide away, so a drag is never a
+third of a second behind it. Nothing dims while the bulb answers: the control
+already shows the value it was given and stays live, a preset wears its ring
+from the moment it is pressed, and an answer that arrives after a newer command
+has gone out is left alone.
+
 **The drag is absolute** — the level follows the pointer, so letting go
 four-fifths of the way up the panel means four-fifths. That is the whole point of
 a control shaped like a column, and anything else fights what it looks like.
