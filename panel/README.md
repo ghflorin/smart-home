@@ -1045,6 +1045,19 @@ arrives first and the level climbs in the reports after. Level 1 under an on is
 read as `OnLevel`, the level the lamp is on its way to, so the panel does not
 flash 4% on the way up.
 
+### "Values updated by the schedule"
+
+A change by hand holds the lamp until it is switched off; after that the
+schedule has it back, so the next time it comes on it is at the curve's values
+and not yours. When that happens with the lamp's sheet open, the line under its
+name says so — at the power-on, just before the panel moves to what the
+schedule chose.
+
+It is said only when the lamp comes on by itself: the wall, a tile, another
+screen. A command from the sheet — a tap on the panel, a preset — is somebody
+choosing the values, so there is nothing to explain, and the panel shows what
+was chosen.
+
 ### The colour strip's travel is the bulb's range
 
 Not the Matter range. The spec allows 153..500 mireds; the lamp here reports
