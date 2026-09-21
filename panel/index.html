@@ -5544,16 +5544,10 @@ function openBulb(b) {
     }, 260);
   };
 
-  // Resolves once the message is fully IN - a crossfade is 260ms out and 260ms
-  // back, so resolving at 300 handed the controls back while the message was
-  // still arriving and they moved together. It has to be legible first, then
-  // they move. The identity returns three seconds later, by which time the
-  // sliders are long since settled.
-  const SAY_LEAD = 540;
-  const sayTookover = () => new Promise(resolve => {
+  // Only for a lamp that came on by itself - the wall, the tile - at the
+  // schedule's values. A command from this sheet clears the reason first.
+  const sayTookover = () =>
     fadeWho("values updated by the schedule", true, () => fadeWho(whoIs, false));
-    setTimeout(resolve, SAY_LEAD);
-  });
 
   const ctl = bulbControl(sheet, {
     read: () => {
@@ -5607,6 +5601,11 @@ function openBulb(b) {
   let sent = 0;
   const send = async payload => {
     const mine = ++sent;
+    // Whatever the lamp does next is what was chosen here, so there is no
+    // takeover to explain. Left set, the lamp coming on under this very
+    // command read as "the schedule took it" - on a lamp that had just been
+    // given 20% by hand and was sitting at 20%.
+    delete TOOKOVER[String(b.node)];
     let j;
     try {
       j = await (await api('/api/light', {
@@ -5617,12 +5616,6 @@ function openBulb(b) {
     } catch (err) { j = { error: String(err) }; }
     if (j.error) { setStatus(j.error, 'err'); return false; }
     if (mine !== sent) { return true; }
-    // The explanation goes first. Adopting the new state repaints the controls,
-    // and the whole point is that the message is already there when they move.
-    if (tookoverNow(b.node, j.on)) {
-      delete TOOKOVER[String(b.node)];
-      await sayTookover();
-    }
     adoptBulb(b.node, j);
     render();
   };
