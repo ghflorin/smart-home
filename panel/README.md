@@ -1081,9 +1081,9 @@ Home's order:
 - **colours** — red to pink, only for lamps whose FeatureMap says hue and
   saturation.
 - **the picker** — last, a colour wheel with the lamp's own colour in its middle
-  when no swatch matches. A lamp with only whites gets a ring of its own whites
-  instead, warmest to coolest it can go, because a rainbow would promise colours
-  it does not have. It opens the white strip and the wheel on a panel of their
+  when no swatch matches. A lamp with only whites gets its own whites going round
+  the circle instead, warmest to coolest it can go, because a rainbow would
+  promise colours it does not have. It opens the white strip and the wheel on a panel of their
   own.
 
 A swatch counts as chosen when the lamp is near it — six mireds, or six steps of
