@@ -1095,18 +1095,24 @@ send nothing — and applies the schedule to that lamp straight away.
 
 ### Panels come up from the bottom
 
-The settings behind the gear and the colour picker are sheets over the sheet,
-as iOS stacks them: they rise from the bottom of the card while the page under
-them sinks back and dims, and the card grows or shrinks to what they hold. A
-panel rises over whatever part of the page is on screen, so a long sheet
-scrolled down to its colours opens the picker there, and closing it gives the
-page back at the same place.
+The settings behind the gear and the colour picker are a sheet over the sheet,
+as iOS stacks them. It rises from the bottom of the screen; the card underneath
+sinks back and dims, and a strip of it stays in sight above the new sheet. The
+sheet is the card's width and reaches down at least as far as the card did.
 
-The X and `Escape` take a panel down first and close the card only when nothing
-is left on it; the backdrop still closes everything. While a panel moves it is
-laid over the page; once it is up it is in the flow, so the card is exactly as
-tall as what it shows, and anything that arrives late — the firmware check, the
-schedule row — has room.
+**It is dragged, and thrown.** The grabber strip — and the panel's title, while
+the panel is scrolled to its top — carries the sheet with the finger, and the
+card comes back up underneath in step. Let go past a third of the way, or
+moving down faster than half a pixel a millisecond, and it is thrown: it goes
+on at the speed it left the finger. Anything less and it springs back into
+place. Up gives a little and no more.
+
+The X on the sheet, `Escape`, a tap on the sunk card and a tap on the dark
+around it all take the sheet down and leave the card; the card's own X closes
+the card. The panel itself is moved into the sheet, not copied, so every
+button wired where it was built still works, and it goes back into the card
+when the sheet comes down. A link followed from the settings takes the sheet
+away with the page it belonged to.
 
 ### The API behind them
 
