@@ -999,10 +999,10 @@ Until these existed the panel could switch a bulb and nothing else; everything
 about how the light looked came from the schedule, so "why is it dim?" had no
 answer you could reach in one gesture.
 
-**One gesture, two meanings, told apart by whether it moved.** Drag the panel and
-it sets the value; press and let go without moving and it toggles. That is why
-there is no separate on/off pair any more — two buttons doing a job the big
-control already does, taking up the room it wanted.
+**Where you press is the value**, as in Apple Home: a tap lands the level
+there, and holding and dragging carries it with the finger. All the way down is
+off, and the bulb in the panel is struck through while the lamp is dark. On and
+off at the same brightness is the tile's round button.
 
 They send on **release**. A control that fires while you drag puts a hundred
 commands on the radio for one gesture, and the bulb only ever shows the last of
@@ -1012,23 +1012,10 @@ them.
 four-fifths of the way up the panel means four-fifths. That is the whole point of
 a control shaped like a column, and anything else fights what it looks like.
 
-It was **relative** for a while, and that is worth recording as a mistake. The
-problem it solved was real: a click low in the panel meant to toggle a lamp, with
-a six-pixel tremor on the way up, stopped being a tap and became *set 2%* —
-measured, `level: 5` — and being a brightness change it wrote `OnLevel` and took
-a hold, so it stayed that way. Making the drag relative fixed the tremor and
-broke the gesture. A short deliberate drag now moved the value only by the
-distance travelled, so it landed roughly where it already was: the value picked
-*last* time. Aim for 80, get the old value; aim for 20, get 80; aim for 50, get
-20. **A control one step behind is worse than one that occasionally overshoots.**
-
-So it is absolute again and the tremor is handled where it belonged all along —
-at the threshold. Twelve pixels is far more than a click carries and far less
-than a drag, so a press meaning "toggle" stays a toggle. Verified both ways: a
-6px twitch sends `toggle`, and aiming at 50/35/95 lands on 50/35/95.
-
 Dragging past either end still reaches both ends — the value clamps, so a long
-sweep up lands on 254 and a long sweep down on the 1% floor.
+sweep up lands on 254 and a long sweep down on off. A webhook's panel has no off
+of its own, since what the webhook does is chosen above it; there the floor is
+1%.
 
 ### What the brightness panel shows when the bulb is off
 
