@@ -5661,6 +5661,9 @@ function openBulb(b) {
   const sayTookover = () =>
     fadeWho("values updated by the schedule", true, () => fadeWho(whoIs, false));
 
+  const lightUp = () =>
+    ((state.bulbs[String(b.node)] || {}).on === false ? { action: 'on' } : {});
+
   const ctl = bulbControl(sheet, {
     read: () => {
       const cur = state.bulbs[String(b.node)] || {};
@@ -5697,9 +5700,11 @@ function openBulb(b) {
       };
     },
     onLevel: v => send({ level: v }),
-    onMireds: m => send({ mireds: m }),
-    onColour: c => send({ hue: c.hue, sat: c.sat }),
-    onAdaptive: () => send({ adaptive: true }),
+    // A colour picked for a dark lamp switches it on in that colour: picking
+    // one is asking to see it. The server puts the colour in first.
+    onMireds: m => send({ mireds: m, ...lightUp() }),
+    onColour: c => send({ hue: c.hue, sat: c.sat, ...lightUp() }),
+    onAdaptive: () => send({ adaptive: true, ...lightUp() }),
     onPicker: () => openPanel(sheet, 'pick'),
     onOff: () => send({ action: 'off' }),
   });

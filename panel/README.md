@@ -1101,6 +1101,11 @@ Home's order:
   promise colours it does not have. It opens the white strip and the wheel on a panel of their
   own.
 
+On a lamp that is off, a colour — a swatch, adaptive, the strip or the wheel —
+switches it on in that colour: picking one is asking to see it. The colour goes
+in first, while the lamp is still dark, so it comes up in the colour picked
+instead of flashing the one it had and then changing.
+
 A swatch counts as chosen when the lamp is near it — six mireds, or six steps of
 hue — because a lamp asked for 370 reports 369, and a ring that vanished over
 one mired would read as the choice not having taken. The row opens with the

@@ -5098,6 +5098,14 @@ class Handler(BaseHTTPRequestHandler):
                 log(f"--- bulb {node}: colour back to the schedule ---", "step")
                 release_facet(node, "mireds", "adaptive")
                 apply_light_schedule(force=True, only=[node])
+                # Chosen on a dark lamp, it is a way of switching it on: the
+                # schedule has just written its colour and its come-up level
+                # into the lamp, so On brings it up in both.
+                if action == "on":
+                    err = m_cmd(node, endpoint, 0x0006, "On")
+                    if err:
+                        log(f"bulb {node}: on failed: {err}", "err")
+                        return self._send({"error": err}, status=502)
                 st = state_of(node)
                 return self._send({"node": node, "on": st.get("on"),
                                    "level": st.get("level"), "mireds": st.get("mireds"),
@@ -5119,15 +5127,28 @@ class Handler(BaseHTTPRequestHandler):
             if not node:
                 return self._send({"error": "missing 'node'"}, status=400)
 
+            colour_what = ("hue %s/%s" % (hue, sat) if hue is not None else "") \
+                or ("colour " + str(mireds) if mireds is not None else "")
             what = action or ("level " + str(level) if level is not None else "") \
-                          or ("hue %s/%s" % (hue, sat) if hue is not None else "") \
-                          or ("colour " + str(mireds))
+                          or colour_what
+            # A colour picked for a dark lamp switches it on, and goes in
+            # FIRST: ExecuteIfOff lands it while the lamp is still dark, so
+            # the lamp comes up in the colour picked rather than flashing the
+            # one it had and then changing.
+            colour_first = action == "on" and bool(colour_what)
+            if colour_first:
+                what = f"on, {colour_what}"
             log(f"--- bulb {node}: {what} ---", "step")
 
-            if action:
+            def switch():
                 err = m_cmd(node, endpoint, 0x0006, ONOFF_CMD[action])
                 if err:
                     log(f"bulb {node}: {action} failed: {err}", "err")
+                return err
+
+            if action and not colour_first:
+                err = switch()
+                if err:
                     return self._send({"error": err}, status=502)
 
             # Brightness on its own, with-on-off so asking for light gives light
@@ -5212,6 +5233,11 @@ class Handler(BaseHTTPRequestHandler):
                 # The schedule's colour write is the thing that would undo this,
                 # so that is the facet to stand in front of.
                 set_override(node, True, ("mireds",))
+
+            if colour_first:
+                err = switch()
+                if err:
+                    return self._send({"error": err}, status=502)
 
             # Read the state back - all of it, through the same combined read
             # the poll uses. A confirmed command does not mean the bulb did what
