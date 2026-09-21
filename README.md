@@ -17,8 +17,8 @@ is its brightness and a row of colours: **adaptive** first, which follows the
 schedule, then a few whites, the colours if the lamp has them, and last a picker
 for anything else. Identifying it, sharing it, its firmware and removing it are
 one tap away, behind the gear. The settings and the picker come up from the
-bottom, over the page, and the X takes them down again before it closes the
-card. A battery gauge and a small cloud appear in a tile's corner when they apply: one
+bottom as a sheet over the card, which sinks back behind them; drag the sheet
+down, or throw it, and it goes. A battery gauge and a small cloud appear in a tile's corner when they apply: one
 for the devices that run on a cell, one when firmware is waiting. A red crossed
 signal takes that corner when a device has stopped answering — the last reading
 stays on the tile, so you can see what its battery was on the way out.

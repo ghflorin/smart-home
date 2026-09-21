@@ -2226,49 +2226,66 @@
     font-variant-numeric: tabular-nums;
   }
   /* ---------- the pages of a device sheet ----------
-     The first page is in the flow. The settings and the colour picker are a
-     sheet of their own that comes up from the bottom of the card and covers
-     it: laid over the first page while it moves, and in the flow once it is
-     up, so the card is exactly as tall as what it is showing and anything that
-     arrives late - the firmware check, the schedule row - has room. */
-  .pages { position: relative; display: flow-root; }
+     The first page is the card. The settings and the colour picker wait in it,
+     hidden, and when asked for they move into a sheet of their own that comes
+     up from the bottom over the card, as iOS stacks one sheet on another: the
+     card sinks back and dims, a strip of it stays in sight above, and the new
+     sheet can be dragged or thrown back down. */
   .pg-main { transform-origin: 50% 0; }
-  .pg-panel {
-    position: relative;
-    margin: calc(-1 * var(--pad-y)) calc(-1 * var(--pad));
-    padding: var(--pad-y) var(--pad);
-    background: var(--panel-hi);
-    border-radius: var(--radius-card) var(--radius-card) 0 0;
-  }
-  .pages.up:not(.moving) > .pg-main { display: none; }
-  .pages.moving > .pg-panel {
+
+  .sheetdim {
     position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    margin-bottom: 0;
-    /* The shadow is lost on the dark card, so the edge also gets a hairline -
-       inset, so it follows the corners and moves nothing. */
-    box-shadow: 0 -14px 30px -16px rgba(0, 0, 0, .6),
-                inset 0 1px 0 color-mix(in srgb, var(--ink) 14%, transparent);
-  }
-  /* A sheet reaches the bottom of the card. The picker is shorter than a long
-     page, and while the card shrinks to it, the page would show under the
-     panel's lower edge as well as over its top one. */
-  .pages.moving > .pg-panel::after {
-    content: "";
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 100%;
-    height: 100vh;
-    background: inherit;
+    inset: 0;
+    z-index: 3;
+    border-radius: var(--radius-card);
+    background: #000;
+    opacity: 0;
     pointer-events: none;
   }
-  /* Nothing scrolls while a sheet is on its way: the one coming up starts
-     below the card, and a scrollbar flashing for it would be the only thing
-     on the screen that knew. */
-  .sheet.panel-moving { overflow: hidden; }
+  .subsheet {
+    position: absolute;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel-hi);
+    border: 1px solid var(--line-hi);
+    border-radius: var(--radius-card);
+    box-shadow: 0 -12px 40px -14px rgba(0, 0, 0, .55);
+    overflow: hidden;
+    will-change: transform;
+  }
+  /* The grabber says what the sheet does: it came up, and it goes down. The
+     whole strip is the handle, not just the bar. */
+  .sub-head {
+    flex: none;
+    position: relative;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    cursor: grab;
+    touch-action: none;
+  }
+  .sub-head:active { cursor: grabbing; }
+  .sub-head .grab {
+    width: 38px;
+    height: 5px;
+    border-radius: 3px;
+    background: var(--line-hi);
+  }
+  .sub-head .sub-x { top: 8px; right: 10px; }
+  .sub-body.sheet {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    padding: 4px var(--pad) var(--pad-y);
+    overscroll-behavior: contain;
+  }
+  .sub-body .pg-head { touch-action: none; }
+  /* Its own formatting context, so a last child's margin is measured with it. */
+  .pg-panel { display: flow-root; }
 
   /* The gear, where Apple puts it: the bottom corner of the control card. */
   .pg-foot { display: flex; justify-content: flex-end; margin-top: 14px; }
@@ -2289,9 +2306,7 @@
   .gear:hover { color: var(--ink); border-color: var(--ink-faint); }
   .gear:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 
-  /* A panel's head: what it is, centred where the device's name was. The X
-     in the corner closes the panel first and the card after, as the X on a
-     sheet over a sheet does. */
+  /* A panel's head: what it is, under the grabber. */
   .pg-head {
     display: flex;
     flex-direction: column;
@@ -2373,9 +2388,11 @@
   .sw:active { transform: scale(.94); }
   .sw.on { box-shadow: var(--sw-edge), 0 0 0 3px var(--panel-hi), 0 0 0 5px var(--ink); }
   .sw:focus-visible { outline: 2px solid var(--link); outline-offset: 5px; }
-  /* Adaptive: the whole day's whites in one swatch, warm to cool. */
+  /* Adaptive: the whole day's whites in one swatch - warm where the light
+     comes from, top left, cooling toward the far edge. */
   .sw.adaptive {
-    background: linear-gradient(135deg, #ffb45a 0%, #ffe3b8 48%, #dfeeff 52%, #b9d7ff 100%);
+    background: radial-gradient(farthest-corner at 30% 30%,
+      #ffb65c 0%, #ffd49a 24%, #fff0de 42%, #d8e7ff 60%, #a3c7ff 80%);
   }
   /* The sun from the theme switch, as it stands in light mode: the day's
      light, which is what adaptive follows. */
@@ -2383,7 +2400,9 @@
   /* The picker: every hue, with the lamp's own colour in the middle when it is
      on one that no preset matches. */
   .sw.custom {
-    background: conic-gradient(from 0deg, #f33, #fd3, #3d3, #3dd, #33f, #d3d, #f33);
+    background:
+      radial-gradient(farthest-corner at 30% 30%, #fff 0%, rgba(255, 255, 255, 0) 58%),
+      conic-gradient(from 0deg at 30% 30%, #f33, #fd3, #3d3, #3dd, #33f, #d3d, #f33);
   }
   .sw.custom i {
     width: 16px;
@@ -2392,7 +2411,9 @@
     background: var(--custom, transparent);
     box-shadow: 0 0 0 2px var(--panel-hi);
   }
-  .sw.custom:not(.on) i { background: var(--panel-hi); }
+  /* No hole in it: the dot is there only when the lamp is on a colour of its
+     own, to say which. */
+  .sw.custom:not(.on) i { display: none; }
 
   /* The picker's page: the white strip and the wheel side by side. */
   .hk-colour {
@@ -2921,6 +2942,17 @@
     <button type="button" class="sheet-x" id="sheet-x" title="close"
             aria-label="close">&times;</button>
     <div class="sheet" id="sheet"></div>
+    <div class="sheetdim" id="sheetdim"></div>
+  </div>
+  <!-- Settings and the colour picker: a sheet over the sheet. The body carries
+       the .sheet class so everything styled for a sheet's contents applies. -->
+  <div class="subsheet" id="subsheet" role="dialog" aria-modal="true" hidden>
+    <div class="sub-head">
+      <span class="grab" aria-hidden="true"></span>
+      <button type="button" class="sheet-x sub-x" title="close"
+              aria-label="close">&times;</button>
+    </div>
+    <div class="sub-body sheet"></div>
   </div>
 </div>
 
@@ -4472,113 +4504,196 @@ function pagedSheet(main, settings, picker) {
       </div>`;
   return `<div class="pages">
     <section class="pg-main">${main}${gear}</section>
-    ${picker ? `<section class="pg-panel pg-pick" hidden data-title="colour">
+    ${picker ? `<section class="pg-panel pg-pick" hidden>
       ${panelHead('colour')}${picker}</section>` : ''}
-    ${gear ? `<section class="pg-panel pg-set" hidden data-title="settings">
+    ${gear ? `<section class="pg-panel pg-set" hidden>
       ${panelHead('settings', true)}${settings}</section>` : ''}
   </div>`;
 }
 
-/* A panel moving is one animation on three things - the card's height, the
- * first page sinking back, the panel rising - and a second request while it
- * runs lands it where it was going before starting on its own. Two sets of
- * keyframes fighting over one card is how a panel ends up half-way up. */
-function panelSettle(box) {
-  const done = box._done;
-  box._done = null;
-  [box, ...box.children].forEach(el => el.getAnimations().forEach(x => x.cancel()));
-  if (done) { done(); }
+/* The sheet over the sheet.
+ *
+ * The panel is moved, not copied: its buttons were wired where it was built,
+ * and everything that holds a reference to one of them - the colour control,
+ * the firmware box, the remove button - keeps holding it. It goes back into
+ * the card, hidden, when the sheet comes down.
+ *
+ * Geometry is the card's, read without its transform: the same width, its top
+ * a strip below where the sunk card's top edge ends up, and down as far as
+ * the card went or the panel needs, whichever is more, short of the bottom of
+ * the screen. */
+const SUB = { panel: null, home: null, back: null, watch: null };
+const SUB_SINK = .06;          // how much smaller the card gets underneath
+const SUB_PEEK = 18;           // px of the sunk card left in sight above
+const SUB_DIM = .22;
+
+function subRecede(q) {
+  const wrap = $('#sheetwrap');
+  wrap.style.transform = q ? `scale(${1 - SUB_SINK * q})` : '';
+  const dim = $('#sheetdim');
+  dim.style.opacity = String(SUB_DIM * q);
+  dim.style.pointerEvents = q ? 'auto' : 'none';
 }
 
-function panelPads(panel) {
-  const cs = getComputedStyle(panel);
-  return parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+function placeSub() {
+  const sub = $('#subsheet');
+  const wrap = $('#sheetwrap');
+  const body = sub.querySelector('.sub-body');
+  const top = wrap.offsetTop + Math.round(wrap.offsetHeight * SUB_SINK / 2) + SUB_PEEK;
+  // Measured on the panel, not the body: a body never reports less than its
+  // own height, so the last sheet's size would have been this one's floor.
+  const bs = getComputedStyle(body);
+  const need = sub.querySelector('.sub-head').offsetHeight
+    + (SUB.panel ? SUB.panel.offsetHeight : 0)
+    + parseFloat(bs.paddingTop) + parseFloat(bs.paddingBottom) + 2;
+  const room = $('#overlay').clientHeight - top - 20;
+  const cover = wrap.offsetTop + wrap.offsetHeight - top;
+  sub.style.left = wrap.offsetLeft + 'px';
+  sub.style.width = wrap.offsetWidth + 'px';
+  sub.style.top = top + 'px';
+  sub.style.height = Math.max(120, Math.min(room, Math.max(cover, need))) + 'px';
 }
 
-/* Up over whatever part of the first page is on screen, not over its top: a
- * long sheet scrolled down to the colours opens the picker where the colours
- * were, and closing it gives the page back at the same place. The panel is
- * moved into the flow only once it is up - at the top of the card, with the
- * card scrolled to the top, which is the same place on the screen. */
+function subAnimsDone() {
+  [$('#subsheet'), $('#sheetwrap'), $('#sheetdim')].forEach(
+    el => el.getAnimations().forEach(x => x.cancel()));
+}
+
 function openPanel(sheet, which) {
-  const box = sheet.querySelector('.pages');
-  if (!box) { return; }
-  panelSettle(box);
-  const panel = box.querySelector(which === 'set' ? '.pg-set' : '.pg-pick');
-  const main = box.querySelector('.pg-main');
-  if (!panel || !panel.hidden) { return; }
-  box.querySelectorAll('.pg-panel').forEach(x => { x.hidden = x !== panel; });
-  const st = sheet.scrollTop;
-  box._scroll = st;
-  const h0 = box.offsetHeight;
-  const from = st + sheet.clientHeight;
-  box.classList.remove('up');
-  box.classList.add('moving');
+  const panel = sheet.querySelector(which === 'set' ? '.pg-set' : '.pg-pick');
+  if (!panel) { return; }
+  if (SUB.panel) { closePanel(true); }
+  const sub = $('#subsheet');
+  const body = sub.querySelector('.sub-body');
+  SUB.panel = panel;
+  SUB.home = panel.parentNode;
+  SUB.back = which === 'set' ? sheet.querySelector('.gear') : sheet.querySelector('.sw.custom');
   panel.hidden = false;
-  main.inert = true;
-  const h1 = panel.offsetHeight - panelPads(panel);
-  const x = $('#sheet-x');
-  x.title = 'close ' + panel.dataset.title;
-  x.setAttribute('aria-label', x.title);
-  box._done = () => {
-    box.classList.remove('moving');
-    box.classList.add('up');
-    sheet.classList.remove('panel-moving');
-    main.style.transformOrigin = '';
-    sheet.scrollTop = 0;
-  };
-  if (reducedMotion()) { panelSettle(box); return; }
-  sheet.classList.add('panel-moving');
-  main.style.transformOrigin = `50% ${st}px`;
-  const o = { duration: 460, easing: SHEET_EASE_OPEN, fill: 'forwards' };
-  box.animate([{ height: h0 + 'px' }, { height: h1 + 'px' }], o);
-  main.animate([{ transform: 'none', opacity: 1 },
-                { transform: 'scale(.94)', opacity: .2 }], o);
-  panel.animate([{ transform: `translateY(${from}px)` },
-                 { transform: `translateY(${st}px)` }], o)
-    .finished.then(() => { if (box._done) { panelSettle(box); } }).catch(() => {});
+  body.append(panel);
+  body.scrollTop = 0;
+  sub.hidden = false;
+  $('#sheet').inert = true;
+  placeSub();
+  // Late arrivals - the firmware check, the schedule row - get room.
+  SUB.watch = new ResizeObserver(() => { if (SUB.panel) { placeSub(); } });
+  SUB.watch.observe(panel);
+  sub.querySelector('.sub-x').focus({ preventScroll: true });
+
+  subAnimsDone();
+  sub.style.transform = '';
+  subRecede(1);
+  if (reducedMotion()) { return; }
+  const o = { duration: 460, easing: SHEET_EASE_OPEN };
+  const from = $('#overlay').clientHeight - sub.offsetTop;
+  sub.animate([{ transform: `translateY(${from}px)` }, { transform: 'none' }], o);
+  $('#sheetwrap').animate([{ transform: 'none' },
+                           { transform: `scale(${1 - SUB_SINK})` }], o);
+  $('#sheetdim').animate([{ opacity: 0 }, { opacity: SUB_DIM }], o);
 }
 
-// Answers whether there was a panel to close, so the X and Escape can take
-// the panel down first and the card only when there is nothing left on it.
-function closePanel(sheet, instant) {
-  const box = sheet.querySelector('.pages');
-  if (!box) { return false; }
-  panelSettle(box);
-  const panel = box.querySelector('.pg-panel:not([hidden])');
-  const main = box.querySelector('.pg-main');
-  if (!panel) { return false; }
-  const x = $('#sheet-x');
-  x.title = 'close';
-  x.setAttribute('aria-label', 'close');
-  const sp = sheet.scrollTop;
-  const h0 = box.offsetHeight;
-  box.classList.add('moving');
-  box.classList.remove('up');
-  main.inert = false;
-  sheet.scrollTop = box._scroll || 0;
-  const st = sheet.scrollTop;
-  const h1 = box.offsetHeight;
-  box._done = () => {
-    panel.hidden = true;
-    box.classList.remove('moving');
-    sheet.classList.remove('panel-moving');
-    main.style.transformOrigin = '';
-    const gear = main.querySelector('.gear');
-    if (gear && panel.classList.contains('pg-set')) { gear.focus({ preventScroll: true }); }
+/* Down it goes: from wherever it is now - a finger may have it half-way - at a
+ * given speed. `v` is the finger's, in px/ms, so a throw carries on at the
+ * speed it was thrown; the curve starts three times steeper than its average,
+ * which is where the duration comes from. */
+function closePanel(instant, from = 0, v = 0) {
+  if (!SUB.panel) { return false; }
+  const sub = $('#subsheet');
+  const { panel, home, back } = SUB;
+  SUB.panel = null;
+  if (SUB.watch) { SUB.watch.disconnect(); SUB.watch = null; }
+  const finish = () => {
+    subAnimsDone();
+    sub.hidden = true;
+    sub.style.transform = '';
+    subRecede(0);
+    $('#sheet').inert = false;
+    if (home && home.isConnected) {
+      panel.hidden = true;
+      home.append(panel);
+      if (back && back.isConnected) { back.focus({ preventScroll: true }); }
+    } else {
+      panel.remove();
+    }
   };
-  if (instant || reducedMotion()) { panelSettle(box); return true; }
-  sheet.classList.add('panel-moving');
-  main.style.transformOrigin = `50% ${st}px`;
-  const o = { duration: 340, easing: SHEET_EASE_CLOSE, fill: 'forwards' };
-  box.animate([{ height: h0 + 'px' }, { height: h1 + 'px' }], o);
-  main.animate([{ transform: 'scale(.94)', opacity: .2 },
-                { transform: 'none', opacity: 1 }],
-               { duration: 340, easing: SHEET_EASE_OPEN, fill: 'forwards' });
-  panel.animate([{ transform: `translateY(${st - sp}px)` },
-                 { transform: `translateY(${st + h1 + panelPads(panel)}px)` }], o)
-    .finished.then(() => { if (box._done) { panelSettle(box); } }).catch(() => {});
+  if (instant || reducedMotion()) { finish(); return true; }
+  const q0 = 1 - Math.max(0, Math.min(1, from / sub.offsetHeight));
+  const dist = $('#overlay').clientHeight - sub.offsetTop - from;
+  const dur = v > 0.05 ? Math.max(200, Math.min(420, 3 * dist / v)) : 320;
+  const ease = v > 0.05 ? 'cubic-bezier(.2, .6, .4, 1)' : SHEET_EASE_CLOSE;
+  const o = { duration: dur, easing: ease, fill: 'forwards' };
+  subAnimsDone();
+  sub.animate([{ transform: `translateY(${from}px)` },
+               { transform: `translateY(${from + dist}px)` }], o)
+    .finished.then(finish).catch(() => {});
+  $('#sheetwrap').animate([{ transform: `scale(${1 - SUB_SINK * q0})` },
+                           { transform: 'none' }], o);
+  $('#sheetdim').animate([{ opacity: SUB_DIM * q0 }, { opacity: 0 }], o);
   return true;
+}
+
+/* The grabber strip, and the panel's own title while the panel is scrolled to
+ * its top, drag the sheet. Down follows the finger and the card comes back up
+ * underneath in step; up gives a little and no more. Let go past a third of
+ * the way, or moving down faster than half a pixel a millisecond, and it is
+ * thrown; otherwise it springs back. */
+function wireSubDrag() {
+  const sub = $('#subsheet');
+  const body = sub.querySelector('.sub-body');
+  let drag = null;
+  const down = ev => {
+    if (ev.button !== 0 || ev.target.closest('button')) { return; }
+    if (!ev.target.closest('.sub-head') && body.scrollTop > 0) { return; }
+    if (!SUB.panel) { return; }
+    ev.preventDefault();
+    ev.currentTarget.setPointerCapture(ev.pointerId);
+    subAnimsDone();
+    drag = { el: ev.currentTarget, y0: ev.clientY, dy: 0, trail: [[ev.timeStamp, ev.clientY]] };
+  };
+  const move = ev => {
+    if (!drag) { return; }
+    const raw = ev.clientY - drag.y0;
+    drag.dy = raw >= 0 ? raw : raw / 5;
+    sub.style.transform = `translateY(${drag.dy}px)`;
+    subRecede(1 - Math.max(0, Math.min(1, drag.dy / sub.offsetHeight)));
+    drag.trail.push([ev.timeStamp, ev.clientY]);
+    if (drag.trail.length > 8) { drag.trail.shift(); }
+  };
+  const up = ev => {
+    if (!drag) { return; }
+    const d = drag;
+    drag = null;
+    if (d.el.hasPointerCapture(ev.pointerId)) { d.el.releasePointerCapture(ev.pointerId); }
+    const last = d.trail[d.trail.length - 1];
+    const first = d.trail.find(t => last[0] - t[0] <= 90) || last;
+    const v = last[0] > first[0] ? (last[1] - first[1]) / (last[0] - first[0]) : 0;
+    if (ev.type !== 'pointercancel' && (v > 0.5 || d.dy > sub.offsetHeight / 3)) {
+      closePanel(false, d.dy, Math.max(v, 0));
+      return;
+    }
+    // Back up, with a little overshoot, the way a sheet settles.
+    const q0 = 1 - Math.max(0, Math.min(1, d.dy / sub.offsetHeight));
+    const o = { duration: 360, easing: 'cubic-bezier(.2, .9, .3, 1.12)' };
+    sub.style.transform = '';
+    subRecede(1);
+    if (reducedMotion()) { return; }
+    sub.animate([{ transform: `translateY(${d.dy}px)` }, { transform: 'none' }], o);
+    $('#sheetwrap').animate([{ transform: `scale(${1 - SUB_SINK * q0})` },
+                             { transform: `scale(${1 - SUB_SINK})` }], o);
+    $('#sheetdim').animate([{ opacity: SUB_DIM * q0 }, { opacity: SUB_DIM }], o);
+  };
+  for (const el of [sub.querySelector('.sub-head'), body]) {
+    el.addEventListener('pointerdown', ev => {
+      if (el === body && !ev.target.closest('.pg-head')) { return; }
+      down(ev);
+    });
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  }
+  sub.querySelector('.sub-x').onclick = () => closePanel(false);
+  // The sunk card is the way back too, as the dimmed sheet behind is in iOS.
+  $('#sheetdim').onclick = () => closePanel(false);
+  addEventListener('resize', () => { if (SUB.panel) { placeSub(); } });
 }
 
 function wirePages(sheet, sub) {
@@ -5079,11 +5194,14 @@ function bulbControl(root, opts) {
    * first time, a colour bulb ticked into a webhook's list - and repainted on
    * every change of what it is showing. */
   // A lamp with no colours has no rainbow to offer: its picker is its own
-  // whites, warmest to coolest it can go and back round the ring.
+  // whites, warmest it can go at the top left to coolest at the far edge -
+  // the same fall as adaptive, over this lamp's range.
   const whiteWheel = cur => {
     const at = f => ctColor(Math.round(cur.ctHi - f * (cur.ctHi - cur.ctLo)));
-    return `conic-gradient(from 0deg, ${[0, .25, .5, .75, 1, .75, .5, .25, 0]
-      .map(at).join(', ')})`;
+    // Stops end at 80%: the farthest corner is outside the circle, and the
+    // coolest white has to land on the rim, not past it.
+    return `radial-gradient(farthest-corner at 30% 30%, ${[0, .25, .5, .75, 1]
+      .map(f => `${at(f)} ${f * 80}%`).join(', ')})`;
   };
 
   const buildSwatches = cur => {
@@ -8291,10 +8409,9 @@ new MutationObserver(recs => {
 // A sheet written while the last one is still shrinking away is a new sheet,
 // not the end of the old one: stop closing, and bring it back to full size.
 new MutationObserver(() => {
-  const x = $('#sheet-x');
-  x.title = 'close';
-  x.setAttribute('aria-label', 'close');
-  $('#sheet').classList.remove('panel-moving');
+  // A new page on the card - a link followed from the settings - takes the
+  // sheet over it away with the old page.
+  closePanel(true);
   if (!SHEET_CLOSING) { return; }
   SHEET_CLOSING.cancel();
   SHEET_CLOSING = null;
@@ -8313,9 +8430,9 @@ new MutationObserver(() => {
 }).observe($('#sheet'), { childList: true });
 
 function closeSheet() {
-  const x = $('#sheet-x');
-  x.title = 'close';
-  x.setAttribute('aria-label', 'close');
+  // The sheet over it first, at once: the card is about to shrink into its
+  // tile, and it should do that at its own size.
+  closePanel(true);
   const after = sheetOnClose;
   sheetOnClose = null;
   SHEET_LIVE = null;
@@ -8454,16 +8571,17 @@ async function share(btn) {
   countdownTimer = setInterval(tick, 1000);
 }
 
-$('#overlay').onclick = e => { if (e.target.id === 'overlay') closeSheet(); };
+$('#overlay').onclick = e => { if (e.target.id === 'overlay') closeTop(); };
 // The X and Escape take down whatever is on top: a panel if one is up, and
 // the card when there is nothing left on it. A click on the dark around the
 // card is a way out of all of it.
 const closeTop = () => {
-  if ($('#overlay').classList.contains('on') && closePanel($('#sheet'))) { return; }
+  if ($('#overlay').classList.contains('on') && closePanel(false)) { return; }
   closeSheet();
 };
 $('#sheet-x').onclick = closeTop;
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeTop(); });
+wireSubDrag();
 
 // ---------- lock ----------
 //
