@@ -56,12 +56,6 @@ def _tint(lamp: dict, hs, warmth: float, tt: int) -> dict:
     return {"mireds": _white(lamp, warmth), "tt": tt}
 
 
-def _merge(a: dict, b: dict) -> dict:
-    out = dict(a)
-    out.update(b)
-    return out
-
-
 def frame(key: str, step: int, lamps: list, level: int, speed: str, rng, memo: dict):
     """What to send this step, and how long until the next.
 
@@ -93,8 +87,7 @@ def frame(key: str, step: int, lamps: list, level: int, speed: str, rng, memo: d
         period = 0.6 * k
         if step == 0:
             for lamp in lamps:
-                out[lamp["node"]] = _merge({"level": level, "tt": 4},
-                                           _tint(lamp, GOLD, 0.85, 4))
+                out[lamp["node"]] = {"level": level, "tt": 4, **_tint(lamp, GOLD, 0.85, 4)}
             memo["dipped"] = []
             return out, period
         for node in memo.get("dipped", []):
@@ -113,8 +106,7 @@ def frame(key: str, step: int, lamps: list, level: int, speed: str, rng, memo: d
         period = 0.4 * k
         if step == 0:
             for lamp in lamps:
-                out[lamp["node"]] = _merge({"level": level, "tt": 3},
-                                           _tint(lamp, EMBER, 1.0, 3))
+                out[lamp["node"]] = {"level": level, "tt": 3, **_tint(lamp, EMBER, 1.0, 3)}
             return out, period
         for lamp in rng.sample(lamps, max(1, (n + 1) // 2)):
             out[lamp["node"]] = {"level": max(lo, int(level * rng.uniform(0.55, 1.0))),
@@ -129,7 +121,7 @@ def frame(key: str, step: int, lamps: list, level: int, speed: str, rng, memo: d
         tt = _tenths(period * 0.8)
         if step == 0:
             for lamp in lamps:
-                out[lamp["node"]] = _merge({"level": lo, "tt": 4}, _tint(lamp, GOLD, 0.8, 4))
+                out[lamp["node"]] = {"level": lo, "tt": 4, **_tint(lamp, GOLD, 0.8, 4)}
             return out, period
         if n == 1:
             out[lamps[0]["node"]] = {"level": level if step % 2 else lo, "tt": tt}
@@ -150,7 +142,7 @@ def frame(key: str, step: int, lamps: list, level: int, speed: str, rng, memo: d
             ch = {"level": level if up else lo, "tt": tt}
             if not up or step == 0:
                 red = (step // 2 + j) % 2 == (0 if step == 0 else 1)
-                ch = _merge(ch, _tint(lamp, RED if red else GREEN, 0.9, tt))
+                ch = {**ch, **_tint(lamp, RED if red else GREEN, 0.9, tt)}
             out[lamp["node"]] = ch
         return out, period
 

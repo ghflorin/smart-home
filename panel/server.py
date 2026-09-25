@@ -1409,7 +1409,6 @@ def event_watch():
 # polling cannot be prompt for a battery sensor, and panel/README.md for the
 # shape of the migration - chip-tool still does everything else.
 MATTER_WS = os.environ.get("MATTER_WS", "ws://127.0.0.1:5580/ws")
-MATTER_LINK = os.environ.get("PANEL_MATTER_LINK", "1").lower() not in ("0", "no", "off")
 
 
 # The command half. Same process, second socket - see MatterCall for why it is
@@ -1475,7 +1474,7 @@ def m_write(node, endpoint, cluster, attr, value, timeout=45.0):
 # That is not a detail, it is the whole shape of this migration. The switch's
 # existing bindings live on fabric 1 and read back as an EMPTY table here, which
 # is exactly what a switch that controls nothing also looks like.
-MS_FABRIC = int(os.environ.get("MS_FABRIC_INDEX", "2"))
+MS_FABRIC = 2
 
 
 def our_of(ms_node) -> int | None:
@@ -2843,19 +2842,14 @@ SWITCH_EVENTS = {
     0x04: "long-up", 0x05: "counting", 0x06: "complete",
 }
 
-# Whether to wait out the multi-press window, so a double tap can be told from
-# a single one.
+# A press is acted on at the RELEASE, not at MultiPressComplete.
 #
 # Measured on the BILRESA: ShortRelease lands 141 ms after the press, and
-# MultiPressComplete - the only event carrying the count - lands 519 ms after
-# THAT. Waiting for it is the only way to know a second tap is not coming, and
-# it is the whole of the delay a person can feel. There is no third option: at
-# the first tap nothing in the protocol says whether another is on its way.
-#
-# Off here, because this house does not use a double tap on this remote and an
-# instant light is worth more than a gesture nobody presses. Turning it back on
-# costs one line and half a second.
-WAIT_FOR_DOUBLE = False
+# MultiPressComplete - the only event carrying a count - lands 519 ms after
+# THAT. Waiting for it is the only way to tell a double tap from a single one,
+# and it is half a second of delay a person can feel on every press. This house
+# has no use for a double tap, so it acts on the release and reads the count
+# for nothing else.
 
 # Endpoints part-way through a repeat tap, and when that was noticed.
 _repeat = {}
@@ -2869,17 +2863,7 @@ def gesture_of(node, endpoint, event_id, data):
         # LongRelease and never a MultiPressComplete at all.
         return "long"
 
-    if WAIT_FOR_DOUBLE:
-        if event_id == 0x06:
-            n = data.get("totalNumberOfPressesCounted")
-            if n == 1:
-                return "press"
-            if n == 2:
-                return "double"
-            return f"press-{n}" if isinstance(n, int) else None
-        return None
-
-    # Acting on the release instead, which is where the half second goes.
+    # The release, which is where the half second goes.
     #
     # Done naively that fires TWICE on a double tap - two releases, two actions,
     # and a light that ends up back where it started. It does not have to:
@@ -3134,9 +3118,6 @@ def matter_value(node, cluster, attr, val, pushed=True):
 
 
 def matter_watch():
-    if not MATTER_LINK:
-        log("matter-server link is off (PANEL_MATTER_LINK=0)", "info")
-        return
     link = MatterLink(MATTER_WS, matter_value, log, on_event=matter_event)
 
     def remap():
@@ -3153,51 +3134,6 @@ def matter_watch():
 
 
 
-
-
-def _absorb_report(raw, by_path: dict):
-    """Turn one streamed report into state, if that is what it is."""
-    if not isinstance(raw, str) or not raw.lstrip().startswith("{"):
-        return
-    try:
-        msg = json.loads(raw)
-    except ValueError:
-        return
-    for res in msg.get("results", []):
-        if "clusterId" not in res or "value" not in res:
-            continue
-        try:
-            key = (int(res.get("nodeId", 0)) or None, int(res["clusterId"]),
-                   int(res["endpointId"]), int(res["attributeId"]))
-        except (TypeError, ValueError):
-            continue
-        # chip-tool does not always echo the node on a report, so fall back to
-        # the only subscription that matches the rest of the path.
-        hit = by_path.get(key)
-        if hit is None:
-            for (n, c, e, a), v in by_path.items():
-                if (c, e, a) == key[1:]:
-                    key = (n, c, e, a)
-                    hit = v
-                    break
-        if hit is None:
-            continue
-        name, scale = hit
-        val = res["value"]
-        val = round(val * scale, 2) if isinstance(val, (int, float)) and scale != 1 else val
-        node = key[0]
-        cur = dict(state_of(node).get("measured") or {})
-        if cur.get(name) == val:
-            sub_heard(node)
-            state_put(node, meta={"readAt": time.time(), "okAt": time.time(),
-                                     "ok": True, "err": None})
-            continue
-        cur[name] = val
-        sub_heard(node)
-        log(f"node {node}: {name} -> {val}", "step")
-        state_put(node, values={"measured": cur},
-                  meta={"readAt": time.time(), "okAt": time.time(),
-                                     "ok": True, "err": None})
 
 
 def refresh_device(dev: dict) -> list:
@@ -3435,11 +3371,6 @@ def load_schedule_file() -> dict:
     return {"points": house, "bulbs": bulbs}
 
 
-def load_schedule() -> list:
-    """The house schedule. Kept for everything that only ever wanted that."""
-    return load_schedule_file()["points"]
-
-
 def schedule_for(node, sched: dict = None) -> list:
     """The points that govern one bulb: its own if it has any, else the house's."""
     sched = sched or load_schedule_file()
@@ -3454,13 +3385,6 @@ def save_schedule_file(sched: dict):
     tmp = SCHEDULE_FILE.with_name(SCHEDULE_FILE.name + ".tmp")
     tmp.write_text(json.dumps(body, indent=2, ensure_ascii=False) + "\n")
     tmp.replace(SCHEDULE_FILE)
-
-
-def save_schedule(points: list):
-    """Replace the house schedule, leaving any per-bulb ones alone."""
-    sched = load_schedule_file()
-    sched["points"] = points
-    save_schedule_file(sched)
 
 
 # ------------------------------------------------ the curve, as the chart draws it
@@ -3585,32 +3509,6 @@ def curve_at(points: list, minute: float) -> tuple:
         raw = _sample([float(p.get("mireds") or 370) for p in points], minute)
         mireds = max(100, min(700, round(raw)))
     return lvl, mireds
-
-
-def slot_for(points: list, minute: int) -> dict:
-    """The schedule entry in effect at the given minute.
-
-    Same rule as in the firmware: the last entry that starts at or before the
-    requested minute, and if no entry has started yet (after midnight, before
-    the first point) the LAST one in the table is used - that is the one that
-    covers the wrap past midnight.
-    """
-    if not points:
-        return {}
-    slot = points[-1]
-    for p in points:
-        if int(p.get("min", 0)) <= minute:
-            slot = p
-        else:
-            break
-    return slot
-
-
-def bulbs_of(sw: dict, devices: dict) -> list:
-    """The bulbs a switch controls, per its actual binding table."""
-    st = state_of(sw["node"])
-    nodes = {e["node"] for e in (st.get("binding") or []) if "node" in e}
-    return [b for b in devices.get("bulbs", []) if b["node"] in nodes]
 
 
 # How far a value has to drift before each kind of write is worth making.

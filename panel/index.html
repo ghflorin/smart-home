@@ -1309,16 +1309,6 @@
   }
   .tile.locked .quick:hover:not(:disabled) { color: var(--on-amber); }
 
-  .role-tag {
-    font-size: 9px;
-    letter-spacing: .2em;
-    text-transform: uppercase;
-    color: var(--bad);
-    border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent);
-    padding: 2px 7px;
-    margin-left: 8px;
-    vertical-align: 2px;
-  }
 
 
   /* ---------- logs ----------
@@ -1979,36 +1969,6 @@
     overflow: hidden;
     margin-bottom: 10px;
   }
-  .scope-head {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 8px 12px;
-    font-size: 9px;
-    letter-spacing: .22em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-    background: var(--sunken-hi);
-    border-bottom: 1px solid var(--line);
-  }
-  .scope-head .rule { flex: 1; height: 1px; background: var(--line-hi); }
-  .scope-head .all {
-    font-family: inherit;
-    font-size: 9px;
-    letter-spacing: .18em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-    background: transparent;
-    border: 1px solid var(--line-hi);
-    border-radius: 6px;
-    padding: 3px 9px;
-    cursor: pointer;
-  }
-  .scope-head .all:hover { color: var(--link); border-color: var(--link); }
-
-  /* Scrolls, because a house can have thirty bulbs and the chart above it is
-     the thing that must not be pushed off the screen. */
-  .scope-list { max-height: 168px; overflow-y: auto; }
   .srow {
     display: flex;
     align-items: center;
@@ -3320,11 +3280,6 @@ const ICONS = {
       l-.4 2.5A7.7 7.7 0 0 0 7 6.4l-2.4-.9-2 3.4 2 1.6a7.7 7.7 0 0 0 0 3l-2 1.6 2 3.4 2.4-.9
       a7.7 7.7 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.7 7.7 0 0 0 2.6-1.5l2.4.9 2-3.4Z"/></svg>`,
 
-  // Back, as iOS draws it: a chevron and nothing else.
-  back: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M14.6 5.4 8 12l6.6 6.6"/></svg>`,
-
   // A bolt: something outside the house reached in and made this happen. It is
   // the one thing on the page that is not commanded by a person or a clock.
   // The webhook mark: three nodes, each line running into a hook round the
@@ -3408,20 +3363,6 @@ const ICONS = {
     <path d="M8.5 10.3V7.5a3.5 3.5 0 0 1 6.8-1.2"/>
     <circle cx="12" cy="15.5" r="1.25"/></svg>`,
 
-  // Three dots and the lines between them: a thing going somewhere else.
-  share: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <circle cx="17.5" cy="5.5" r="2.6"/><circle cx="6.5" cy="12" r="2.6"/>
-    <circle cx="17.5" cy="18.5" r="2.6"/>
-    <path d="M8.9 10.7 15.1 6.8"/><path d="M8.9 13.3 15.1 17.2"/></svg>`,
-
-  trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M4.6 6.8h14.8"/>
-    <path d="M9.3 6.8V5.4a1.4 1.4 0 0 1 1.4-1.4h2.6a1.4 1.4 0 0 1 1.4 1.4v1.4"/>
-    <path d="M6.4 6.8 7.2 19a1.6 1.6 0 0 0 1.6 1.5h6.4a1.6 1.6 0 0 0 1.6-1.5l.8-12.2"/>
-    <path d="M10.4 10.3v6.4"/><path d="M13.6 10.3v6.4"/></svg>`,
-
   // The schedule is a day, so it is a clock. It replaces the arrow on the row
   // that opens the editor, and sits in the header button that does the same.
   schedule: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -3457,14 +3398,6 @@ const ICONS = {
     <rect x="3.5" y="5" width="17" height="14" rx="2"/>
     <path d="M3.5 9.5h17"/><path d="M13 9.5V19"/>
     <path d="M6.5 12.8h3.2"/><path d="M6.5 15.8h3.2"/></svg>`,
-
-  // Anything that is neither a switch nor a bulb: a sensor, a plug, a blind.
-  // A dial, because what these have in common is that they READ - the panel
-  // does not command them, it asks them.
-  sensor: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <circle cx="12" cy="12" r="8.4"/>
-    <path d="M12 7.2v4.8l3.1 2"/></svg>`,
 
   // A wrench, not a gear. A gear at 13px - a disc with spokes around it - is
   // the same drawing as a sun, and this button sits on a page whose other round
@@ -4861,6 +4794,26 @@ function wireSubDrag(sub) {
   // The layer underneath is the way back too, as the dimmed sheet behind is
   // in iOS: a tap on it takes the top sheet down.
   sub.querySelector('.subdim').onclick = () => closePanel(false);
+}
+
+/* Settings that save themselves, a little after the last change - so dragging
+ * a brightness is one write and not twenty. `flush` is for whatever has to
+ * happen after the change has landed; `cancel` for a sheet that is going away
+ * with its settings, such as one being removed. */
+function autosave(write) {
+  let timer = null;
+  let last = null;
+  return {
+    soon() {
+      clearTimeout(timer);
+      timer = setTimeout(() => { timer = null; last = write(); }, 400);
+    },
+    async flush() {
+      if (timer) { clearTimeout(timer); timer = null; last = write(); }
+      return last;
+    },
+    cancel() { clearTimeout(timer); timer = null; },
+  };
 }
 
 function wirePages(sheet, sub) {
@@ -6383,11 +6336,6 @@ const DOT_R = 4;              // dormant handle; the live one is 6
 const yOf = n => PLOT.bottom - n * (PLOT.bottom - PLOT.top);
 const normFromY = y => (PLOT.bottom - y) / (PLOT.bottom - PLOT.top);
 
-// Which column a minute of the day falls in.
-function colAt(minute) {
-  const n = SCHED.points.length;
-  return Math.max(0, Math.min(n - 1, Math.floor(minute / 1440 * n)));
-}
 
 /* The curve, and it is the same curve the Pi follows.
  *
@@ -7802,11 +7750,7 @@ function editHook(h) {
 
   /* Saved as it changes, the way a setting is on a phone - a little after the
    * last change, so dragging the brightness is one write and not twenty. */
-  let saveTimer = null;
-  let saving = null;
   const save = async () => {
-    clearTimeout(saveTimer);
-    saveTimer = null;
     const want = [...setP.querySelectorAll('.pick input:checked')].map(i => Number(i.value));
     let j;
     try {
@@ -7822,10 +7766,8 @@ function editHook(h) {
     load();
     return true;
   };
-  const persist = () => {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => { saving = save(); }, 400);
-  };
+  const saver = autosave(save);
+  const persist = () => saver.soon();
 
   /* The same control a bulb's own sheet uses, over a stored value instead of a
    * live lamp. `on` is true because the value is what the lamps BECOME - a
@@ -7914,7 +7856,7 @@ function editHook(h) {
       return;
     }
     del.disabled = true;
-    clearTimeout(saveTimer);
+    saver.cancel();
     try {
       await api('/api/hook', {
         method: 'POST',
@@ -7951,7 +7893,7 @@ function editHook(h) {
   test.onclick = async () => {
     test.disabled = true;
     test.textContent = 'testing…';
-    if (saveTimer) { await save(); } else if (saving) { await saving; }
+    await saver.flush();
     let j;
     try {
       j = await (await fetch(`/api/motion/${h.node}`, {
@@ -7973,7 +7915,7 @@ function editHook(h) {
   };
 
   // A change made just before closing is still saved.
-  sheetOnClose = () => { if (saveTimer) { save(); } };
+  sheetOnClose = () => saver.flush();
 }
 
 /* ---------- light shows ----------
@@ -7987,12 +7929,7 @@ function editHook(h) {
  * The show runs on the hub - see shows.py - so a wall switch starts it through
  * the hub, not over its own bindings, and it needs the hub up to play.
  */
-const PRESET_FALLBACK = [
-  { key: 'candycane', label: 'candy cane' }, { key: 'twinkle', label: 'twinkle' },
-  { key: 'candle', label: 'candle' }, { key: 'wave', label: 'wave' },
-  { key: 'breathe', label: 'breathe' }, { key: 'rainbow', label: 'rainbow' },
-];
-const presets = () => (state.presets && state.presets.length ? state.presets : PRESET_FALLBACK);
+const presets = () => state.presets;
 const presetLabel = k => (presets().find(p => p.key === k) || { label: k || '' }).label;
 const showOf = g => (state.shows || {})[String(g.node)] || null;
 
@@ -8136,9 +8073,7 @@ function openGroup(g) {
   SHEET_LIVE = () => { ctl.paint(); paintPresets(); };
 
   /* Settings save as they change, as a webhook's do. */
-  let saveTimer = null;
   const save = async () => {
-    saveTimer = null;
     const lamps = [...setP.querySelectorAll('.lampspick input:checked')].map(i => Number(i.value));
     const buttons = [...setP.querySelectorAll('.btnpick input:checked')].map(i => {
       const [node, button] = String(i.value).split(':');
@@ -8157,10 +8092,8 @@ function openGroup(g) {
     Object.assign(g, { bulbs: lamps, buttons, speed });
     load();
   };
-  const persist = () => {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(save, 400);
-  };
+  const saver = autosave(save);
+  const persist = () => saver.soon();
   setP.querySelector('.lampspick').addEventListener('change', persist);
   setP.querySelector('.btnpick').addEventListener('change', persist);
   const speeds = [...setP.querySelectorAll('.spans .span')];
@@ -8170,7 +8103,7 @@ function openGroup(g) {
       persist();
     };
   });
-  sheetOnClose = () => { if (saveTimer) { clearTimeout(saveTimer); save(); } };
+  sheetOnClose = () => saver.flush();
 
   const del = setP.querySelector('.groupdel');
   del.onclick = async () => {
@@ -8183,8 +8116,7 @@ function openGroup(g) {
       return;
     }
     del.disabled = true;
-    clearTimeout(saveTimer);
-    saveTimer = null;
+    saver.cancel();
     try {
       await api('/api/group', {
         method: 'POST',
@@ -8197,47 +8129,16 @@ function openGroup(g) {
   };
 }
 
-function addGroup() {
-  const sheet = $('#sheet');
-  sheet.innerHTML = `<h2>add a light show</h2>
-    <div class="who">lamps that play an animation together</div>
-    <label>name</label>
-    <input id="f-name" placeholder="Christmas" autocomplete="off">
-    <label>room</label>
-    <div class="combo">
-      <input id="f-where" placeholder="search, or type a new one" autocomplete="off">
-      <div class="combo-list" id="f-where-list"></div>
-    </div>
-    <button class="go">add</button>`;
-  $('#overlay').classList.add('on');
-  setupRoomCombo();
-  $('#f-name').focus();
-  sheet.querySelector('.go').onclick = async (e) => {
-    const btn = e.target;
-    btn.disabled = true;
-    btn.textContent = 'adding…';
-    let j;
-    try {
-      j = await (await api('/api/group', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: $('#f-name').value.trim(),
-                               where: $('#f-where').value.trim() })
-      })).json();
-    } catch (err) { j = { error: String(err) }; }
-    if (j.error) {
-      setStatus(j.error, 'err');
-      btn.disabled = false;
-      btn.textContent = 'add';
-      return;
-    }
-    closeSheet();
-    await load();
-    // Straight into it: a show with no lamps is not finished.
+const addGroup = () => addForm({
+  title: 'add a light show',
+  who: 'lamps that play an animation together',
+  name: 'Christmas',
+  onGo: btn => addNamed(btn, '/api/group', j => {
     const made = (state.groups || []).find(x => x.node === j.node);
     if (made) { openGroup(made); openPanel($('#sheet'), 'set'); }
-  };
-}
+  }),
+});
+
 
 function editRemote(sw) {
   const per = state.byButton[String(sw.node)] || {};
@@ -8422,30 +8323,66 @@ function editLinks(swNode) {
 // The switch is our own device: it has no printed code, we commission it with
 // the passcode + discriminator from the firmware. That is why the form has no
 // code field.
-function addSwitch() {
+/* The four "add" forms are one form: a name, a room, sometimes a pairing code,
+ * a button and a note. Only the words differ, and what the button does. */
+function addForm({ title, who, name, code, go = 'add', note = '', onGo }) {
   const sheet = $('#sheet');
-  sheet.innerHTML = `<h2>add switch</h2>
-    <div class="who">the module has to be next to the Raspberry Pi</div>
+  sheet.innerHTML = `<h2>${title}</h2>
+    <div class="who">${who}</div>
     <label>name</label>
-    <input id="f-name" placeholder="Bedroom switch" autocomplete="off">
+    <input id="f-name" placeholder="${name}" autocomplete="off">
     <label>room</label>
     <div class="combo">
       <input id="f-where" placeholder="search, or type a new one" autocomplete="off">
       <div class="combo-list" id="f-where-list"></div>
     </div>
-    <button class="go">commission</button>
-    <div class="note">
-      The module has to be flashed and rebooted. It has no printed code &mdash;
-      it uses the credentials from the firmware.<br><br>
-      Right after commissioning it does not control any bulb yet: you pick them
-      from <b>edit</b>, on its card.
-    </div>`;
+    ${code ? `<label>pairing code</label>
+    <input id="f-code" placeholder="${code}" autocomplete="off">` : ''}
+    <button class="go">${go}</button>
+    ${note ? `<div class="note">${note}</div>` : ''}`;
   $('#overlay').classList.add('on');
   setupRoomCombo();
   $('#f-name').focus();
-  sheet.querySelector('.go').onclick = (e) =>
-    submitCommission(e.target, sheet, 'switch');
+  sheet.querySelector('.go').onclick = e => onGo(e.target, sheet);
 }
+
+/* A name and a room, posted, and then straight into what was made: a webhook
+ * with no lamps and a show with no lamps are both unfinished. */
+async function addNamed(btn, url, open) {
+  btn.disabled = true;
+  btn.textContent = 'adding\u2026';
+  let j;
+  try {
+    j = await (await api(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: $('#f-name').value.trim(),
+                             where: $('#f-where').value.trim() })
+    })).json();
+  } catch (err) { j = { error: String(err) }; }
+  if (j.error) {
+    setStatus(j.error, 'err');
+    btn.disabled = false;
+    btn.textContent = 'add';
+    return;
+  }
+  closeSheet();
+  await load();
+  open(j);
+}
+
+const addSwitch = () => addForm({
+  title: 'add switch',
+  who: 'the module has to be next to the Raspberry Pi',
+  name: 'Bedroom switch',
+  go: 'commission',
+  note: `The module has to be flashed and rebooted. It has no printed code
+      &mdash; it uses the credentials from the firmware.<br><br>
+      Right after commissioning it does not control any bulb yet: you pick them
+      from <b>edit</b>, on its card.`,
+  onGo: (btn, sheet) => submitCommission(btn, sheet, 'switch'),
+});
+
 
 // ---------- add bulb ----------
 /* Add anything.
@@ -8500,89 +8437,37 @@ function addAnything() {
   });
 }
 
-function addHook() {
-  const sheet = $('#sheet');
-  sheet.innerHTML = `<h2>add a webhook</h2>
-    <div class="who">an address something else can POST to</div>
-    <label>name</label>
-    <input id="f-name" placeholder="Front gate" autocomplete="off">
-    <label>room</label>
-    <div class="combo">
-      <input id="f-where" placeholder="search, or type a new one" autocomplete="off">
-      <div class="combo-list" id="f-where-list"></div>
-    </div>
-    <button class="go">add</button>
-    <div class="note">
-      Nothing is commissioned and nothing is touched on the network &mdash; this
-      is a name and an address. Each one gets an id of its own, so a camera
+const addHook = () => addForm({
+  title: 'add a webhook',
+  who: 'an address something else can POST to',
+  name: 'Front gate',
+  note: `Nothing is commissioned and nothing is touched on the network &mdash;
+      this is a name and an address. Each one gets an id of its own, so a camera
       posting to one cannot reach another\u2019s lamps.<br><br>
-      You pick what it switches on from its own tile, afterwards.
-    </div>`;
-  $('#overlay').classList.add('on');
-  setupRoomCombo();
-  $('#f-name').focus();
+      You pick what it switches on from its own tile, afterwards.`,
+  onGo: btn => addNamed(btn, '/api/hook', j => {
+    const made = (state.hooks || []).find(h => h.node === j.node);
+    if (made) { editHook(made); }
+  }),
+});
 
-  sheet.querySelector('.go').onclick = async (e) => {
-    const btn = e.target;
-    btn.disabled = true;
-    btn.textContent = 'adding\u2026';
-    try {
-      const j = await (await api('/api/hook', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: $('#f-name').value.trim(),
-                               where: $('#f-where').value.trim() })
-      })).json();
-      if (j.error) {
-        setStatus(j.error, 'err');
-        btn.disabled = false;
-        btn.textContent = 'add';
-        return;
-      }
-      closeSheet();
-      await load();
-      // Straight into its own sheet: a webhook that switches nothing on is not
-      // finished, and the address is in there too.
-      const made = (state.hooks || []).find(h => h.node === j.node);
-      if (made) { editHook(made); }
-    } catch (e2) {
-      setStatus(String(e2), 'err');
-      btn.disabled = false;
-      btn.textContent = 'add';
-    }
-  };
-}
 
-function addDevice() {
-  const sheet = $('#sheet');
-  sheet.innerHTML = `<h2>add a device</h2>
-    <div class="who">a bulb, a sensor, a plug &mdash; it has to be next to the Raspberry Pi</div>
-    <label>name</label>
-    <input id="f-name" placeholder="Air quality sensor" autocomplete="off">
-    <label>room</label>
-    <div class="combo">
-      <input id="f-where" placeholder="search, or type a new one" autocomplete="off">
-      <div class="combo-list" id="f-where-list"></div>
-    </div>
-    <label>pairing code</label>
-    <input id="f-code" placeholder="1234-567-8901 or MT:..." autocomplete="off">
-    <button class="go">commission</button>
-    <div class="note">
-      Any Matter device that speaks <b>Thread</b>. It joins over Bluetooth
+const addDevice = () => addForm({
+  title: 'add a device',
+  who: 'a bulb, a sensor, a plug \u2014 it has to be next to the Raspberry Pi',
+  name: 'Air quality sensor',
+  code: '1234-567-8901 or MT:...',
+  go: 'commission',
+  note: `Any Matter device that speaks <b>Thread</b>. It joins over Bluetooth
       first, so it has to be within Bluetooth range of the Pi, and it must be
       factory-new or reset &mdash; a device already commissioned elsewhere will
       refuse.<br><br>
       Nothing is assumed about what it is &mdash; once it is on the fabric the
       panel asks it. It is wired to nothing until you say so: pick a switch for
-      it from that switch's own sheet.
-    </div>`;
-  $('#overlay').classList.add('on');
-  setupRoomCombo();
-  $('#f-name').focus();
+      it from that switch's own sheet.`,
+  onGo: (btn, sheet) => submitCommission(btn, sheet, 'device'),
+});
 
-  sheet.querySelector('.go').onclick = (e) =>
-    submitCommission(e.target, sheet, 'device');
-}
 
 async function submitCommission(btn, sheet, kind) {
   const codeEl = $('#f-code');
