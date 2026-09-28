@@ -15,10 +15,18 @@ way Apple Home does: the tile grows into its page and shrinks back into its own
 gap when you close it. The page is the device and nothing else. For a lamp that
 is its brightness and a row of colours: **adaptive** first, which follows the
 schedule, then a few whites, the colours if the lamp has them, and last a picker
-for anything else. Identifying it, sharing it, its firmware and removing it are
-one tap away, behind the gear. The settings and the picker come up from the
-bottom as a sheet over the card, which sinks back behind them; drag the sheet
-down, or throw it, and it goes. A battery gauge and a small cloud appear in a tile's corner when they apply: one
+for anything else. Its name and room, what drives it, the schedule it follows,
+identifying it, sharing it, its firmware and removing it are one tap away,
+behind the gear. The settings and the picker come up from the bottom as a sheet
+over the card, which sinks back behind them; drag the sheet down, or throw it,
+and it goes.
+
+<p>
+  <img src="docs/images/bulb.png" width="49%" alt="A lamp: its brightness, and its colours as a row of presets">
+  <img src="docs/images/bulb-settings.png" width="49%" alt="The lamp's settings, a sheet over the card: name, room, what drives it, its schedule, its firmware">
+</p>
+
+A battery gauge and a small cloud appear in a tile's corner when they apply: one
 for the devices that run on a cell, one when firmware is waiting. A red crossed
 signal takes that corner when a device has stopped answering — the last reading
 stays on the tile, so you can see what its battery was on the way out.
@@ -30,12 +38,16 @@ count and the mark together — and the page is only the devices wearing it.
 **Brightness and colour follow the time of day.** The curve is yours to edit:
 drag a point, then save it for the whole house or for one lamp.
 
+![The schedule editor: brightness and colour temperature across the day](docs/images/schedule.png)
+
 **Lamps can play a light show.** A show is a group of lamps with a row of
 presets — candy cane, twinkle, candle, wave, breathe, rainbow — and it behaves
 like a lamp: its tile switches it on and off, its panel is a brightness, and a
 wall switch or a webhook can start it. Colour lamps play the colours; white
 ones play the same rhythm in warm and cool white. When it stops, every lamp goes
 back to exactly what it was doing.
+
+![A light show: a brightness, and a row of presets - candy cane, twinkle, candle, wave, breathe, rainbow](docs/images/show.png)
 
 **A camera can make a lamp answer.** A webhook is a tile like any other. Its
 page is its address — marked POST, with a copy button — and a **test** button
@@ -44,6 +56,8 @@ name, a room, what it does, for how long, to what and to which lamps, saved as
 you change them. POST to it — a camera that has seen movement, most likely —
 and those lamps do what it says for as long as it says, then go back to exactly
 what they were.
+
+![A webhook: its address, marked POST, with a copy button and a test](docs/images/webhook.png)
 
 Not off, because at the hour this matters a lamp is usually already on and
 dimmed, and a deterrent that ends with the room dark has made the house look
@@ -80,13 +94,6 @@ It is shaped like a bought remote, deliberately — a thing that is pressed from
 outside, whose targets live in `devices.json` because there is nowhere in the
 device to put them, and which the hub acts on. Same storage, same bulb picker,
 same bargain: it does nothing while the hub is down.
-
-![The schedule editor: brightness and colour temperature across the day](docs/images/schedule.png)
-
-**Every device says what it is part of.** A bulb shows which switches drive it,
-which schedule it follows, and what firmware it is on.
-
-![A bulb: brightness, colour, who controls it, what schedule it follows](docs/images/bulb.png)
 
 **Switches are wired to bulbs here.** Tick what each one drives; the panel
 writes the binding table and the ACLs that go with it.
@@ -133,9 +140,9 @@ commands over BLE at all — for them it is only a commissioning transport.
 | | Where | What it does |
 |---|---|---|
 | the switch | on the wall, CR2032 | sends `Toggle` (and full brightness on a long press) straight to its bound bulbs |
-| border router | Pi + nRF52840 dongle | the bridge to Thread |
-| [matter-server](https://github.com/home-assistant-libs/python-matter-server) | Pi | the Matter client: commands, subscriptions, commissioning |
-| [the panel](panel/) | Pi | the interface, the schedule, bindings, ACLs, rooms |
+| border router | the hub + nRF52840 dongle | the bridge to Thread |
+| [matter-server](https://github.com/home-assistant-libs/python-matter-server) | the hub | the Matter client: commands, subscriptions, commissioning |
+| [the panel](panel/) | the hub | the interface, the schedule, bindings, ACLs, rooms, light shows, webhooks |
 
 The panel speaks Matter through python-matter-server. Despite the package name
 nothing here involves Home Assistant — it is a daemon with a WebSocket API.
@@ -146,7 +153,7 @@ poll that is answered the instant something moves. So a wall-switch press — wh
 the hub is not part of — shows up on screen in about 0.2 s. Reads are free, served
 from matter-server's cache rather than by waking a sleeping device.
 
-Idle, on a Pi 3 B+: matter-server 0.2% CPU / 153 MB, the panel 0.4% / 34 MB.
+Idle, measured on a Pi 3 B+: matter-server 0.2% CPU / 153 MB, the panel 0.4% / 34 MB.
 
 Firmware updates go the same way: matter-server serves the image, the panel
 starts each one and watches it land — see [`ota/`](ota/).
@@ -243,17 +250,13 @@ In Matter terms a lock switch writes an attribute on endpoint 2 of the others, s
 its targets need an ACL entry with Manage privilege. The panel writes it when you
 save a lock's bindings.
 
-### The switch shows no actions in Apple Home
+### The switch reports its presses
 
-On purpose. The firmware has no `Switch` cluster (0x003B), so it exposes no press
-events and there is nothing to automate on top of it. It drives the bulb directly
-through the binding, and that is all — which is why it works with the HomePod
-unplugged. The bulbs behave normally in Apple Home; only the switch is not a
-source of automations there.
-
-If you want the opposite (single/double/long press as triggers), add a Generic
-Switch endpoint (device type 0x000F). That changes the endpoint composition, so
-it has to be done before the first commissioning.
+Besides driving its bulbs through the binding, the switch carries a Generic
+Switch endpoint (4) with the Switch cluster, so every press is also reported.
+The hub listens: a long press holds the light against the schedule, and a
+button can start a light show. None of that is in the command path — the bulbs
+still get their `Toggle` straight from the switch, with the hub off.
 
 ## Hardware
 
@@ -374,19 +377,19 @@ fabric; they are worth changing if you are handing the firmware to anyone else.
 
 - **Hardware testing is partial.** Verified on the board: the LED channels and
   colours, the accelerometer power-down, the switch booting into a fabric and
-  signalling with the LED, lock/unlock through the custom cluster, and the hub
-  writing `OnLevel` + colour temperature with `Toggle` then lighting the bulb at
-  exactly those values. Not verified: a physical press reaching a bulb through the
-  binding, the periodic startup-state writes, the accelerometer gestures.
-- **Endpoint 2 in Apple Home.** It carries a device type no ecosystem knows, so it
-  should be ignored, but this has not been seen on a real phone. If it does show
-  up, move the lock attributes to endpoint 1 (requires regenerating app-common,
-  see `docs/zap.md`).
+  signalling with the LED, a press reaching its bulbs through the binding,
+  lock/unlock through the custom cluster and a lock reaching every switch,
+  firmware updates over the air from the panel, and the hub writing `OnLevel` +
+  colour temperature with `Toggle` then lighting the bulb at exactly those
+  values. Not verified: the periodic startup-state writes, the accelerometer
+  gestures.
+- **Endpoints 2 and 4 in Apple Home.** Endpoint 2 carries a device type no
+  ecosystem knows, so it should be ignored; endpoint 4 is a Generic Switch, so
+  its presses may be offered as automation triggers. Neither has been looked at
+  on a real phone. If endpoint 2 does show up, move the lock attributes to
+  endpoint 1 (requires regenerating app-common, see `docs/zap.md`).
 - **`scripts/commission.sh`** was written from documentation. Devices have been
   commissioned, but from the panel.
-- **The OTA flow.** The firmware side is verified — partition map, signed image,
-  generated `matter.ota`; the host side needs hardware and a Thread network. See
-  [`ota/README.md`](ota/README.md).
 
 ## Where the detail lives
 
@@ -421,9 +424,9 @@ substance:
 
 | | lines | licence |
 |---|---|---|
-| `light_ctrl`, `automation`, `status_led`, `lock_cluster`, `lock_state` | 1691 | Apache-2.0 (ours) |
+| `light_ctrl`, `automation`, `status_led`, `battery`, `switch_cluster`, `lock_cluster`, `lock_state` | 2590 | Apache-2.0 (ours) |
 | `light_switch.matter` — the data model | 2198 | Apache-2.0 (ours) |
-| `main.cpp`, `app_task.{h,cpp}`, `chip_project_config.h` | 367 | Nordic 5-Clause |
+| `main.cpp`, `app_task.{h,cpp}`, `chip_project_config.h` | 406 | Nordic 5-Clause |
 | build config: `CMakeLists.txt`, `Kconfig*`, `prj.conf`, `sysbuild.conf` | — | Nordic 5-Clause |
 
 The logic uses **no Nordic-specific API at all** — no `nrfx_`, no `nrf_`, no
@@ -432,7 +435,7 @@ The logic uses **no Nordic-specific API at all** — no `nrfx_`, no `nrf_`, no
 
 So the Nordic-licensed part is precisely what a port throws away anyway: an
 ESP-IDF Matter application brings its own entry point, task skeleton and build
-system. Take the 3889 lines above, write your own shell around them, and nothing
+system. Take the 4788 lines above, write your own shell around them, and nothing
 you ship is touched by clause 4.
 
 ### Third-party components
