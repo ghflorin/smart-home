@@ -75,7 +75,20 @@ else
 	printf '  WARN  %s not there yet - run deploy/setup-otbr.sh first\n' "$CONF"
 fi
 
-say "3. Ownership"
+say "3. The lock's cluster, taught to matter-server"
+# Without it every write of Locked or Role fails - see
+# deploy/matter-custom-clusters.py. It lives in the venv, so a new venv or a new
+# machine loses it without a word; installing the units puts it back.
+SP=$(echo /opt/smarthome/.venv-matter/lib/python3*/site-packages)
+if [ -d "$SP" ]; then
+	install -m 644 "$HERE/matter-custom-clusters.py" "$SP/smarthome_clusters.py"
+	echo 'import smarthome_clusters' > "$SP/smarthome-clusters.pth"
+	ok "$SP/smarthome-clusters.pth (read when matter-server starts)"
+else
+	printf '  WARN  no matter-server venv yet - create it, then run this again\n'
+fi
+
+say "4. Ownership"
 install -d -o "$USER_NAME" -g "$USER_NAME" /data
 chown -R "$USER_NAME:$USER_NAME" /opt/smarthome
 ok "/opt/smarthome and /data belong to $USER_NAME"

@@ -173,9 +173,8 @@ python3 -m venv /opt/smarthome/.venv-matter
 # the attestation root certificates, so commercial bulbs can be commissioned
 ./deploy/paa-certs.sh
 
-# the services
-sudo cp deploy/smarthome-*.service /etc/systemd/system/
-sudo systemctl daemon-reload
+# the services, and the lock's cluster taught to matter-server
+sudo SMARTHOME_USER=pi ./deploy/install-services.sh
 sudo systemctl enable --now smarthome-matter smarthome-panel
 ```
 

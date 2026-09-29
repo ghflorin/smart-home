@@ -829,6 +829,7 @@ def set_lock(node: int, locked: bool) -> dict:
     e = m_write(node, SCHED_ENDPOINT, SCHED_CLUSTER_ID, _ATTRS["locked"],
                 bool(locked), timeout=60.0)
     if e:
+        log(f"node {node}: {e}", "err")
         return {"node": node, "ok": False, "error": e}
 
     # Read it back. A confirmed write does not guarantee the value landed, and
@@ -852,6 +853,7 @@ def set_role(node: int, role: int) -> dict:
     e = m_write(node, SCHED_ENDPOINT, SCHED_CLUSTER_ID, _ATTRS["role"],
                 int(role), timeout=60.0)
     if e:
+        log(f"node {node}: {e}", "err")
         return {"node": node, "ok": False, "error": e}
 
     # Read it back, the same way set_locked does, and for a worse reason: the
