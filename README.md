@@ -139,7 +139,7 @@ commands over BLE at all — for them it is only a commissioning transport.
 
 | | Where | What it does |
 |---|---|---|
-| the switch | on the wall, CR2032 | sends `Toggle` (and full brightness on a long press) straight to its bound bulbs |
+| the switch | on the wall, CR2032 | sends `Toggle` the moment it is pressed (and full brightness if it is held) straight to its bound bulbs |
 | border router | the hub + nRF52840 dongle | the bridge to Thread |
 | [matter-server](https://github.com/home-assistant-libs/python-matter-server) | the hub | the Matter client: commands, subscriptions, commissioning |
 | [the panel](panel/) | the hub | the interface, the schedule, bindings, ACLs, rooms, light shows, webhooks |
@@ -165,7 +165,7 @@ starts each one and watches it land — see [`ota/`](ota/).
 | on/off straight to the bulb | `src/light_ctrl.cpp` | `OnOff::Toggle`, unicast through the binding table |
 | brightness by time of day | `panel/server.py` | the hub writes `OnLevel` and colour temperature into the bulbs on every slot change |
 | state after a power cut | `src/automation.cpp` | writes `StartUpOnOff` + `StartUpCurrentLevel` into the bulb |
-| full brightness on demand | `src/automation.cpp` | long press = 254 + 4000 K, once |
+| full brightness on demand | `src/automation.cpp` | long press = level 254, once; the colour stays the schedule's |
 | editable schedule | [`panel/`](panel/) | graphical editor, stored on the hub |
 | the correct time | the hub | the switch has no clock; the hub knows local time, time zone and DST |
 | firmware updates without wires | [`ota/`](ota/) | Matter OTA, served by matter-server, started from the panel |

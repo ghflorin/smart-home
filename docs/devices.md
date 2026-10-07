@@ -330,11 +330,12 @@ label `button 1` in its `TagList`, endpoint 2 carries `button 2`.
 
   Listening only for the completion event is the obvious design and it silently
   ignores every long press.
-- **A double tap passes through `ShortRelease` twice.** Acting on the release is
-  what makes a press feel instant — the completion event is half a second
-  later — but done naively it fires the action twice on a double tap. The panel
-  drops the repeat because `MultiPressOngoing` arrives before the second
-  release.
+- **The panel acts on `InitialPress`**, the moment the button goes down: the
+  release is 141 ms later and the completion event half a second after that,
+  and nothing here uses a double tap. A light show bound to a button switches
+  at the release instead, and there a double tap would pass through
+  `ShortRelease` twice — the panel drops the repeat because `MultiPressOngoing`
+  arrives before the second release.
 - **`FeatureMap` is 30**: MS + MSR + MSL + MSM. `NumberOfPositions` 2,
   `MultiPressMax` 2, so single and double are the only counts it reports.
 - **It cannot be reflashed.** The debug pads are there — `CLK`, `TX`, `TMS`,

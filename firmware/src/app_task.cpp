@@ -121,13 +121,8 @@ void MatterEventHandler(const chip::DeviceLayer::ChipDeviceEvent *event, intptr_
 
 void AppTask::DimmerTriggerEventHandler()
 {
-	/* Button released in under 500 ms = short press. */
-	if (!sWasDimmerTriggered) {
-		Automation::OnButtonShortPress();
-	}
-
-	/* Said out loud AFTER the light has been dealt with. The report is for
-	 * whoever is listening; the lamp is not waiting on it. */
+	/* The release. The light was dealt with at the press, so all that is left
+	 * is to say so - for whoever is listening; the lamp is not waiting on it. */
 	SwitchCluster::Released(sWasDimmerTriggered);
 
 	Instance().CancelTimer(Timer::Dimmer);
@@ -176,9 +171,18 @@ void AppTask::ButtonEventHandler(Nrf::ButtonState state, Nrf::ButtonMask hasChan
 	if ((APPLICATION_BUTTON_MASK & state & hasChanged)) {
 		LOG_INF("Button has been pressed, keep in this state for at least 500 ms to change light sensitivity of bound lighting devices.");
 		Instance().StartTimer(Timer::DimmerTrigger, kDimmerTriggeredTimeout);
-		/* Posted, unlike the two below: this runs on the button's own
-		 * callback, and logging an event belongs to the Matter thread. */
-		Nrf::PostTask([] { SwitchCluster::Pressed(); });
+		/* The light goes at the PRESS, not at the release. There is no
+		 * double tap to tell apart, and a long press only adds to what the
+		 * press did - full brightness, 500 ms in - so waiting for the finger
+		 * to come up bought nothing but the time it stayed down.
+		 *
+		 * Posted: this runs on the button's own callback, and the light and
+		 * the event both belong to the Matter thread. The report goes after
+		 * the light, as it does at the release. */
+		Nrf::PostTask([] {
+			Automation::OnButtonPress();
+			SwitchCluster::Pressed();
+		});
 	} else if ((APPLICATION_BUTTON_MASK & hasChanged)) {
 		Nrf::PostTask([] { DimmerTriggerEventHandler(); });
 #ifdef CONFIG_CHIP_ICD_UAT_SUPPORT
