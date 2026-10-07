@@ -75,8 +75,8 @@ else
 	printf '  WARN  %s not there yet - run deploy/setup-otbr.sh first\n' "$CONF"
 fi
 
-say "3. The lock's cluster, taught to matter-server"
-# Without it every write of Locked or Role fails - see
+say "3. What matter-server needs from us"
+# The lock's cluster. Without it every write of Locked or Role fails - see
 # deploy/matter-custom-clusters.py. It lives in the venv, so a new venv or a new
 # machine loses it without a word; installing the units puts it back.
 SP=$(echo /opt/smarthome/.venv-matter/lib/python3*/site-packages)
@@ -86,6 +86,14 @@ if [ -d "$SP" ]; then
 	ok "$SP/smarthome-clusters.pth (read when matter-server starts)"
 else
 	printf '  WARN  no matter-server venv yet - create it, then run this again\n'
+fi
+# The OTA provider. matter-server spawns it to serve a switch its update, and
+# without it every update fails at the first step. It is built per architecture,
+# so it does not travel with a move - see deploy/README.md.
+if [ -x /opt/smarthome/ota/tools/chip-ota-provider-app ]; then
+	ok "ota/tools/chip-ota-provider-app"
+else
+	printf '  WARN  no ota/tools/chip-ota-provider-app - switch updates will fail (deploy/README.md)\n'
 fi
 
 say "4. Ownership"
