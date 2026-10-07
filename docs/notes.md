@@ -172,12 +172,12 @@ whether the switch is waiting to be added. Everything else is an event.
 | blue | blink, 1.2 s period | waiting to be added — commissioning window open |
 | teal | two short flashes | commissioning succeeded |
 | amber `#ffa726` | 1 s pulse, full brightness | Identify — same colour and rhythm as the panel's button |
-| teal | one short flash | short press: the `Toggle` went out |
+| teal | one short flash | a press: the `Toggle` went out, as the button went down |
 | teal | two flashes | long press: full brightness sent |
 | red / teal | two flashes | a lock-role switch locked / unlocked the others |
 | nothing, not even on a press | — | the switch is locked |
 
-The flash after a short press is deliberately **neutral**: the switch does not
+The flash after a press is deliberately **neutral**: the switch does not
 know which way the bulb toggled, and pretending otherwise would be a lie.
 
 A locked switch is silent whichever way it goes, so a locked one and a dead one

@@ -261,9 +261,8 @@ void RefreshIndicator(void)
 #endif
 }
 
-void OnButtonShortPress(void)
+void OnButtonPress(void)
 {
-
 	/* The lock role: this switch turns nothing on. It flips its own state and
 	 * sends it to every node in its binding table. It sends ITS VALUE, not a
 	 * per-node toggle - otherwise the switches would drift out of sync as soon
@@ -345,6 +344,11 @@ void OnButtonLongPress(void)
 	}
 
 	/* Long press = maximum NOW, once. Not a persistent mode.
+	 *
+	 * It lands 500 ms after OnButtonPress has already toggled the lamp: one
+	 * that was off is lit by then and goes on up, one that was lit dips for
+	 * that half second and comes back at full. The switch cannot know which
+	 * it was, so it cannot spare the dip.
 	 *
 	 * It used to be a mode that pinned the level and color until you left it,
 	 * and leaving it meant a double tap on the accelerometer - a sensor we

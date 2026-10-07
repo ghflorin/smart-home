@@ -808,7 +808,7 @@ def validate_schedule(points: list):
 # Two small pieces of state on every switch, in the same custom cluster as the
 # schedule:
 #   Locked  - the switch can only turn a light OFF, and its status LED goes
-#             fully off. See OnButtonShortPress: a press sends Off rather
+#             fully off. See OnButtonPress: a press sends Off rather
 #             than Toggle, so a child cannot put a light on and anyone can
 #             still put one out.
 #   Role    - 0 light, 1 lock
@@ -2808,7 +2808,12 @@ def show_worker(node: int) -> None:
 def show_buttons(devices: dict, node: int, button: int, gesture: str, name: str) -> None:
     """A light show answers the buttons it was given: a press switches it on or
     off, a long press moves it on to the next preset. Whatever else the button
-    does - its own lamps, over its own bindings - it goes on doing."""
+    does - its own lamps, over its own bindings - it goes on doing.
+
+    The press counts at the RELEASE here, unlike a lamp's. A long press starts
+    as a press, so a show switched at the press would stop and hand its lamps
+    back first - and with a few lamps still be doing it when the long press
+    asked for the next preset, which would then go to a show on its way out."""
     for g in groups(devices):
         mine = any(int(x.get("node", 0)) == int(node)
                    and x.get("button") in (None, int(button))
@@ -2816,7 +2821,7 @@ def show_buttons(devices: dict, node: int, button: int, gesture: str, name: str)
         if not mine:
             continue
         gn = int(g["node"])
-        if gesture == "press":
+        if gesture == "release":
             if str(gn) in show_state():
                 show_stop(gn)
             else:
@@ -2844,14 +2849,14 @@ SWITCH_EVENTS = {
     0x04: "long-up", 0x05: "counting", 0x06: "complete",
 }
 
-# A press is acted on at the RELEASE, not at MultiPressComplete.
+# A press is acted on the moment the button goes DOWN.
 #
 # Measured on the BILRESA: ShortRelease lands 141 ms after the press, and
 # MultiPressComplete - the only event carrying a count - lands 519 ms after
-# THAT. Waiting for it is the only way to tell a double tap from a single one,
-# and it is half a second of delay a person can feel on every press. This house
-# has no use for a double tap, so it acts on the release and reads the count
-# for nothing else.
+# THAT. Waiting for either is delay a person can feel, and this house has no
+# use for a double tap, so the lamp moves at InitialPress and a long press adds
+# full brightness when LongPress arrives - what our own wall switch does too.
+# A light show still switches at the release: see show_buttons.
 
 # Endpoints part-way through a repeat tap, and when that was noticed.
 _repeat = {}
@@ -2860,12 +2865,14 @@ REPEAT_GRACE = 2.0
 
 def gesture_of(node, endpoint, event_id, data):
     """The press a person made, or None for the events that only lead up to one."""
+    if event_id == 0x01:
+        return "press"
     if event_id == 0x02:
-        # Long press is unaffected by any of this: it reports LongPress and
-        # LongRelease and never a MultiPressComplete at all.
+        # A long press reports LongPress and LongRelease and never a
+        # MultiPressComplete at all.
         return "long"
 
-    # The release, which is where the half second goes.
+    # The release, which only a light show listens for.
     #
     # Done naively that fires TWICE on a double tap - two releases, two actions,
     # and a light that ends up back where it started. It does not have to:
@@ -2883,7 +2890,7 @@ def gesture_of(node, endpoint, event_id, data):
         # must not swallow the next real press.
         if when and now - when < REPEAT_GRACE:
             return None
-        return "press"
+        return "release"
     return None
 
 

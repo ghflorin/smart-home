@@ -115,12 +115,14 @@ echo "$NAME.ota  $SIZE bytes"
 
 # ---------------------------------------------------------------------------
 echo "=== 4. Publish ==="
-scp -q "$OTA_IMAGE" "$PI:$UPDATES/$NAME.ota"
-scp -q "$DESCRIPTOR" "$PI:$UPDATES/$NAME.json"
+# Through /tmp and sudo: the updates directory belongs to the service's account,
+# not to whoever logs in to publish.
+scp -q "$OTA_IMAGE" "$PI:/tmp/$NAME.ota"
+scp -q "$DESCRIPTOR" "$PI:/tmp/$NAME.json"
 rm -f "$DESCRIPTOR"
 # One offer at a time. matter-server would pick the newest anyway; the old
 # files just take up the card.
-ssh "$PI" "cd $UPDATES && for f in \$(ls ${NAME%_*}_*.json ${NAME%_*}_*.ota 2>/dev/null | grep -v '^$NAME\\.'); do rm -f \"\$f\"; done; sudo systemctl restart smarthome-matter"
+ssh "$PI" "sudo install -m 644 /tmp/$NAME.ota /tmp/$NAME.json $UPDATES/ && rm -f /tmp/$NAME.ota /tmp/$NAME.json && cd $UPDATES && for f in \$(ls ${NAME%_*}_*.json ${NAME%_*}_*.ota 2>/dev/null | grep -v '^$NAME\\.'); do sudo rm -f \"\$f\"; done; sudo systemctl restart smarthome-matter"
 
 cat <<EOT
 
