@@ -51,6 +51,12 @@ Then, in this order:
    credentials. With it, the new machine is the same controller and the devices
    never know. Take `ota/state/panel-state.json`, `ota/state/schedule.json`,
    `ota/state/thread-dataset.hex` and `panel/devices.json` at the same time.
+   `ota/tools/chip-ota-provider-app` does not travel if the architecture
+   changes: matter-server spawns it to serve a firmware update, and on x86-64
+   the one matter-server's own image ships does —
+   `chip-ota-provider-app-x86-64` from the
+   [matter-linux-ota-provider](https://github.com/home-assistant-libs/matter-linux-ota-provider/releases)
+   release that image names.
 3. **Move the radio.** Unplug the dongle and plug it into the new machine.
 4. **Same Thread network**, from the dataset you just copied:
 
