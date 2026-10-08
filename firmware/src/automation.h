@@ -5,7 +5,7 @@
 namespace Automation {
 
 void Init(void);
-void OnButtonPress(void);
+void OnButtonShortPress(void);
 void OnButtonLongPress(void);
 
 /* Network state, as the indicator sees it. Set by the Matter event handler in

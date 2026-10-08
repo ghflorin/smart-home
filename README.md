@@ -139,7 +139,7 @@ commands over BLE at all — for them it is only a commissioning transport.
 
 | | Where | What it does |
 |---|---|---|
-| the switch | on the wall, CR2032 | sends `Toggle` the moment it is pressed (and full brightness if it is held) straight to its bound bulbs |
+| the switch | on the wall, CR2032 | sends `Toggle` (and full brightness on a long press) straight to its bound bulbs |
 | border router | the hub + nRF52840 dongle | the bridge to Thread |
 | [matter-server](https://github.com/home-assistant-libs/python-matter-server) | the hub | the Matter client: commands, subscriptions, commissioning |
 | [the panel](panel/) | the hub | the interface, the schedule, bindings, ACLs, rooms, light shows, webhooks |
