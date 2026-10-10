@@ -29,13 +29,14 @@ public:
 	static void IdentifyStopHandler(Identify *);
 
 private:
-	enum Timer : uint8_t { DimmerTrigger, Dimmer };
+	enum Timer : uint8_t { DimmerTrigger, Dimmer, Debounce };
 
 	CHIP_ERROR Init();
 
 	static void DimmerTriggerEventHandler();
 	static void TimerEventHandler(const Timer &event);
 	static void ButtonEventHandler(Nrf::ButtonState state, Nrf::ButtonMask hasChanged);
+	static void ButtonEdge(bool down);
 
 	static void StartTimer(Timer, uint32_t);
 	static void CancelTimer(Timer);

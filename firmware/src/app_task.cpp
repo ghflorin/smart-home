@@ -39,6 +39,12 @@ constexpr EndpointId kLightEndpointId = 1;
 k_timer sDimmerPressKeyTimer;
 k_timer sDimmerTimer;
 
+/* Debounce - see ButtonEdge. */
+constexpr uint32_t kDebounceMs = 50;
+k_timer sDebounceTimer;
+bool sDown = false;
+bool sSettling = false;
+
 Identify sIdentify = { kLightEndpointId, AppTask::IdentifyStartHandler, AppTask::IdentifyStopHandler,
 		       Clusters::Identify::IdentifyTypeEnum::kVisibleIndicator };
 bool sWasDimmerTriggered = false;
@@ -149,6 +155,12 @@ void AppTask::TimerEventHandler(const Timer &timerType)
 	case Timer::Dimmer:
 		/* Unused: dimming is driven by the schedule, not by the button. */
 		break;
+	case Timer::Debounce:
+		/* The window after an edge is over, and what the button is doing
+		 * now is real - including a release that came inside it. */
+		sSettling = false;
+		ButtonEdge(dk_get_buttons() & APPLICATION_BUTTON_MASK);
+		break;
 	default:
 		break;
 	}
@@ -173,19 +185,45 @@ void AppTask::IdentifyStopHandler(Identify *)
 
 void AppTask::ButtonEventHandler(Nrf::ButtonState state, Nrf::ButtonMask hasChanged)
 {
-	if ((APPLICATION_BUTTON_MASK & state & hasChanged)) {
-		LOG_INF("Button has been pressed, keep in this state for at least 500 ms to change light sensitivity of bound lighting devices.");
-		Instance().StartTimer(Timer::DimmerTrigger, kDimmerTriggeredTimeout);
-		/* Posted, unlike the two below: this runs on the button's own
-		 * callback, and logging an event belongs to the Matter thread. */
-		Nrf::PostTask([] { SwitchCluster::Pressed(); });
-	} else if ((APPLICATION_BUTTON_MASK & hasChanged)) {
-		Nrf::PostTask([] { DimmerTriggerEventHandler(); });
+	if (APPLICATION_BUTTON_MASK & hasChanged) {
+		/* Posted: this runs on the DK library's scan, and everything the
+		 * edge leads to belongs to the application task. */
+		const bool down = APPLICATION_BUTTON_MASK & state;
+		Nrf::PostTask([down] { ButtonEdge(down); });
 #ifdef CONFIG_CHIP_ICD_UAT_SUPPORT
 	} else if ((UAT_BUTTON_MASK & state & hasChanged)) {
 		LOG_INF("ICD UserActiveMode has been triggered.");
 		Server::GetInstance().GetICDManager().OnNetworkActivity();
 #endif
+	}
+}
+
+/* DEBOUNCE. The DK library has none: it samples the pin 1 ms after the first
+ * edge and every 10 ms while the button is held, and reports any sample that
+ * differs from the one before. A contact that bounced - on the way down, or just
+ * after coming back up, when the library has already gone back to waiting for
+ * an edge - was a second press, and a light that toggled twice.
+ *
+ * So the first edge counts at once, and the button is not listened to for
+ * kDebounceMs after it. When the window ends the button is read again, so a
+ * real edge that fell inside it is not lost - only the bounce is. 50 ms is well
+ * over the bounce of a mechanical contact and well under the shortest press a
+ * hand makes. */
+void AppTask::ButtonEdge(bool down)
+{
+	if (sSettling || down == sDown) {
+		return;
+	}
+	sDown = down;
+	sSettling = true;
+	Instance().StartTimer(Timer::Debounce, kDebounceMs);
+
+	if (down) {
+		LOG_INF("Button has been pressed, keep in this state for at least 500 ms to change light sensitivity of bound lighting devices.");
+		Instance().StartTimer(Timer::DimmerTrigger, kDimmerTriggeredTimeout);
+		SwitchCluster::Pressed();
+	} else {
+		DimmerTriggerEventHandler();
 	}
 }
 
@@ -197,6 +235,9 @@ void AppTask::StartTimer(Timer timer, uint32_t timeoutMs)
 		break;
 	case Timer::Dimmer:
 		k_timer_start(&sDimmerTimer, K_MSEC(timeoutMs), K_MSEC(timeoutMs));
+		break;
+	case Timer::Debounce:
+		k_timer_start(&sDebounceTimer, K_MSEC(timeoutMs), K_NO_WAIT);
 		break;
 	default:
 		break;
@@ -211,6 +252,9 @@ void AppTask::CancelTimer(Timer timer)
 		break;
 	case Timer::Dimmer:
 		k_timer_stop(&sDimmerTimer);
+		break;
+	case Timer::Debounce:
+		k_timer_stop(&sDebounceTimer);
 		break;
 	default:
 		break;
@@ -228,6 +272,8 @@ void AppTask::UserTimerTimeoutCallback(k_timer *timer)
 		timerType = Timer::DimmerTrigger;
 	} else if (timer == &sDimmerTimer) {
 		timerType = Timer::Dimmer;
+	} else if (timer == &sDebounceTimer) {
+		timerType = Timer::Debounce;
 	} else {
 		return;
 	}
@@ -268,6 +314,7 @@ CHIP_ERROR AppTask::Init()
 	/* Initialize application timers */
 	k_timer_init(&sDimmerPressKeyTimer, AppTask::UserTimerTimeoutCallback, nullptr);
 	k_timer_init(&sDimmerTimer, AppTask::UserTimerTimeoutCallback, nullptr);
+	k_timer_init(&sDebounceTimer, AppTask::UserTimerTimeoutCallback, nullptr);
 
 	if (!Nrf::GetBoard().Init(ButtonEventHandler)) {
 		LOG_ERR("User interface initialization failed.");
