@@ -306,8 +306,13 @@ Border router, matter-server, the panel and the systemd units that keep them up:
 
 ### 3. Then, from the panel
 
-Open `http://smarthome.local` — http, and no port; [`deploy/README.md`](deploy/README.md)
-says why the port matters on a phone.
+Open `http://smarthome.local` — no port needed. For https, give the hub a
+certificate with `sudo ./deploy/tls.sh`: the house gets a certificate authority
+of its own, good for `smarthome.local` and private addresses only, and a phone
+installs it once from `http://smarthome.local/ca.crt`. From then on
+`https://smarthome.local` opens without a warning, which matters on a phone
+whose browser goes to https by itself and stops at an error when it cannot.
+[`deploy/README.md`](deploy/README.md) has the steps, iPhone included.
 
 1. **Add the bulbs.** The pairing code is on the box or the bulb itself.
 2. **Add the switch.** No code to type — it is ours, and the panel knows its

@@ -21,6 +21,10 @@ practical jobs:
 ./panel/run.sh          # http://<pi>.local:8080
 ```
 
+On the hub it answers on 80 and 8080, and on 443 as well once there is a
+certificate from `deploy/tls.sh` — signed by the house's own authority, which a
+phone installs once from `/ca.crt`. See [`deploy/README.md`](../deploy/README.md).
+
 ## How it is wired
 
 ```
