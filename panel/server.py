@@ -5636,10 +5636,13 @@ class Handler(BaseHTTPRequestHandler):
 
 class TLSServer(ThreadingHTTPServer):
     """The https listener. A browser that does not trust the house's authority
-    yet hangs up in the handshake, which is not worth a traceback every time."""
+    yet hangs up in the handshake: one dim line, not a traceback every time."""
 
     def handle_error(self, request, client_address):
-        if not isinstance(sys.exc_info()[1], (ssl.SSLError, ConnectionError)):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ssl.SSLError, ConnectionError)):
+            log(f"https: {client_address[0]} - {exc}", "dim")
+        else:
             super().handle_error(request, client_address)
 
 
