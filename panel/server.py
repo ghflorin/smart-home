@@ -27,7 +27,9 @@ import queue
 import random
 import re
 import socket
+import ssl
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -69,6 +71,13 @@ PANEL_PORT = int(os.environ.get("PANEL_PORT", "8080"))
 # http before anyone notices. Binding 80 needs CAP_NET_BIND_SERVICE, which the
 # unit file grants; without it this is skipped with a line in the log.
 PANEL_PORT_PLAIN = int(os.environ.get("PANEL_PORT_PLAIN", "80"))
+
+# And 443, when the house has a certificate - deploy/tls.sh makes one. A browser
+# set to "always use secure connections" does not fall back: refused at 443, it
+# stops at an error page. So the panel answers https as well, with a
+# certificate from the house's own authority, which a phone installs once from
+# /ca.crt. http stays as it is: a camera posting to a webhook is not a browser.
+TLS_DIR = pathlib.Path(os.environ.get("PANEL_TLS", str(HERE.parent / "ota" / "state" / "tls")))
 
 # Skips attestation certificate verification during commissioning.
 #
@@ -4094,6 +4103,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             self._send((HERE / "index.html").read_bytes(), ctype="text/html; charset=utf-8")
 
+        elif self.path == "/ca.crt" and (TLS_DIR / "ca.crt").exists():
+            # The house's authority, for a phone to install - see TLS_DIR.
+            self._send((TLS_DIR / "ca.crt").read_bytes(), ctype="application/x-x509-ca-cert")
+
         elif self.path == "/api/devices":
             d = load_devices()
             d.setdefault("devices", [])
@@ -5621,6 +5634,15 @@ class Handler(BaseHTTPRequestHandler):
         self._send({"error": "not found"}, status=404)
 
 
+class TLSServer(ThreadingHTTPServer):
+    """The https listener. A browser that does not trust the house's authority
+    yet hangs up in the handshake, which is not worth a traceback every time."""
+
+    def handle_error(self, request, client_address):
+        if not isinstance(sys.exc_info()[1], (ssl.SSLError, ConnectionError)):
+            super().handle_error(request, client_address)
+
+
 if __name__ == "__main__":
     print(f"Panel:         http://0.0.0.0:{PANEL_PORT}")
     print(f"matter-server: {MATTER_WS}")
@@ -5654,6 +5676,19 @@ if __name__ == "__main__":
         except OSError as exc:
             log(f"port {PANEL_PORT_PLAIN} could not be taken ({exc}) - "
                 f"the panel answers on {PANEL_PORT} only", "warn")
+    if (TLS_DIR / "panel.pem").exists():
+        try:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(TLS_DIR / "panel.pem")
+            tls = TLSServer(("0.0.0.0", 443), Handler)
+            # The handshake happens in the request's own thread, on its first
+            # read, so a client that stalls in it cannot hold up the next one.
+            tls.socket = ctx.wrap_socket(tls.socket, server_side=True,
+                                         do_handshake_on_connect=False)
+            servers.append(tls)
+            print("               https://0.0.0.0:443")
+        except (OSError, ssl.SSLError) as exc:
+            log(f"https could not start ({exc}) - the panel answers on http only", "warn")
     for extra in servers[1:]:
         threading.Thread(target=extra.serve_forever,
                          name=f"http-{extra.server_address[1]}", daemon=True).start()

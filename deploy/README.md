@@ -200,14 +200,26 @@ including the `ExecStartPre` in `smarthome-matter.service`. systemd fails with
 `status=217/USER` when the account does not exist, and the message does not say
 which unit is at fault — it just restart-loops.
 
-The panel is then at `http://smarthome.local` — plain http, and no port needed:
-it listens on 80 as well as 8080.
+The panel is then at `http://smarthome.local` — no port needed: it listens on 80
+as well as 8080 — and at `https://smarthome.local` once the hub has a
+certificate:
+
+```bash
+sudo ./deploy/tls.sh && sudo systemctl restart smarthome-panel
+```
+
+That gives the house a certificate authority of its own, which can vouch for
+`smarthome.local` and private addresses and nothing else. A phone installs it
+once from `http://smarthome.local/ca.crt` — an iPhone then wants it switched on
+under Settings > General > About > Certificate Trust Settings — and https opens
+without a warning from then on. It matters because a browser set to always use
+secure connections does not fall back to http when https is refused: it stops
+at an error page.
 
 Leave the port off on a phone. A phone's browser upgrades a typed address to
 https by itself, and https on 8080 — a port that speaks no TLS — is a connection
-that just hangs, which the browser reports as the server not responding. With no
-port the upgrade goes to 443, is refused at once, and the browser falls back to
-http on its own. Add it to the home screen and it opens like an app. If the
+that just hangs, which the browser reports as the server not responding. Add it
+to the home screen and it opens like an app. If the
 phone is an Android that does not resolve `.local`, the router's own DNS knows
 the hub by its hostname, as `<hostname>.localdomain`.
 
