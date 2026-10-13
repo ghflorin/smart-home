@@ -2173,11 +2173,18 @@ BULB_ATTRS = {
     # Any device's restarts, and why the last one happened - see note_restart.
     (0x0033, 0x0001): ("reboots", int),
     (0x0033, 0x0004): ("bootReason", int),
+    # Our switch's account of a fault it restarted from (firmware/src/fault.h).
+    (SCHED_CLUSTER_ID, 0xFFF10004): ("faultReason", int),
+    (SCHED_CLUSTER_ID, 0xFFF10005): ("faultPc", int),
+    (SCHED_CLUSTER_ID, 0xFFF10006): ("faultLr", int),
 }
 
 # GeneralDiagnostics BootReasonEnum.
 BOOT_REASONS = {0: "reason unknown", 1: "power on", 2: "brown-out", 3: "software watchdog",
                 4: "hardware watchdog", 5: "firmware update", 6: "software reset"}
+# Zephyr's K_ERR_*, as our switch reports them; 0xFFFFFFFF is "no fault".
+FAULTS = {0: "CPU exception", 1: "spurious interrupt", 2: "stack overflow",
+          3: "kernel oops", 4: "kernel panic"}
 
 
 def note_restart(node, n):
@@ -2186,10 +2193,15 @@ def note_restart(node, n):
     and a run of them is a cell browning out (power on) or the firmware falling
     over (software reset). Said a moment later, so a boot reason arriving in
     the same report is the one named."""
-    threading.Timer(3.0, lambda: log(
-        f"node {node}: restarted - "
-        f"{BOOT_REASONS.get(state_of(node).get('bootReason'), 'reason unknown')}, "
-        f"{n} restarts in all", "warn")).start()
+    def say():
+        st = state_of(node)
+        why = BOOT_REASONS.get(st.get("bootReason"), "reason unknown")
+        r = st.get("faultReason")
+        if st.get("bootReason") == 6 and isinstance(r, int) and r != 0xFFFFFFFF:
+            why += (f" after a {FAULTS.get(r, f'fault {r}')} at 0x{st.get('faultPc') or 0:08x}"
+                    f" (called from 0x{st.get('faultLr') or 0:08x})")
+        log(f"node {node}: restarted - {why}, {n} restarts in all", "warn")
+    threading.Timer(3.0, say).start()
 
 
 # A bulb's on/off, on its way to note_power - and NOT down the listener thread.

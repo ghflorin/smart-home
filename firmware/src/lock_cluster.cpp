@@ -1,5 +1,6 @@
 #include "lock_cluster.h"
 
+#include "fault.h"
 #include "lock_state.h"
 
 #include <app-common/zap-generated/ids/Clusters.h>
@@ -37,6 +38,9 @@ constexpr ClusterId kClusterId = 0xFFF1FC30; /* test vendor 0xFFF1.
 					      * cluster. */
 constexpr AttributeId kLockedAttr = 0xFFF10002;
 constexpr AttributeId kRoleAttr = 0xFFF10003;
+constexpr AttributeId kFaultReasonAttr = 0xFFF10004;
+constexpr AttributeId kFaultPcAttr = 0xFFF10005;
+constexpr AttributeId kFaultLrAttr = 0xFFF10006;
 constexpr EndpointId kEndpointId = 2;
 
 /* DeviceTypeId is uint32_t in the SDK (lib/core/DataModelTypes.h). Declared
@@ -50,6 +54,9 @@ constexpr chip::DeviceTypeId kDeviceType = 0xFFF10001;
 DECLARE_DYNAMIC_ATTRIBUTE_LIST_BEGIN(sLockAttrs)
 DECLARE_DYNAMIC_ATTRIBUTE(kLockedAttr, BOOLEAN, 1, ZAP_ATTRIBUTE_MASK(WRITABLE)),
 	DECLARE_DYNAMIC_ATTRIBUTE(kRoleAttr, INT8U, 1, ZAP_ATTRIBUTE_MASK(WRITABLE)),
+	DECLARE_DYNAMIC_ATTRIBUTE(kFaultReasonAttr, INT32U, 4, 0),
+	DECLARE_DYNAMIC_ATTRIBUTE(kFaultPcAttr, INT32U, 4, 0),
+	DECLARE_DYNAMIC_ATTRIBUTE(kFaultLrAttr, INT32U, 4, 0),
 	DECLARE_DYNAMIC_ATTRIBUTE_LIST_END();
 
 /* Descriptor is mandatory on every endpoint. Its attributes are served by the
@@ -118,7 +125,27 @@ Status emberAfExternalAttributeReadCallback(EndpointId endpoint, ClusterId clust
 		buffer[0] = static_cast<uint8_t>(LockState::GetRole());
 		return Status::Success;
 	}
-	return Status::UnsupportedAttribute;
+
+	const Fault::Info &f = Fault::Last();
+	uint32_t v;
+	switch (metadata->attributeId) {
+	case 0xFFF10004:
+		v = f.reason;
+		break;
+	case 0xFFF10005:
+		v = f.pc;
+		break;
+	case 0xFFF10006:
+		v = f.lr;
+		break;
+	default:
+		return Status::UnsupportedAttribute;
+	}
+	if (maxReadLength < sizeof(v)) {
+		return Status::ResourceExhausted;
+	}
+	memcpy(buffer, &v, sizeof(v));
+	return Status::Success;
 }
 
 Status emberAfExternalAttributeWriteCallback(EndpointId endpoint, ClusterId clusterId,

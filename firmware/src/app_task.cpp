@@ -8,6 +8,7 @@
 
 #include "automation.h"
 #include "battery.h"
+#include "fault.h"
 #include "switch_cluster.h"
 #include "light_ctrl.h"
 #include "lock_state.h"
@@ -290,6 +291,9 @@ void AppTask::UserTimerTimeoutCallback(k_timer *timer)
 
 CHIP_ERROR AppTask::Init()
 {
+	/* First: nothing else may run before the last fault is read. */
+	Fault::Init();
+
 	/* Before the stack: the post-server-init callback can already signal on
 	 * the LED, and that callback runs from inside PrepareServer. */
 	StatusLed::Init();
@@ -315,6 +319,7 @@ CHIP_ERROR AppTask::Init()
 		Automation::Init();
 		Battery::Init();
 		SwitchCluster::Init();
+		Fault::RegisterTestTrigger();
 		return CHIP_NO_ERROR;
 	} }));
 
