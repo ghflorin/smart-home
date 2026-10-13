@@ -319,7 +319,6 @@ CHIP_ERROR AppTask::Init()
 		Automation::Init();
 		Battery::Init();
 		SwitchCluster::Init();
-		Fault::RegisterTestTrigger();
 		return CHIP_NO_ERROR;
 	} }));
 

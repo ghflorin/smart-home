@@ -20,8 +20,6 @@
  */
 #include "fault.h"
 
-#include "event_triggers/event_triggers.h"
-
 #include <zephyr/arch/cpu.h>
 #include <zephyr/fatal.h>
 #include <zephyr/kernel.h>
@@ -41,16 +39,6 @@ struct Record {
 __noinit Record sRecord;
 Fault::Info sLast = { Fault::kNone, 0, 0 };
 
-/* In the manufacturer's range, next to NCS's own (0xFFFF'FFFF'1000'0000 is
- * Reboot). Only a fabric administrator holding the enable key can send it. */
-constexpr Nrf::Matter::TestEventTrigger::EventTriggerId kCrashTrigger = 0xFFFF'FFFF'7000'0000;
-
-CHIP_ERROR CrashNow(Nrf::Matter::TestEventTrigger::TriggerValue)
-{
-	k_oops();
-	return CHIP_NO_ERROR;
-}
-
 } /* namespace */
 
 extern "C" void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
@@ -69,12 +57,6 @@ void Init(void)
 		sLast = sRecord.info;
 	}
 	sRecord.magic = 0;
-}
-
-void RegisterTestTrigger(void)
-{
-	Nrf::Matter::TestEventTrigger::Instance().RegisterTestEventTrigger(
-		kCrashTrigger, Nrf::Matter::TestEventTrigger::EventTrigger{ 0, CrashNow });
 }
 
 const Info &Last(void)

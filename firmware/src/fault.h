@@ -26,10 +26,6 @@ struct Info {
  * Call first thing at boot. */
 void Init(void);
 
-/* Registers the "crash now" test event trigger, for checking all of the above on
- * a real device. Call once the Matter server is up. */
-void RegisterTestTrigger(void);
-
 const Info &Last(void);
 
 } /* namespace Fault */
