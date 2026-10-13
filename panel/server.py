@@ -2170,7 +2170,26 @@ BULB_ATTRS = {
     # unlocked. Which reads, exactly, as "the button did nothing".
     (SCHED_CLUSTER_ID, _ATTRS["locked"]): ("locked", bool),
     (SCHED_CLUSTER_ID, _ATTRS["role"]): ("role", int),
+    # Any device's restarts, and why the last one happened - see note_restart.
+    (0x0033, 0x0001): ("reboots", int),
+    (0x0033, 0x0004): ("bootReason", int),
 }
+
+# GeneralDiagnostics BootReasonEnum.
+BOOT_REASONS = {0: "reason unknown", 1: "power on", 2: "brown-out", 3: "software watchdog",
+                4: "hardware watchdog", 5: "firmware update", 6: "software reset"}
+
+
+def note_restart(node, n):
+    """A device came back up. On a coin-cell switch every restart is a whole
+    network join, a new session and a full report, paid for out of the battery,
+    and a run of them is a cell browning out (power on) or the firmware falling
+    over (software reset). Said a moment later, so a boot reason arriving in
+    the same report is the one named."""
+    threading.Timer(3.0, lambda: log(
+        f"node {node}: restarted - "
+        f"{BOOT_REASONS.get(state_of(node).get('bootReason'), 'reason unknown')}, "
+        f"{n} restarts in all", "warn")).start()
 
 
 # A bulb's on/off, on its way to note_power - and NOT down the listener thread.
@@ -3089,9 +3108,12 @@ def matter_value(node, cluster, attr, val, pushed=True):
             return
         if pushed:
             sub_heard(node)
+        prev = state_of(node).get(key)
         state_put(node, values={key: v}, meta=live)
         if pushed and key == "locked":
             note_lock(node, v)
+        if pushed and key == "reboots" and isinstance(prev, int) and v > prev:
+            note_restart(node, v)
         # The wall switch is the only thing that turns these lights on and off
         # most of the time, and this is the only place the panel hears about it.
         # Without this the hold never ends and the colour never rejoins the
