@@ -41,6 +41,7 @@ k_timer sDimmerTimer;
 
 /* Debounce - see ButtonEdge. */
 constexpr uint32_t kDebounceMs = 50;
+constexpr uint32_t kAfterReleaseMs = 500;
 k_timer sDebounceTimer;
 bool sDown = false;
 bool sSettling = false;
@@ -208,7 +209,13 @@ void AppTask::ButtonEventHandler(Nrf::ButtonState state, Nrf::ButtonMask hasChan
  * kDebounceMs after it. When the window ends the button is read again, so a
  * real edge that fell inside it is not lost - only the bounce is. 50 ms is well
  * over the bounce of a mechanical contact and well under the shortest press a
- * hand makes. */
+ * hand makes.
+ *
+ * After a RELEASE the window is 500 ms. Seen on a wall switch: the light came
+ * on, and a second press reached the switch under 300 ms after the finger came
+ * up - the plate coming back, or the finger touching twice - and put it out.
+ * Nobody means a second press that soon: you press again after you have seen
+ * the light. A press still held when the window ends is taken then. */
 void AppTask::ButtonEdge(bool down)
 {
 	if (sSettling || down == sDown) {
@@ -216,7 +223,7 @@ void AppTask::ButtonEdge(bool down)
 	}
 	sDown = down;
 	sSettling = true;
-	Instance().StartTimer(Timer::Debounce, kDebounceMs);
+	Instance().StartTimer(Timer::Debounce, down ? kDebounceMs : kAfterReleaseMs);
 
 	if (down) {
 		LOG_INF("Button has been pressed, keep in this state for at least 500 ms to change light sensitivity of bound lighting devices.");
