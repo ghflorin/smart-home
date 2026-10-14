@@ -87,7 +87,7 @@ case "$1" in
 
 dataset)
 	# The Thread dataset of YOUR network, taken off the OTBR.
-	# On the Raspberry Pi running OpenThread Border Router:
+	# On the hub running OpenThread Border Router:
 	#     sudo ot-ctl dataset active -x
 	# Copy the hex string and run:
 	#     ./scripts/commission.sh dataset <hex>

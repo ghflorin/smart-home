@@ -17,7 +17,7 @@
 #      (an incremental build has shipped an image whose header said the old
 #      version while the application inside was the new one - once was enough)
 #   3. writes the descriptor matter-server wants, next to the image, in
-#      /opt/smarthome/updates on the Pi, and drops the previous one
+#      /opt/smarthome/updates on the hub, and drops the previous one
 #   4. restarts matter-server, which reads that directory at startup only
 
 set -euo pipefail

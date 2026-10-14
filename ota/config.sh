@@ -49,7 +49,7 @@ NCS_DIR=${NCS_DIR:-$HOME/ncs}
 
 # The Matter sources, for building chip-tool and ota-provider-app.
 #
-# On the development machine they come from NCS. On the Raspberry Pi, where
+# On the development machine they come from NCS. On the hub, where
 # installing all of NCS (~7 GB) just to get the sources makes no sense, they
 # are cloned separately - see ota/setup.sh.
 #

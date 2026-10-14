@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Copies the production attestation root certificates (PAA) to the Raspberry Pi.
+# Copies the production attestation root certificates (PAA) to the hub.
 #
 #   ./deploy/paa-certs.sh                       # to the default host
 #   ./deploy/paa-certs.sh pi@other-pi.local
@@ -44,7 +44,7 @@ ssh "$DEST_HOST" "mkdir -p '$DEST_DIR'"
 # The .pem files sitting next to them are the same certificates in another
 # format and would only clutter the directory.
 scp -q "$SRC"/*.der "$DEST_HOST:$DEST_DIR/"
-echo "done: $(ssh "$DEST_HOST" "ls '$DEST_DIR'/*.der | wc -l | tr -d ' '") on the Pi"
+echo "done: $(ssh "$DEST_HOST" "ls '$DEST_DIR'/*.der | wc -l | tr -d ' '") on the hub"
 
 cat <<EOF
 

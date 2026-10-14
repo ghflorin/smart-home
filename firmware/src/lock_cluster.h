@@ -6,9 +6,9 @@
  *   0xFFF10003  Role    (uint8)    0 = light, 1 = lock
  * and three, read-only, about why it last fell over - see fault.h.
  *
- * Until the schedule moved to the Raspberry Pi, it was also the schedule's
+ * Until the schedule moved to the hub, it was also the schedule's
  * storage (a blob plus a revision counter). The switch no longer runs the
- * schedule - the Pi writes straight into the bulbs' persistent attributes - so
+ * schedule - the hub writes straight into the bulbs' persistent attributes - so
  * keeping it here would have meant syncing data nobody uses to a battery
  * device.
  */

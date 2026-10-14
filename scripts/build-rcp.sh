@@ -6,7 +6,7 @@
 #   ./scripts/build-rcp.sh particle_xenon  # Particle Xenon
 #
 # RCP = Radio Co-Processor: it does nothing but the 802.15.4 radio, while the
-# Thread stack runs on the Raspberry Pi. They talk over USB. The computer has no
+# Thread stack runs on the hub. They talk over USB. The computer has no
 # Thread radio of its own, which is the whole reason this piece exists.
 #
 # SWD DEBUGGING TRAP that cost us an afternoon: if the board does not enumerate,

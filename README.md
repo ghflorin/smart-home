@@ -332,7 +332,7 @@ each device into this fabric as well. Nothing is reset and no bulb has to be
 touched. It depends on the IKEA app offering sharing to another Matter ecosystem,
 and on being able to reach the DIRIGERA's Thread network over IPv6.
 
-**Run your own Thread network.** An OpenThread Border Router (Raspberry Pi +
+**Run your own Thread network.** An OpenThread Border Router (the hub + an
 nRF52840 dongle) and one factory reset per bulb, once. After that you own the
 Thread dataset, the fabric and the node IDs, and the IPv6 routing is yours, so
 commissioning, binding and OTA all work.

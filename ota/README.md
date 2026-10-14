@@ -5,7 +5,7 @@
 ```
 
 That bumps the version, builds the image signed with our key, and puts it where
-matter-server looks for updates on the Pi. Then, in the panel, open a switch and
+matter-server looks for updates on the hub. Then, in the panel, open a switch and
 press **update** — one switch at a time. Each takes about eight minutes: the
 image is fetched in small pieces by a device that sleeps between them.
 
@@ -16,7 +16,7 @@ others, and more than three transfers at once fail at the announce with
 ## How it works
 
 matter-server has an update source of its own: a directory of descriptors,
-`/opt/smarthome/updates` on the Pi, one JSON file per image, read **at startup
+`/opt/smarthome/updates` on the hub, one JSON file per image, read **at startup
 only**. `publish.sh` writes the descriptor next to the image and restarts the
 service. The panel asks matter-server what is on offer for each device, shows
 it when it is newer than what the device reports, and starts the update on
@@ -49,7 +49,7 @@ use `publish.sh`.
 | `setup.sh` | once: generates the key. Also builds chip-tool and the OTA provider app, which updates no longer use |
 | `config.sh` | VID/PID, board, paths. Edit here |
 | `keys/` | the MCUboot signing key (in `.gitignore`) |
-| `state/` | on the Pi: matter-server's fabric, in `state/matter-server/`. Back it up — see the main README |
+| `state/` | on the hub: matter-server's fabric, in `state/matter-server/`. Back it up — see the main README |
 | `tools/` | the Matter binaries built by `setup.sh` |
 
 ## What the partition map looks like

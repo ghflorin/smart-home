@@ -103,7 +103,7 @@ SDK — the same device type, so the definition matches the zcl metadata exactly
 Cost: **+11 KB** of flash.
 
 Note that nothing in the firmware consumes this cluster any more. The schedule
-moved to the Raspberry Pi, which keeps local time itself and writes `OnLevel` and
+moved to the hub, which keeps local time itself and writes `OnLevel` and
 the color temperature into the bulbs; the switch has no clock and no schedule
 left, so `TimeSynchronization` is now dead weight in the data model. Removing it
 means a regeneration, and regenerations are the risky part — hence it is recorded
@@ -113,7 +113,7 @@ here rather than silently dropped.
 
 Two small attributes of ours live on a vendor cluster, `0xFFF1FC30`: `Locked` and
 `Role` (see "Locking the switches" in the main README). It was originally added
-for the editable schedule, which has since moved to the Pi; the cluster stayed
+for the editable schedule, which has since moved to the hub; the cluster stayed
 because the lock state genuinely has to live in the switch.
 
 The first attempt took the obvious route: a cluster XML, an extended `zcl.json`,

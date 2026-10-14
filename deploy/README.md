@@ -3,9 +3,9 @@
 The goal: once installed, the hub does everything by itself. You can take your
 laptop out of the house and the system keeps running.
 
-**The hub is any 64-bit Debian machine with a USB port.** It was a Raspberry Pi
-3 B+ for the first year and is a small x86 box now; the pages below still
-measure things on the Pi where that is where they were measured. What it actually needs is 1 GB of RAM, a free
+**The hub is any 64-bit Debian machine with a USB port.** A Raspberry Pi 3 B+
+does it and so does a small x86 box; where a figure below names a Pi, that is
+what it was measured on. What it actually needs is 1 GB of RAM, a free
 USB port for the Thread radio, and a wired network.
 
 ## What runs on the hub and what does not
@@ -98,11 +98,11 @@ question of resources:
   mean an hour or more
 - The linker needs RAM; on a 2 GB Pi 4 it struggles
 
-The Pi **does not need** a toolchain to distribute an update — all it needs is the
+The hub **does not need** a toolchain to distribute an update — all it needs is the
 `matter.ota` file and a descriptor next to it. `./ota/publish.sh` builds on the
 Mac and puts both where matter-server looks — see [`ota/README.md`](../ota/README.md).
 
-If you want to build on the Pi anyway, you can — but run `./scripts/bootstrap.sh`
+If you want to build on the hub anyway, you can — but run `./scripts/bootstrap.sh`
 there and bring patience.
 
 ## Installation
@@ -147,9 +147,9 @@ and run `sudo rpi-eeprom-update -a`.
 **Network:** Ethernet if you can. The border router bridges LAN and Thread and is
 more stable on a cable than on Wi-Fi.
 
-### Step 0 — preparing the Pi (can be done now)
+### Step 0 — preparing the hub (can be done now)
 
-Does not depend on the programmer or the radio. Run **on the Pi**:
+Does not depend on the programmer or the radio. Run **on the hub**:
 
 ```bash
 ./deploy/prepare-pi.sh
@@ -163,7 +163,7 @@ Python environment.
 ### The rest
 
 ```bash
-# on the Pi
+# on the hub
 sudo mkdir -p /opt/smarthome && sudo chown pi:pi /opt/smarthome
 rsync -a --exclude build-'*' --exclude .git ./ pi@smarthome.local:/opt/smarthome/
 
@@ -190,7 +190,7 @@ mount. On bare metal it dies at startup with `CHIP Error 0x000000AD: Open file
 failed` and a traceback naming neither the path nor the reason.
 `smarthome-matter.service` creates it in `ExecStartPre`.
 
-chip-tool is **not needed** on the Pi. Firmware updates go through matter-server,
+chip-tool is **not needed** on the hub. Firmware updates go through matter-server,
 which brings its own OTA provider; `smarthome-chiptool.service` is only there
 for poking at a device by hand, and stays disabled. The signing key comes from
 `./ota/setup.sh`, run on the machine that builds the firmware.
@@ -276,7 +276,7 @@ On an Apple Silicon Mac, `linux/arm64` containers run **natively**, without
 emulation. The `debian:bookworm` image has the same base and the same glibc (2.36)
 as Raspberry Pi OS Bookworm 64-bit, so the binaries run directly.
 
-Check on the Pi that it starts: `chip-tool --version`.
+Check on the hub that it starts: `chip-tool --version`.
 
 The Pi 3 B+ officially supports 64-bit Raspberry Pi OS — the processor is ARMv8.
 Only the default image is 32-bit, which is why the 64-bit one has to be chosen
@@ -305,14 +305,14 @@ It is run from source with node (`ZAP_DEVELOPMENT_PATH`), at the version pinned 
 `scripts/setup/zap.json`. Do not use the release binaries: the
 `zap-mac-arm64.zip` archive contains an **x86** `zap-cli`.
 
-## About building the tools on the Pi
+## About building the tools on the hub
 
 `ota/setup.sh` works without NCS: if it does not find the Matter sources, it
 clones them itself from the **Nordic fork** (`nrfconnect/sdk-connectedhomeip`, tag
 `v3.0.0`), not from upstream project-chip. The same revision as the firmware, so
 no surprises in protocol or in command syntax.
 
-Binaries from the Mac **cannot** be copied to the Pi — they are darwin/arm64, the
+Binaries from the Mac **cannot** be copied to the hub — they are darwin/arm64, the
 Pi is linux/arm64. The tools have to be built there.
 
 The script detects the available RAM and caps itself at 2 parallel jobs below
@@ -383,7 +383,7 @@ the console on every commissioning so this does not get quietly forgotten. Once
 you have the real certificates, drop the line and install them with
 `./deploy/paa-certs.sh`.
 
-**`ota/state/` lives on the Pi's card.** That is where the fabric's CA key is. SD
+**`ota/state/` lives on the hub's disk.** That is where the fabric's CA key is. SD
 cards die. Run `./scripts/commission.sh backup` and keep the archive elsewhere —
 otherwise a burnt card means a physical factory reset of every bulb.
 
@@ -417,7 +417,7 @@ you and gives you time to reconsider.
 
 ### Wi-Fi off, cable only
 
-The Pi runs on `eth0`, with Wi-Fi off. That way there are no longer two default
+The hub runs on `eth0`, with Wi-Fi off. That way there are no longer two default
 routes to pick the wrong one from.
 
 ```bash
@@ -471,7 +471,7 @@ It also holds the radio's **transmit power** at `TXPOWER` (8 dBm). The RCP comes
 up at 0 dBm — one milliwatt — and otbr-agent has no option to change that, so
 the setting has nowhere to live but here; it is re-applied within a minute of
 any restart, including the ones this script performs. It matters more than it
-sounds: this Pi has no Thread children of its own, so every device reaches it
+sounds: this hub has no Thread children of its own, so every device reaches it
 through somebody else's router, and a firmware update that died three times at
 0 dBm went through on the first try at 8. The nRF52840 is specified to +8, and
 `ot-ctl` will echo a larger number back without transmitting it.

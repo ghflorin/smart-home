@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Prepares the Raspberry Pi. Run it ON the Pi, not on the Mac.
+# Prepares the hub. Run it ON the hub, not on the Mac.
 #
 #   ./deploy/prepare-pi.sh
 #
@@ -23,7 +23,7 @@ bad()  { printf '  ERROR %s\n' "$*"; fail=1; }
 say "1. System checks"
 
 if [ "$(uname -s)" != "Linux" ]; then
-	bad "this script runs on the Raspberry Pi, not on the Mac"
+	bad "this script runs on the hub, not on the Mac"
 	exit 1
 fi
 
@@ -47,7 +47,7 @@ else
 	warn "RAM ${RAM_MB} MB - do NOT build the Matter tools here, the link will not fit."
 	warn "Run on the Mac: ./deploy/build-tools-docker.sh"
 	warn "and copy the binaries to $SMARTHOME_DIR/ota/tools/"
-	warn "The Pi RUNS them without trouble - at runtime they use under 200 MB."
+	warn "The hub RUNS them without trouble - at runtime they use under 200 MB."
 fi
 
 # 10 GB only if the build happens here (Matter sources + build tree). If the

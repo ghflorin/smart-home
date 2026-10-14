@@ -1317,7 +1317,7 @@
    *
    * The switch has NO serial console in the production build (CONFIG_SERIAL is
    * off so that two image slots fit for OTA), so this is the only place you can
-   * see what is happening: what the Pi sent and what the device answered.
+   * see what is happening: what the hub sent and what the device answered.
    * Collapsed by default - you do not want a wall of log over the panel. */
   #logs {
     position: fixed;
@@ -3046,7 +3046,7 @@ async function load() {
 
   // What the bulbs are doing, in the background. It is the one value here that
   // changes without us: the wall switch sends Toggle straight to the bulb over
-  // Thread and the Pi never sees it. See pollBulbs().
+  // Thread and the hub never sees it. See pollBulbs().
   loadBulbs();
   loadUpdates();
 
@@ -3257,7 +3257,7 @@ function switchName(node) {
 const CLUSTER_NAMES = { 6: 'on/off', 8: 'brightness', 768: 'colour' };
 
 /* ---------- icons ----------
- * Inline SVG, and no icon font. The Pi may have no way out to the internet, and
+ * Inline SVG, and no icon font. The hub may have no way out to the internet, and
  * a font that fails to load would leave every tile blank - the one thing the
  * grid cannot survive, since the icon IS the button. currentColor throughout,
  * so the palette drives them and both themes work with no second copy. */
@@ -3623,7 +3623,7 @@ function paintTile(el, o) {
    * you cannot work out by looking at the rest of the tile, because a stale
    * reading looks precisely like a current one.
    *
-   * `ok` already has the patience built in: the Pi holds it true through a
+   * `ok` already has the patience built in: the hub holds it true through a
    * failed read while the device has answered recently at all, so this does
    * not flicker on every missed poll.
    */
@@ -3846,7 +3846,7 @@ function offlineNow(node) {
 function paintStatus() {
   if (Date.now() < statusHeld) { return; }
   // Two different absences, and they are worth telling apart: the browser could
-  // not reach the Pi, or the Pi could not reach Matter.
+  // not reach the hub, or the hub could not reach Matter.
   if (state.panelOk === false) { return writeStatus('panel offline', 'err'); }
   if (state.matterOk === false) {
     return writeStatus('matter-server is not answering', 'err');
@@ -3919,7 +3919,7 @@ function deviceOpts(d) {
 /* What we just asked a bulb to do, held only until the bulb answers.
  *
  * The tile used to wait for the whole round trip before it moved: the request
- * goes to the Pi, the Pi commands the bulb and then WAITS FOR THE BULB TO
+ * goes to the hub, the hub commands the bulb and then WAITS FOR THE BULB TO
  * REPORT the new value before replying. That wait is there for a good reason -
  * it is what makes the reply true rather than optimistic - but it means about a
  * second passes between the tap and the fill starting to move, and a second is
@@ -4867,7 +4867,7 @@ function wireForget(sheet, dev) {
     clearTimeout(armed);
     btn.disabled = true;
     btn.textContent = 'removing…';
-    /* Long, because it genuinely is: the Pi takes the device out of every
+    /* Long, because it genuinely is: the hub takes the device out of every
      * binding table and rewrites the ACL on every bulb before it unpairs, and a
      * sleepy switch answers when it next wakes. Two minutes is past the worst of
      * that and far short of for ever, which is what this used to wait. */
@@ -5039,13 +5039,13 @@ function firmwareBox(sheet, dev) {
   box.className = 'fw';
   sheet.append(box);
 
-  // ONE field decides what this row says, and the Pi composes it.
+  // ONE field decides what this row says, and the hub composes it.
   //
   // The browser used to assemble the line itself from three sources - our
   // "running" flag, the device's UpdateState and its progress - and the failure
   // was silent: it showed "preparing" for the whole attempt and then put the
   // update button back with no word about how it had gone. Worse, a failed
-  // update and an update never started looked identical. The Pi is the only
+  // update and an update never started looked identical. The hub is the only
   // place that knows all three AND the outcome, so it says the sentence and
   // this draws it.
   const line = (txt, cls) => {
@@ -5083,7 +5083,7 @@ function firmwareBox(sheet, dev) {
     }
     if (!fw.available) {
       // "up to date" is a claim about a comparison, and there is no comparison
-      // without a version to compare against. When the Pi has not read one yet -
+      // without a version to compare against. When the hub has not read one yet -
       // just after it restarts, or while a sleepy device is quiet - saying it
       // anyway put "firmware ? - up to date" on screen, which asserts the one
       // thing we do not know.
@@ -5128,7 +5128,7 @@ function firmwareBox(sheet, dev) {
   line('checking for firmware\u2026');
   poll();
   // An update is minutes long and its progress arrives as attribute reports, so
-  // the row has to keep asking. Cheap: the Pi answers from its cache and only
+  // the row has to keep asking. Cheap: the hub answers from its cache and only
   // goes to the ledger when the cache is cold.
   box._t = setInterval(() => {
     if (!box.isConnected) { clearInterval(box._t); return; }
@@ -5785,7 +5785,7 @@ function openBulb(b) {
    * let alone which curve.
    *
    * Asked for separately because the tile state does not carry it, and it is
-   * one small read of a file on the Pi. */
+   * one small read of a file on the hub. */
   const schedBox = sheet.querySelector('#sched-of');
   (async () => {
     let d;
@@ -6006,7 +6006,7 @@ function openSwitch(sw) {
   }
 
   sheet.querySelector('[data-go="bind"]').onclick = () => editLinks(sw.node);
-  // No schedule button here. A switch has no schedule - the Pi writes the
+  // No schedule button here. A switch has no schedule - the hub writes the
   // curve straight to each bulb over Thread, and which bulbs this particular
   // switch happens to drive has nothing to do with it. The button used to scope
   // the editor to those bulbs, which was the only reading that meant anything
@@ -6119,7 +6119,7 @@ function renderPick(bulbs, bound, ownRoom, empty = 'no bulbs',
 
 // ---------- the light schedule ----------
 //
-// One schedule, and it belongs to the house. It lives on the Pi, which writes
+// One schedule, and it belongs to the house. It lives on the hub, which writes
 // the level and the colour INTO each bulb when the slot changes; the switch only
 // ever sends Toggle. So this is not a program you send to a device - it is what
 // the bulbs will be set to, hour by hour.
@@ -6328,7 +6328,7 @@ function setNorm(p, series, n) {
 
 /* The minute of the day it is now, on the PI's clock.
  *
- * The Pi answers with its own minute when the sheet opens, because the Pi is
+ * The hub answers with its own minute when the sheet opens, because the hub is
  * what runs the schedule and a browser abroad would put the marker hours off.
  * From there the browser's clock only supplies the time elapsed since - the two
  * disagree about what time it is, never about how fast it passes. */
@@ -6344,11 +6344,11 @@ const yOf = n => PLOT.bottom - n * (PLOT.bottom - PLOT.top);
 const normFromY = y => (PLOT.bottom - y) / (PLOT.bottom - PLOT.top);
 
 
-/* The curve, and it is the same curve the Pi follows.
+/* The curve, and it is the same curve the hub follows.
  *
  * A spline through the middle of each column, sampled - not emitted as beziers
  * and then applied as something else. It used to be drawn as beziers while the
- * Pi applied a step function, so dragging the 12:00 column visibly bent the line
+ * hub applied a step function, so dragging the 12:00 column visibly bent the line
  * over 11:40 while the light at 11:40 did not move. Drawing by sampling the very
  * function the server evaluates makes that class of bug impossible rather than
  * merely fixed: server.py has the same twenty lines, in Python.
@@ -7599,7 +7599,7 @@ document.addEventListener('pointercancel', () => endDrag(false));
  * BUTTON, because it has two and they should not do the same thing. And it
  * saves instantly - there is no sleepy device to wait for, because nothing is
  * written to the device at all. What that costs is written in the note: the
- * remote goes dead whenever the Pi does, which is not true of our own switch.
+ * remote goes dead whenever the hub does, which is not true of our own switch.
  */
 /* Copy, on a page served over plain http.
  *
@@ -8380,7 +8380,7 @@ async function addNamed(btn, url, open) {
 
 const addSwitch = () => addForm({
   title: 'add switch',
-  who: 'the module has to be next to the Raspberry Pi',
+  who: 'the module has to be next to the hub',
   name: 'Bedroom switch',
   go: 'commission',
   note: `The module has to be flashed and rebooted. It has no printed code
@@ -8411,13 +8411,13 @@ function addAnything() {
       <button type="button" class="choice" data-go="device">
         <b>a matter device</b>
         <span>Any bulb, sensor or plug that speaks Thread &mdash; whoever made
-              it. It joins over Bluetooth, so it has to be next to the Pi and
+              it. It joins over Bluetooth, so it has to be next to the hub and
               factory-new.</span>
       </button>
       <button type="button" class="choice" data-go="switch">
         <b>one of our switches</b>
         <span>A Holyiot nRF54L15 running this project's own firmware. It talks
-              to the bulbs directly, with the Pi out of the way.</span>
+              to the bulbs directly, with the hub out of the way.</span>
       </button>
       <button type="button" class="choice" data-go="hook">
         <b>a webhook</b>
@@ -8461,12 +8461,12 @@ const addHook = () => addForm({
 
 const addDevice = () => addForm({
   title: 'add a device',
-  who: 'a bulb, a sensor, a plug \u2014 it has to be next to the Raspberry Pi',
+  who: 'a bulb, a sensor, a plug \u2014 it has to be next to the hub',
   name: 'Air quality sensor',
   code: '1234-567-8901 or MT:...',
   go: 'commission',
   note: `Any Matter device that speaks <b>Thread</b>. It joins over Bluetooth
-      first, so it has to be within Bluetooth range of the Pi, and it must be
+      first, so it has to be within Bluetooth range of the hub, and it must be
       factory-new or reset &mdash; a device already commissioned elsewhere will
       refuse.<br><br>
       Nothing is assumed about what it is &mdash; once it is on the fabric the
@@ -9043,11 +9043,11 @@ function setLockAll(locked, btn) {
 //
 // Every other value the panel shows is one WE wrote, so it can be cached for
 // hours and re-read on a whim. A bulb's on/off is the exception: the switch
-// sends Toggle straight to the bulb over Thread and the Pi never sees it, so
+// sends Toggle straight to the bulb over Thread and the hub never sees it, so
 // our copy is wrong within a second of anybody pressing a switch. The tiles
 // show that state, so it has to be polled.
 //
-// Polling it forever would undo the work that got the Pi's idle load down: it
+// Polling it forever would undo the work that got the hub's idle load down: it
 // keeps chip-tool thawed for as long as a tab is open somewhere. So the poll is
 // tied to somebody ACTUALLY LOOKING, not to the page existing:
 //
@@ -9067,7 +9067,7 @@ const BULB_IDLE_MS = 3 * 60 * 1000;
 
 /* Which devices have firmware waiting.
  *
- * Its own request, and a rare one. The Pi answers from a cache it fills in the
+ * Its own request, and a rare one. The hub answers from a cache it fills in the
  * background, so this never waits on the internet - and what it reports moves
  * about twice a year, so asking every ten minutes is already generous.
  */
@@ -9081,7 +9081,7 @@ async function loadUpdates() {
     /* Nothing is drawn for a device we know nothing about, which is correct. */
   }
 }
-// Two minutes. The Pi answers from a cache, so this costs a few hundred bytes
+// Two minutes. The hub answers from a cache, so this costs a few hundred bytes
 // and no radio traffic - and the alternative is a stale badge on the one
 // screen somebody is looking at while they update something.
 setInterval(loadUpdates, 120000);
@@ -9127,7 +9127,7 @@ function pollBulbs() {
   BULBS.timer = setTimeout(async () => {
     // AWAITED, and that is the whole point now the request is a long poll. Left
     // un-awaited this re-armed 250 ms after STARTING the previous one, so with
-    // a 25-second poll it stacked about a hundred open requests against a Pi -
+    // a 25-second poll it stacked about a hundred open requests against the hub -
     // measured at 45 in twenty seconds before this line grew its await.
     //
     // Hidden is still a reason to stop entirely: nobody can see it, and coming
@@ -9156,7 +9156,7 @@ pollBulbs();
 // The panel has no streaming channel to the browser, so progress is read by
 // polling a ring buffer on the server. While a command is in flight we ask
 // often, otherwise rarely - a panel left open on a tablet should not hammer the
-// Pi ten times a second for nothing.
+// hub ten times a second for nothing.
 const LOGS = { since: 0, open: false, unseen: 0, busy: 0, timer: null };
 
 function markBusy(delta) {
@@ -9182,7 +9182,7 @@ async function api(url, opts, timeoutMs) {
 
 /* Is this device still in the house?
  *
- * Asked when a removal gives no answer. The work happens on the Pi whether or
+ * Asked when a removal gives no answer. The work happens on the hub whether or
  * not the reply reaches us - twice now the panel restarted mid-request, the
  * device was unpaired and gone, and the sheet sat on "removing…" for ever,
  * because a fetch that is never answered is never rejected either.

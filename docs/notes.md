@@ -270,7 +270,7 @@ marked it defunct. So a slot now holds its target until the WRITE is answered
 and goes up to three times, and `FindOrEstablishSession` opens a fresh session
 the second time because the defunct one no longer counts.
 
-**And the Pi finishes the job.** The lock reports its own `Locked` when pressed
+**And the hub finishes the job.** The lock reports its own `Locked` when pressed
 (`LockCluster::ReportLocked`, from the button path - a write from the hub is
 reported by the stack itself). `lock_watch` in `panel/server.py` hears it, waits
 `LOCK_SETTLE_SEC` for the switch's own writes to land, and writes the value to
@@ -528,7 +528,7 @@ thing to re-investigate for nothing:
 - **Not a configured fade.** `OnOffTransitionTime` is 0, and the bulb answers
   `UNSUPPORTED_ATTRIBUTE` for `OnTransitionTime` and `OffTransitionTime` — it does
   not implement them, so the nulls you read are absence, not "unset".
-- **Not the network.** The same off command from the Pi is confirmed in 40 ms, at
+- **Not the network.** The same off command from the hub is confirmed in 40 ms, at
   any brightness.
 - **Not a pending transition.** Unchanged after waiting 30 s following switch-on.
 - **Not the radio path.** Dropping the poll interval from 15 s to 3 s made no

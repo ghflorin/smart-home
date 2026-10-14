@@ -5,7 +5,7 @@
 #   ./panel/run.sh
 #
 # The panel needs matter-server on the other end - that is where it does all its
-# Matter work. On the Pi that is a systemd unit
+# Matter work. On the hub that is a systemd unit
 # (deploy/smarthome-matter.service) and this script only starts the panel; set
 # MATTER_WS if it lives somewhere else.
 #

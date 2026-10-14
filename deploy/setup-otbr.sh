@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Installs OpenThread Border Router on the Raspberry Pi. Run it ON the Pi.
+# Installs OpenThread Border Router on the hub. Run it ON the hub.
 #
 #   ./deploy/setup-otbr.sh                 # guess the interface and the RCP port
 #   ./deploy/setup-otbr.sh eth0            # force the interface
@@ -25,7 +25,7 @@ ok()   { printf '  ok    %s\n' "$*"; }
 warn() { printf '  WARN  %s\n' "$*"; }
 die()  { printf '  ERROR %s\n' "$*" >&2; exit 1; }
 
-[ "$(uname -s)" = "Linux" ] || die "this runs on the Raspberry Pi, not on the Mac"
+[ "$(uname -s)" = "Linux" ] || die "this runs on the hub, not on the Mac"
 
 say "1. The radio"
 
@@ -60,7 +60,7 @@ if [ -d "/sys/class/net/$INFRA_IF/wireless" ]; then
 	warn "It works, but the border router leans on multicast, and plenty of"
 	warn "access points filter or delay multicast over wireless."
 	warn "On a cable there is far less to debug. Continuing anyway in 10 s;"
-	warn "Ctrl-C if you would rather move the Pi to Ethernet first."
+	warn "Ctrl-C if you would rather move the hub to Ethernet first."
 	sleep 10
 else
 	ok "$INFRA_IF is wired"

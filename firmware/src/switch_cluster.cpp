@@ -2,7 +2,7 @@
  * The button, reported as a button.
  *
  * WHAT THIS DOES NOT CHANGE. The switch already commands its bulbs directly
- * over Thread, through the binding table, and that keeps working with the Pi
+ * over Thread, through the binding table, and that keeps working with the hub
  * unplugged. This cluster sends nothing to a bulb and decides nothing about
  * behaviour: toggle on a short press and full brightness on a long one still
  * live in automation.cpp. Matter's Switch cluster is a microphone, not a wire.

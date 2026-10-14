@@ -338,7 +338,7 @@ public:
 	}
 
 private:
-	/* Three goes at one switch, then it is left for the Pi to catch up - see
+	/* Three goes at one switch, then it is left for the hub to catch up - see
 	 * lock_watch in panel/server.py. Enough for a stale session (one go to
 	 * find out, one to redo CASE) and a missed poll. */
 	static constexpr uint8_t kMaxTries = 3;

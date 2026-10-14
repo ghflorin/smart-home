@@ -241,7 +241,7 @@ void RefreshIndicator(void)
 	 *
 	 * It used to pulse every few seconds and show, through brightness, which
 	 * level it would send the bulb at the current time. That stopped making
-	 * sense once the schedule moved to the Raspberry Pi: the switch no longer
+	 * sense once the schedule moved to the hub: the switch no longer
 	 * decides the level, so it has nothing to announce. And a pulse every few
 	 * seconds on a battery device costs more than the radio.
 	 *
@@ -315,7 +315,7 @@ void OnButtonShortPress(void)
 	 * anywhere else, and after that a press looked like it did nothing.
 	 *
 	 * The level and color temperature for the current time are NOT sent from
-	 * here any more. The Raspberry Pi puts them into the bulb's own persistent
+	 * here any more. The hub puts them into the bulb's own persistent
 	 * attributes (OnLevel and the color temperature) on every slot change. So
 	 * the bulb already knows what to come up at, and the switch has exactly one
 	 * job.
@@ -325,7 +325,7 @@ void OnButtonShortPress(void)
 	 * gone; and the switch sends one small command instead of three, which
 	 * matters on battery.
 	 *
-	 * What is lost: the schedule no longer works with the Raspberry Pi off.
+	 * What is lost: the schedule no longer works with the hub off.
 	 * The bulbs stay at the last value they received instead of following the
 	 * time of day. A deliberate choice, explicitly requested. */
 	LightCtrl::Toggle();
@@ -353,7 +353,7 @@ void OnButtonLongPress(void)
 	 *
 	 * No mode is needed at all now: to get back to the schedule for the
 	 * current time, turn the bulb off and on. It comes up at the value the
-	 * Raspberry Pi wrote for the current slot, because the bulb holds it, not
+	 * hub wrote for the current slot, because the bulb holds it, not
 	 * the switch.
 	 *
 	 * BRIGHTNESS ONLY. It used to set 4000 K as well, and colour is the one

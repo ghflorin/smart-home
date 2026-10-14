@@ -1,6 +1,6 @@
 # panel/ — the local admin panel
 
-Runs on the Raspberry Pi, next to the OTA provider. It exists for a few
+Runs on the hub, next to the OTA provider. It exists for a few
 practical jobs:
 
 - **Which bulb is which.** You press Identify and the bulb blinks for a few
@@ -39,7 +39,7 @@ Every arrow is a **push**, not a poll, and that is the point of the shape:
 - the panel folds each report into its state and bumps a revision
 - the browser is parked on a long poll and is answered the instant that happens
 
-So a wall-switch press — which never touches the Pi, the switch commands the
+So a wall-switch press — which never touches the hub, the switch commands the
 bulb directly — reaches the screen in about 0.2 s. Nothing anywhere chose an
 interval and hoped.
 
@@ -141,7 +141,7 @@ Each tile does two jobs, split the way a phone splits them:
 Two small marks can sit in a tile's top corner: a **battery gauge** for the
 devices that run on one, and a **cloud** when firmware is waiting for that
 device — the update itself lives at the foot of its sheet. When both apply the
-cloud steps aside. Availability comes from `/api/updates`, which the Pi answers
+cloud steps aside. Availability comes from `/api/updates`, which the hub answers
 from a cache a background sweep keeps warm, so opening the page never waits on
 the compliance ledger.
 
@@ -241,7 +241,7 @@ partial state worth leaving behind: renaming a room means touching the room list
 
 ## The light schedule
 
-The `schedule` button in the toolbar opens it. It lives on the Pi in
+The `schedule` button in the toolbar opens it. It lives on the hub in
 `ota/state/schedule.json`.
 
 ### One house schedule, and any bulb may have its own
@@ -302,8 +302,8 @@ the sheet of each bulb it actually affects.
 and then their binding tables, which quietly made *is on the schedule* mean *is
 wired to a wall switch*. Those are two different relationships and only one of
 them involves a switch: a binding is how the **wall switch** commands the bulb
-with the Pi asleep, and the schedule is the **Pi** commanding the bulb directly
-over Thread. The Pi never needed a switch in order to do that.
+with the hub asleep, and the schedule is the **hub** commanding the bulb directly
+over Thread. The hub never needed a switch in order to do that.
 
 It went unnoticed while every new bulb bound itself to whatever switch happened
 to be listed first. The moment that stopped, a newly added lamp sat outside the
@@ -346,7 +346,7 @@ has no schedule of its own — what it has is bulbs, and that is the only readin
 of the word there that means anything.
 
 What reaches the hardware is not the schedule but its result: at every slot
-change the Pi writes `OnLevel` and the colour temperature into each bound bulb,
+change the hub writes `OnLevel` and the colour temperature into each bound bulb,
 and the switch only ever sends `Toggle`.
 
 Three writes, because they answer three different questions:
@@ -370,7 +370,7 @@ accident at four in the morning.
 
 They are written at different rates, and the reason is flash. `OnLevel` is a
 **persistent** attribute — that is the whole reason a bulb comes up correctly
-with the Pi switched off — so it moves in steps of `PANEL_ONLEVEL_STEP` (8)
+with the hub switched off — so it moves in steps of `PANEL_ONLEVEL_STEP` (8)
 rather than every minute, which would be over half a million writes a year into a
 lamp. The other two are commands: they cost a packet and nothing else, so they
 follow the curve as closely as the tick allows, with a transition time of one
@@ -420,7 +420,7 @@ the part that was wrong for a while and is worth spelling out, because the
 obvious place to put it is the wrong place. The panel used to release the hold
 inside the request handler that turned the light off — which works perfectly for
 the one case that barely matters. In this house a light is switched off at the
-**wall**, and the wall switch talks to the bulb directly over Thread with the Pi
+**wall**, and the wall switch talks to the bulb directly over Thread with the hub
 nowhere in the command path. No request, no release. A lamp set by hand and then
 switched off at the wall stayed held for good: skipped by every tick, coming up
 at the manual value for ever, and nothing on screen said why.
@@ -523,7 +523,7 @@ before anything looks.
 
 A background thread checks every
 `PANEL_SCHED_TICK_SEC` (60 s by default) but writes only when the slot has
-changed — the check is an in-memory comparison and costs nothing. With the Pi
+changed — the check is an in-memory comparison and costs nothing. With the hub
 powered down the bulbs stay at the last value they received instead of following
 the time of day.
 
@@ -666,7 +666,7 @@ one place a per-device curve would go are in
 ### What is stored but no longer used
 
 Each point still carries a `fade`, and the file still round-trips it, but nothing
-applies it: the Pi writes `OnLevel`, which has no transition time, and sends the
+applies it: the hub writes `OnLevel`, which has no transition time, and sends the
 colour temperature with a transition of 0. It is inert data, not a setting —
 changing it does nothing, and that is not a bug. The editor does not show it.
 
@@ -674,10 +674,10 @@ Saving validates the schedule before writing it — points in increasing order, 
 two at the same minute, level within 1..254, colour temperature within
 100..700 mireds, at most 24 points — and then applies it to the bulbs
 immediately. The validation used to live in the switch, which refused a malformed
-blob; now that the file on the Pi is the only source, nothing else would catch a
+blob; now that the file on the hub is the only source, nothing else would catch a
 broken schedule.
 
-## State lives on the Pi
+## State lives on the hub
 
 The panel does not read from the devices when you open the page. It reads from
 the state `server.py` keeps, so it answers in tens of milliseconds.
@@ -709,7 +709,7 @@ produces it anyway.
 
 Everything above is something **we** wrote, which is why it can be cached for
 hours. A bulb's on/off is the exception: the wall switch sends `Toggle` straight
-to the bulb over Thread and the Pi never sees it, so our copy is wrong within a
+to the bulb over Thread and the hub never sees it, so our copy is wrong within a
 second of anybody pressing a switch. The tiles show that state, so it has to be
 polled — `/api/bulbs`.
 
@@ -848,7 +848,7 @@ asking the DCL over the internet; a sheet that waits on the internet to open
 feels broken every time the line is slow. Results are cached for an hour, which
 is far shorter than the interval at which a vendor publishes anything.
 
-**A running update is tracked on the Pi, not in the browser.** `_ota_running`
+**A running update is tracked on the hub, not in the browser.** `_ota_running`
 is what decides whether the button may be drawn, because "is this already
 updating" has one answer for the whole house: a flag in one tab does not stop a
 second tab, or the same tab after a reload, from offering the button again. It
@@ -918,7 +918,7 @@ way to infer it: a successful HTTP response only means `server.py` is alive, not
 that there is a radio or a device.
 
 The distinction is made by **which phase** failed, not by exception type: failing
-to open the connection = a problem on the Pi; failing while waiting for the reply
+to open the connection = a problem on the hub; failing while waiting for the reply
 = the command went out and nothing came back, so the problem is on the radio side.
 Both look identical as exceptions, and if you conflate them the panel says
 `matter-server is not answering` when what is actually missing is the RCP radio —
@@ -1242,7 +1242,7 @@ over shows the container's own ground, so the letterboxing is invisible.
 ## Console
 
 The bar at the bottom, collapsed by default. Press it and it opens a log of what
-the Pi sent to the devices and what they answered, how long it took, and the
+the hub sent to the devices and what they answered, how long it took, and the
 result.
 
 It is the only place any of this is visible. **The switch has no console** in the
@@ -1256,7 +1256,7 @@ when the service restarts.
 There is no streaming channel to the browser, so the interface polls and asks
 only for the lines it has not seen (`/api/log?since=`). The rate adapts: ~1 s
 while a command is in flight, 2.5 s with the console open, 8 s collapsed — a
-panel left open on a tablet has no business hammering the Pi. The dot in the bar
+panel left open on a tablet has no business hammering the hub. The dot in the bar
 pulses amber while a reply is outstanding; that matters, because the switch is a
 sleepy device and does not answer instantly.
 
@@ -1272,7 +1272,7 @@ pip install websockets segno
 own.
 
 The rest is the Python standard library. Nothing is fetched from the internet at
-runtime — the page is self-contained, so it works even if the Pi has no way out.
+runtime — the page is self-contained, so it works even if the hub has no way out.
 
 ## Sharing to Apple Home
 

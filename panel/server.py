@@ -108,7 +108,7 @@ BYPASS_ATTESTATION = os.environ.get("PANEL_BYPASS_ATTESTATION", "") not in ("", 
 # - a negative timeout means "do not block" rather than "block forever", so the
 # loop spins. Reported upstream as connectedhomeip#29971 in October 2023, still
 # open. Measured here: 100% of one core for eight days straight, which also held
-# this Pi 3B+ at its 60 C soft-throttle point, running at 1200 MHz instead of
+# a Pi 3B+ at its 60 C soft-throttle point, running at 1200 MHz instead of
 # 1400 - roughly 1.5 W and 14% of the clock, to do nothing.
 #
 # Freezing a process to work around its event loop is not a fix, and it brought
@@ -123,7 +123,7 @@ BYPASS_ATTESTATION = os.environ.get("PANEL_BYPASS_ATTESTATION", "") not in ("", 
 #
 # The switch has NO console in the production build: CONFIG_SERIAL is off so
 # that two image slots fit for OTA. So the only place you can see what is
-# happening is right here - what the Pi sent and what the device answered. On
+# happening is right here - what the hub sent and what the device answered. On
 # the device itself, the feedback is the RGB LED.
 #
 # An in-memory ring buffer, not a file: what matters is the last few minutes
@@ -181,14 +181,14 @@ def all_devices(devices: dict) -> list:
 # A remote is a switch that cannot be wired to anything.
 #
 # Ours has the Binding cluster and an OnOff client, so a binding table written
-# into it makes it command the bulb directly - and it keeps working with the Pi
+# into it makes it command the bulb directly - and it keeps working with the hub
 # switched off, because the instruction lives in the device. A bought remote
 # like the BILRESA has neither: its endpoints implement only Identify,
 # Descriptor and Switch, and their ClientList is empty, so it cannot originate a
 # command at all. It reports that it was pressed and nothing more.
 #
 # It is still a switch as far as the panel is concerned - the same editor picks
-# what it controls - but the mapping lives HERE and the Pi is what acts on it.
+# what it controls - but the mapping lives HERE and the hub is what acts on it.
 REMOTE_TYPES = {0x000F}
 
 
@@ -735,7 +735,7 @@ STEP_EXPLANATIONS = {
 # longer executes it, so all that is read and written here now is locked and
 # role.
 #
-# The schedule itself moved to the Pi and is applied to the bulbs - see the
+# The schedule itself moved to the hub and is applied to the bulbs - see the
 # section further down. The limits below are the ones the editor enforces.
 SCHED_CLUSTER = "0xFFF1FC30"
 SCHED_ENDPOINT = 2
@@ -746,11 +746,11 @@ SCHED_BLOB_VERSION = 1
 # resolution it can offer. It used to be 12 because the schedule was a blob
 # written into the switch, which had a fixed-size table; the switch does not
 # hold the schedule any more, so the only cost of a higher number is the writes
-# the Pi makes at each boundary. 24 is an hour per column.
+# the hub makes at each boundary. 24 is an hour per column.
 SCHED_MAX_POINTS = 24
 
 # The curve the firmware used to ship with (kDefaults in the since-removed
-# schedule.cpp). Shown in the editor until a schedule is saved on the Pi.
+# schedule.cpp). Shown in the editor until a schedule is saved on the hub.
 SCHED_DEFAULT = [
     # The recommended day, the same curve the panel's reset button loads.
     # Warm and nearly out overnight, cold and full over the middle of the
@@ -782,7 +782,7 @@ def validate_schedule(points: list):
 
     The same rules as before, when the blob was written into the switch: points
     sorted, no duplicates, values inside the allowed ranges. They are checked
-    here because the file on the Pi is now the only source, and a broken
+    here because the file on the hub is now the only source, and a broken
     schedule would no longer be refused by anyone.
     """
     if not points:
@@ -886,7 +886,7 @@ def set_role(node: int, role: int) -> dict:
 
 
 
-# ------------------------------------------------------- state kept on the Pi
+# ------------------------------------------------------- state kept on the hub
 #
 # Why this exists. The switch is a sleepy device: it does not listen
 # continuously, it wakes about every 15 s to pick up its messages. A read does
@@ -894,7 +894,7 @@ def set_role(node: int, role: int) -> dict:
 # install, a page load that re-read everything from the device cost ~27 seconds
 # of waiting - for data that only changes when we change it ourselves.
 #
-# So the Pi holds the state and the panel answers from it instantly. Reading
+# So the hub holds the state and the panel answers from it instantly. Reading
 # from the device happens in the background: at startup, after each write of
 # ours, and rarely otherwise.
 #
@@ -907,7 +907,7 @@ def set_role(node: int, role: int) -> dict:
 # It used to run every six hours, and the reason given was that every read is
 # radio traffic to a battery-powered device. That stopped being true when the
 # panel moved to matter-server: read_switch_state is a cache read now and never
-# leaves the Pi - twelve switches measured at 0.05 s and 216 KB, all of it over
+# leaves the hub - twelve switches measured at 0.05 s and 216 KB, all of it over
 # a loopback socket. What the six hours actually cost was the ONE thing in this
 # sweep that does change on its own and is not pushed: whether the switch is
 # still there at all. A button with a flat cell kept its last good verdict until
@@ -1045,7 +1045,7 @@ def state_put(node, values: dict = None, meta: dict = None) -> list:
 
     The revision counter goes up ONLY when a value actually differs from what we
     had. That is the entire mechanism by which the UI learns something changed:
-    it does not care that the Pi did a read, only whether the read came back
+    it does not care that the hub did a read, only whether the read came back
     different.
 
     `values` takes part in the comparison, `meta` does not - the time of the last
@@ -1162,7 +1162,7 @@ def refresh_switch(sw: dict) -> list:
 # The tiles show on/off, so the panel has to know it. Nothing else here did:
 # every other value we hold is one WE wrote, and could therefore be cached for
 # hours. A bulb's on/off is the opposite - the wall switch sends Toggle straight
-# to the bulb over Thread, the Pi never sees it, so our copy is wrong within a
+# to the bulb over Thread, the hub never sees it, so our copy is wrong within a
 # second of anybody touching a switch.
 #
 # So this one is read live, and the freshness rules are different:
@@ -1398,9 +1398,9 @@ def event_watch():
     Server side on purpose. It used to depend entirely on a browser asking, and
     a browser that nobody has touched for three minutes asks slowly - so the one
     case that matters, somebody standing in front of the panel watching a door,
-    was the case that updated slowest. Now the Pi keeps these current whether
+    was the case that updated slowest. Now the hub keeps these current whether
     anything is looking or not, and the page only decides how quickly it draws
-    what the Pi already knows.
+    what the hub already knows.
     """
     while True:
         try:
@@ -2135,7 +2135,7 @@ def matter_map(devices: dict) -> dict:
 # read-back fills, so nothing downstream can tell which path a value came by.
 #
 # This is what makes the WALL SWITCH visible. The switch commands the bulb
-# directly over Thread with the Pi nowhere in the path, so the panel never hears
+# directly over Thread with the hub nowhere in the path, so the panel never hears
 # about it - it could only find out by asking, on whatever interval it had
 # picked. Subscribed, the bulb reports the change itself, and the tile moves
 # while your finger is still on the button.
@@ -2164,7 +2164,7 @@ BULB_ATTRS = {
     (0x0300, 0x0008): ("colorMode", int),
     # Not a bulb either: this is a SWITCH being locked or unlocked, and the
     # panel is not the one doing it - a lock writes the attribute straight to
-    # its switches over Thread and the Pi never sees the command. Without these
+    # its switches over Thread and the hub never sees the command. Without these
     # two the state only caught up on the next periodic sweep, so pressing a
     # lock changed nine devices and the whole page went on showing them
     # unlocked. Which reads, exactly, as "the button did nothing".
@@ -2232,7 +2232,7 @@ def power_watch() -> None:
 # that just rebooted. The switch retries (firmware/src/light_ctrl.cpp), which is
 # most of the answer. This is the rest of it.
 #
-# The lock reports its own state when it is pressed. The Pi hears that, gives
+# The lock reports its own state when it is pressed. The hub hears that, gives
 # the switch's own fan-out a few seconds to land, then writes the same value to
 # any target that still disagrees - through set_lock, which reads the value
 # back. In the usual case nothing disagrees and this writes nothing at all.
@@ -2305,9 +2305,9 @@ def lock_watch() -> None:
 #
 # IT IS SHAPED LIKE A REMOTE, and for the same reason. A bought remote has
 # nothing we can write to either, so what it drives is kept here rather than in
-# the device, and the Pi is what acts on the press. A webhook is that with the
+# the device, and the hub is what acts on the press. A webhook is that with the
 # press arriving over HTTP instead of over Thread. Same storage in
-# devices.json, same bulb picker in the panel, same "the Pi is in the path"
+# devices.json, same bulb picker in the panel, same "the hub is in the path"
 # bargain - it does nothing while the hub is down.
 #
 # WHAT IT PUTS BACK, and why not "off". At the hour this matters a lamp is
@@ -2991,8 +2991,8 @@ def remote_act(node, button, gesture):
     # OUR OWN switch: it has already done the work.
     #
     # A press on one of these goes straight to the bulb over Thread, bound
-    # device to device, and the Pi is not in the path at all - which is the
-    # whole point, and why it still works with the Pi unplugged. But the panel
+    # device to device, and the hub is not in the path at all - which is the
+    # whole point, and why it still works with the hub unplugged. But the panel
     # DOES hear the press, because the switch reports it on the Switch cluster
     # and matter-server subscribes to that.
     #
@@ -3002,7 +3002,7 @@ def remote_act(node, button, gesture):
     # wrong with either half; they simply never spoke.
     #
     # So this sends nothing. It only records that somebody used the lamp, which
-    # is exactly what the schedule needs to stand back. If the Pi is off, the
+    # is exactly what the schedule needs to stand back. If the hub is off, the
     # long press still works - it is just not remembered, which is the right way
     # round for a house whose switches do not depend on a server.
     if not is_remote(entry):
@@ -3342,7 +3342,7 @@ def refresh_all(reason: str = "") -> int:
 # new one, so you saw a flash; and a battery-powered device sent three commands
 # per press.
 #
-# Now the Pi writes INTO THE BULB, into its persistent attributes, what it
+# Now the hub writes INTO THE BULB, into its persistent attributes, what it
 # should come up at:
 #   OnLevel            - the level an On command brings it to
 #   color temperature  - written with ExecuteIfOff, so it applies while off too
@@ -3363,19 +3363,19 @@ def refresh_all(reason: str = "") -> int:
 # minutes would mean over 100 000 writes a year into its memory, worn out for
 # nothing since the result is identical.
 #
-# WHAT YOU LOSE: with the Raspberry Pi off, the bulbs stay at the last value
+# WHAT YOU LOSE: with the hub off, the bulbs stay at the last value
 # they received instead of following the clock. Degradation, not failure - but
 # it is a change from the original promise that the switch works on its own, and
 # it was a deliberate choice.
 #
-# BONUS: local time comes from the Pi, so the time zone and daylight saving are
+# BONUS: local time comes from the hub, so the time zone and daylight saving are
 # correct with nothing extra. The switch had the offset fixed at compile time.
 SCHED_TICK_SEC = int(os.environ.get("PANEL_SCHED_TICK_SEC", "60"))
 
-# The schedule lives on the Pi, not in the switch.
+# The schedule lives on the hub, not in the switch.
 #
 # It lived in the switch for as long as the switch executed it. It no longer
-# does - the Pi writes straight into the bulbs - so keeping it there would mean
+# does - the hub writes straight into the bulbs - so keeping it there would mean
 # a battery-powered device storing and syncing data it never uses.
 SCHEDULE_FILE = pathlib.Path(
     os.environ.get("PANEL_SCHEDULE", str(HERE.parent / "ota" / "state" / "schedule.json")))
@@ -3436,11 +3436,11 @@ def save_schedule_file(sched: dict):
 #
 # The editor draws a smooth line through the middle of each column, and people
 # read it the way you read any chart: the height above a time is the value at
-# that time. It used to be a lie. The Pi applied a step function - a column's
+# that time. It used to be a lie. The hub applied a step function - a column's
 # value held flat for the whole column - so dragging the 12:00 column bent the
 # drawn line downwards over 11:40 while the light at 11:40 did not move.
 #
-# Rather than make the chart uglier, the Pi now follows the curve. Same spline,
+# Rather than make the chart uglier, the hub now follows the curve. Same spline,
 # same maths, evaluated here at the current minute.
 #
 # It is CYCLIC: a day is a loop, so the sample before the first column is the
@@ -3448,7 +3448,7 @@ def save_schedule_file(sched: dict):
 #
 # The brightness axis is PERCEPTUAL for the same reason it is on the chart -
 # The curve is interpolated in the same units the chart draws, so the schedule
-# the Pi follows is the schedule you drew. Colour temperature is interpolated in
+# the hub follows is the schedule you drew. Colour temperature is interpolated in
 # mireds, which is what its axis already is; a spline is affine-invariant, so
 # that matches the drawing exactly.
 
@@ -3559,7 +3559,7 @@ def curve_at(points: list, minute: float) -> tuple:
 # How far a value has to drift before each kind of write is worth making.
 #
 # OnLevel is a PERSISTENT attribute - it survives a power cut, which is the
-# whole reason the bulb can come up correctly with the Pi switched off - and
+# whole reason the bulb can come up correctly with the hub switched off - and
 # persistent means flash. Written every minute it would be over half a million
 # writes a year into a lamp. So it moves in steps, and only when the curve has
 # gone somewhere.
@@ -3714,7 +3714,7 @@ def note_power(node, on: bool) -> None:
 
     The hold ends when the light is switched off - and in this house that is
     nearly always the WALL SWITCH, which talks to the bulb directly over Thread
-    with the Pi nowhere in the command path. So the release cannot live in the
+    with the hub nowhere in the command path. So the release cannot live in the
     request handler that turned the light off, the way it used to: it has to
     live where an off is OBSERVED, whoever caused it. Before this, a lamp set by
     hand and then switched off at the wall stayed held for good - skipped by
@@ -3921,8 +3921,8 @@ def apply_light_schedule(force: bool = False, only=None) -> dict:
     # This used to walk the switches and then their binding tables, which
     # quietly made "is on the schedule" mean "is wired to a wall switch". Those
     # are two different relationships and only one of them involves a switch: a
-    # binding is how the WALL SWITCH commands the bulb with the Pi asleep, and
-    # the schedule is the PI commanding the bulb directly over Thread. The Pi
+    # binding is how the WALL SWITCH commands the bulb with the hub asleep, and
+    # the schedule is the PI commanding the bulb directly over Thread. The hub
     # never needed a switch in order to do that.
     #
     # It went unnoticed while every new bulb bound itself to whatever switch
@@ -4192,8 +4192,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(out)
 
         elif self.path == "/api/bindings":
-            # From the state held on the Pi, so it is instant. Reading from the
-            # device happens in the background - see the "state kept on the Pi"
+            # From the state held on the hub, so it is instant. Reading from the
+            # device happens in the background - see the "state kept on the hub"
             # section.
             _devs = load_devices()
             sw_list = switches(_devs)
@@ -4272,12 +4272,12 @@ class Handler(BaseHTTPRequestHandler):
                 since = int(q.get("since", 0) or 0)
             # The revision counter rides along on the log request, which the UI
             # makes periodically anyway. That way the UI learns something
-            # changed with no extra request, and without showing that the Pi is
+            # changed with no extra request, and without showing that the hub is
             # reading.
             self._send({**log_since(since), "rev": state_rev()})
 
         elif self.path.startswith("/api/schedule"):
-            # There is a single schedule, the house's, kept on the Pi. The
+            # There is a single schedule, the house's, kept on the hub. The
             # response keeps the per-switch shape so the UI does not have to
             # change.
             sched = load_schedule_file()
@@ -4289,13 +4289,13 @@ class Handler(BaseHTTPRequestHandler):
             # Which bulbs a schedule governs, and which schedule governs each -
             # the two questions the editor exists to answer before it lets you
             # change anything. Every bulb, whether a switch drives it or not -
-            # the Pi writes the schedule straight to the bulb over Thread, so a
+            # the hub writes the schedule straight to the bulb over Thread, so a
             # binding has nothing to do with which lamps it reaches.
             governed = [{"node": b["node"], "name": b.get("name", ""),
                          "where": b.get("where", ""),
                          "own": str(b["node"]) in sched["bulbs"]}
                         for b in devices.get("bulbs", [])]
-            # The clock comes from the Pi, not from the browser. The Pi is what
+            # The clock comes from the hub, not from the browser. The hub is what
             # runs the schedule, and the two do not have to agree - a phone
             # roaming abroad would put the "now" marker hours off the slot that
             # is actually in effect.
@@ -4519,7 +4519,7 @@ class Handler(BaseHTTPRequestHandler):
                                "devices": devices})
 
         if self.path == "/api/schedule":
-            # The schedule is saved on the Pi and applied to the bulbs right
+            # The schedule is saved on the hub and applied to the bulbs right
             # away. It is no longer sent to the switch: the switch does not
             # execute it any more, and storing it there would mean syncing
             # unused data to a battery-powered device.
@@ -4843,7 +4843,7 @@ class Handler(BaseHTTPRequestHandler):
             #
             # BLE only: a factory-new device is on no network at all, so it has
             # to be within Bluetooth range OF THE PI, which is what runs
-            # chip-tool. Simplest is to bring the bulb next to the Pi.
+            # chip-tool. Simplest is to bring the bulb next to the hub.
             kind = body.get("kind", "bulb")
             code = str(body.get("code", "")).strip().replace("-", "").replace(" ", "")
             name = str(body.get("name", "")).strip()
@@ -5355,7 +5355,7 @@ class Handler(BaseHTTPRequestHandler):
             # Turn a bulb on or off from the panel.
             #
             # This does not go through the switch: it is a direct command from
-            # the Pi to the bulb, so it works even when the switch is asleep or
+            # the hub to the bulb, so it works even when the switch is asleep or
             # not bound yet. Useful when debugging, too - it separates "the bulb
             # does not answer" from "the switch does not send".
             node = int(body.get("node") or 0)

@@ -74,7 +74,7 @@ THRESHOLD=${THRESHOLD:-2}
 # Quiet period after acting, so the network is given time to come back before
 # being judged again.
 COOLDOWN=${COOLDOWN:-150}
-# Transmit power, in dBm. The RCP comes up at 0 - one milliwatt - and this Pi
+# Transmit power, in dBm. The RCP comes up at 0 - one milliwatt - and this hub
 # has no Thread children at all: every device reaches it through somebody
 # else's router, so how loudly it speaks decides whether a long transfer
 # survives. A firmware update died three times at 8%, 13% and 44% at 0 dBm and

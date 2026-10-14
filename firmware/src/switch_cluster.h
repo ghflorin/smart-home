@@ -4,7 +4,7 @@
  * The button, reported as a button.
  *
  * The switch commands its bulbs itself, over Thread, bound device to device -
- * that is the point, and why the wall still works with the Pi unplugged. This
+ * that is the point, and why the wall still works with the hub unplugged. This
  * cluster changes none of that. It only says out loud that a finger arrived, so
  * anything listening can act on it too.
  *

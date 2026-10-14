@@ -37,7 +37,7 @@ opened on the old, then remove the old. Two things bite if you do:
 | Transport | Matter over Thread, mains powered, acts as a Thread router |
 
 Works: on/off, brightness, colour temperature, the daylight schedule, binding to
-a switch so the wall button drives it with the Pi asleep, `OnLevel` so it comes
+a switch so the wall button drives it with the hub asleep, `OnLevel` so it comes
 back at the right brightness after a power cut. Identify works both ways — it
 accepts `Identify` and also `TriggerEffect` (Blink).
 
@@ -315,8 +315,8 @@ label `button 1` in its `TagList`, endpoint 2 carries `button 2`.
 - **It cannot be bound, and this is the one thing to understand about it.**
   There is no Binding cluster on any endpoint, and `ClientList` is empty on both
   buttons, so it cannot originate a command at all — it reports that it was
-  pressed and nothing more. Either fact alone is enough. So the Pi is what acts
-  on a press, and **the remote goes quiet whenever the Pi does**, unlike the
+  pressed and nothing more. Either fact alone is enough. So the hub is what acts
+  on a press, and **the remote goes quiet whenever the hub does**, unlike the
   switch we build, which keeps working because the instruction lives in the
   bulb-facing binding table.
 - **A long press never sends `MultiPressComplete`.** Measured, from the device's
@@ -357,7 +357,7 @@ label `button 1` in its `TagList`, endpoint 2 carries `button 2`.
 | Transport | Matter over Thread, battery, sleepy end device (SIT, 15 s poll) |
 
 Runs the firmware in this repo. Binds directly to bulbs so a press reaches them
-with the Raspberry Pi switched off. A press toggles; a long press sets full
+with the hub switched off. A press toggles; a long press sets full
 brightness at 4000 K. It also carries the lock role, and the schedule role
 attribute the panel writes.
 
